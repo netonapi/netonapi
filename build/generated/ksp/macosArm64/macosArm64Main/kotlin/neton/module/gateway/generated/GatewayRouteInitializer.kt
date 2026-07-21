@@ -33,7 +33,7 @@ import kotlinx.serialization.builtins.nullable
  * KSP 自动生成的路由初始化器
  *
  * 此文件由 Neton KSP 处理器自动生成，请勿手动编辑。
- * 包含 3 个控制器的路由注册。
+ * 包含 4 个控制器的路由注册。
  */
 internal object GatewayRouteInitializer {
 
@@ -444,19 +444,44 @@ internal object GatewayRouteInitializer {
             )
         )
 
+        // === ModelsController 控制器路由 ===
+
+        engine.registerRoute(
+            RouteDefinition(
+                pattern = "/v1/models",
+                method = HttpMethod.GET,
+                handler = object : RouteHandler {
+                    override suspend fun invoke(context: HttpContext, args: HandlerArgs): Any? {
+                        val ctrl = controller.gateway.ModelsController()
+                        
+                        return ctrl.list(context.response)
+
+                    }
+                },
+                controllerClass = "controller.gateway.ModelsController",
+                methodName = "list",
+                routeGroup = "gateway",
+                allowAnonymous = false,
+                requireAuth = false,
+                permission = null,
+                rateLimit = null,
+                freshAuth = false
+            )
+        )
+
     }
 
     /**
      * 获取总路由数量
      */
     private fun getTotalRoutes(): Int {
-        return 14
+        return 15
     }
 
     /**
      * 获取控制器统计信息
      */
     fun getControllerStats(): String {
-        return "Controllers: 3, Routes: ${getTotalRoutes()}"
+        return "Controllers: 4, Routes: ${getTotalRoutes()}"
     }
 }

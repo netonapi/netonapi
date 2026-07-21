@@ -20,7 +20,7 @@ object GatewayModuleManifest : ModuleInitializer {
 
     override val dependsOn: List<String> = listOf("system")
 
-    override val stats: Map<String, Int> = mapOf("routes" to 14, "logics" to 2)
+    override val stats: Map<String, Int> = mapOf("routes" to 15, "logics" to 2)
 
     /** SQL embed 进 binary（gradle generateMigrationResources task 生成）。 */
     override fun migrations(): List<MigrationSource> = init.generated.GatewayMigrationResources.sources
@@ -29,7 +29,7 @@ object GatewayModuleManifest : ModuleInitializer {
         // 注册 Logic 组件（2 个）
         GatewayLogicInitializer.initialize(ctx)
 
-        // 注册路由（3 个控制器）
+        // 注册路由（4 个控制器）
         GatewayRouteInitializer.initialize(ctx)
 
     }

@@ -1,2 +1,2 @@
 
-$<com.netonstream.app:module-gateway>:controller.admin.channel:controller.admin.channel.dto:controller.admin.gateway:controller.admin.token:init:init.generated:logic:model:neton.module.gateway.generated:table
+$<com.netonstream.app:module-gateway>:config:controller.admin.channel:controller.admin.channel.dto:controller.admin.gateway:controller.admin.token:controller.gateway:init:init.generated:logic:model:neton.module.gateway.generated:security:table
