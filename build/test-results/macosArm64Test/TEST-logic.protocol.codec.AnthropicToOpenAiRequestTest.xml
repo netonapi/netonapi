@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="logic.protocol.codec.AnthropicToOpenAiRequestTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-21T22:26:05.729Z" hostname="mac" time="0.001">
+<testsuite name="logic.protocol.codec.AnthropicToOpenAiRequestTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-21T22:34:06.397Z" hostname="mac" time="0.001">
   <properties/>
   <testcase name="plainTextConversation[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
   <testcase name="systemStringBecomesLeadingMessage[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
-  <testcase name="textBlocksJoin[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
+  <testcase name="textBlocksJoin[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.001"/>
   <testcase name="imageBlockToDataUrl[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
   <testcase name="toolUseAndToolResultRoundtrip[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
   <testcase name="toolsSchemaAndChoice[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>

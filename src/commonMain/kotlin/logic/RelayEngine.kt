@@ -131,7 +131,6 @@ class RelayEngine(
         }
         // 跨协议：Anthropic 入站 → OpenAI 上游（Slice 2）
         if (inbound.id == "anthropic" && upstream.id == "openai") {
-            // 先在 Anthropic body 上映射 model（不注入 OpenAI 专属 stream_options）
             val mapped = RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
             val openaiBody = logic.protocol.codec.AnthropicToOpenAiRequest.convert(mapped.body)
             return RelayTransform(
@@ -140,6 +139,23 @@ class RelayEngine(
                 transformResponseBody = { logic.protocol.codec.OpenAiToAnthropicResponse.convert(it) },
                 streamTransformerFactory = {
                     val sm = logic.protocol.codec.OpenAiToAnthropicStream(model = mapped.requestModel)
+                    object : StreamTransformer {
+                        override fun feed(chunk: String) = sm.feed(chunk)
+                        override fun finish() = sm.finish()
+                    }
+                },
+            )
+        }
+        // 跨协议：OpenAI 入站 → Anthropic 上游（Slice 3，反向）
+        if (inbound.id == "openai" && upstream.id == "anthropic") {
+            val mapped = RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
+            val anthropicBody = logic.protocol.codec.OpenAiToAnthropicRequest.convert(mapped.body)
+            return RelayTransform(
+                rewritten = Rewritten(anthropicBody, mapped.requestModel, mapped.upstreamModel, mapped.stream),
+                upstream = upstream,
+                transformResponseBody = { logic.protocol.codec.AnthropicToOpenAiResponse.convert(it) },
+                streamTransformerFactory = {
+                    val sm = logic.protocol.codec.AnthropicToOpenAiStream(model = mapped.requestModel)
                     object : StreamTransformer {
                         override fun feed(chunk: String) = sm.feed(chunk)
                         override fun finish() = sm.finish()

@@ -85,3 +85,12 @@
 - 跨协议流式注入 include_usage（OpenAI 上游尾包）
 - E2E 验证：Anthropic 请求 → OpenAI 假上游 → 客户端收到 Anthropic 格式响应（非流式）/ Anthropic 事件序列（流式）；计费按 OpenAI usage 7500/4500；日志 requestModel=claude 名 upstreamModel=gpt 名
 - 覆盖：text + tool_use/tool_result + image；未覆盖块（thinking 等）v1 丢弃
+
+## M2 反向补全：OpenAI ↔ Anthropic 矩阵闭合
+
+- 反向三 codec：OpenAiToAnthropicRequest（system→system 字段、tool_calls→tool_use 块、tool→tool_result、max_tokens 缺省 4096）、
+  AnthropicToOpenAiResponse（非流式，stop_reason→finish_reason、tool_use→tool_calls、usage 换名）、
+  AnthropicToOpenAiStream（状态机：Anthropic 事件 → OpenAI chunk + [DONE]）
+- buildTransform 新增 inbound=openai ∧ channel=anthropic 分支
+- E2E：OpenAI 请求→Anthropic 假上游→OpenAI 响应（非流式+流式 chunk 序列），计费按 Anthropic usage 7500/4500
+- **协议矩阵闭合**：{OpenAI,Anthropic}² 四格全通（透传×2 + codec×2）
