@@ -55,3 +55,76 @@ CREATE TABLE gateway_tokens (
 );
 CREATE UNIQUE INDEX uk_gateway_tokens_hash ON gateway_tokens(key_hash);
 CREATE INDEX idx_gateway_tokens_user ON gateway_tokens(user_id, deleted);
+
+CREATE TABLE gateway_quota_accounts (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    balance BIGINT NOT NULL DEFAULT 0,
+    version BIGINT NOT NULL DEFAULT 0,
+    created_at BIGINT,
+    updated_at BIGINT
+);
+CREATE UNIQUE INDEX uk_gateway_quota_accounts_user ON gateway_quota_accounts(user_id);
+
+CREATE TABLE gateway_quota_transactions (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    type VARCHAR(16) NOT NULL,
+    amount BIGINT NOT NULL,
+    balance_after BIGINT NOT NULL,
+    ref VARCHAR(128),
+    created_at BIGINT
+);
+CREATE INDEX idx_gateway_quota_tx_user ON gateway_quota_transactions(user_id, created_at);
+
+CREATE TABLE gateway_model_prices (
+    id BIGSERIAL PRIMARY KEY,
+    model VARCHAR(128) NOT NULL,
+    input_price DECIMAL(20,6) NOT NULL DEFAULT 0,
+    output_price DECIMAL(20,6) NOT NULL DEFAULT 0,
+    cache_read_price DECIMAL(20,6) NOT NULL DEFAULT 0,
+    cache_write_price DECIMAL(20,6) NOT NULL DEFAULT 0,
+    per_request_price BIGINT,
+    sale_override TEXT,
+    source VARCHAR(16) NOT NULL DEFAULT 'manual',
+    deleted INT NOT NULL DEFAULT 0,
+    created_at BIGINT,
+    updated_at BIGINT
+);
+CREATE UNIQUE INDEX uk_gateway_model_prices_model ON gateway_model_prices(model) WHERE deleted = 0;
+
+CREATE TABLE gateway_groups (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(64) NOT NULL,
+    ratio DECIMAL(10,4) NOT NULL DEFAULT 1.0,
+    description VARCHAR(256),
+    deleted INT NOT NULL DEFAULT 0,
+    created_at BIGINT,
+    updated_at BIGINT
+);
+
+CREATE TABLE gateway_usage_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    token_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    request_model VARCHAR(128) NOT NULL,
+    upstream_model VARCHAR(128) NOT NULL,
+    prompt_tokens INT NOT NULL DEFAULT 0,
+    completion_tokens INT NOT NULL DEFAULT 0,
+    cache_read_tokens INT NOT NULL DEFAULT 0,
+    cache_write_tokens INT NOT NULL DEFAULT 0,
+    charged BIGINT NOT NULL DEFAULT 0,
+    cost BIGINT NOT NULL DEFAULT 0,
+    ttfb_ms BIGINT,
+    latency_ms BIGINT,
+    stream INT NOT NULL DEFAULT 0,
+    status VARCHAR(16) NOT NULL DEFAULT 'ok',
+    error_code VARCHAR(64),
+    created_at BIGINT
+);
+CREATE INDEX idx_gateway_usage_logs_user ON gateway_usage_logs(user_id, created_at);
+CREATE INDEX idx_gateway_usage_logs_channel ON gateway_usage_logs(channel_id, created_at);
+
+-- 种子：默认分组
+INSERT INTO gateway_groups (name, ratio, description, created_at) VALUES ('default', 1.0, '默认分组', 0);

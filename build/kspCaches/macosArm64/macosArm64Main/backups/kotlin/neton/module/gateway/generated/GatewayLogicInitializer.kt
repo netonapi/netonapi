@@ -4,7 +4,7 @@ package neton.module.gateway.generated
 import neton.core.component.NetonContext
 
 /**
- * 模块 [gateway] 的 @Logic 自动装配（2 个组件，依赖拓扑序）。
+ * 模块 [gateway] 的 @Logic 自动装配（3 个组件，依赖拓扑序）。
  *
  * 全部 absent-才-bind：手写 bootstrap 先 ctx.bind 的对象不会被覆盖。
  * 在手写 ModuleInitializer 中调用 `GatewayLogicInitializer.initialize(ctx)`。
@@ -16,6 +16,13 @@ object GatewayLogicInitializer {
         if (ctx.getOrNull(logic.ChannelLogic::class) == null) {
             ctx.bind(logic.ChannelLogic::class, logic.ChannelLogic(
                 log = ctx.get(neton.logging.LoggerFactory::class).get("logic.gateway-channel"),
+            ))
+        }
+
+        // QuotaLogic
+        if (ctx.getOrNull(logic.QuotaLogic::class) == null) {
+            ctx.bind(logic.QuotaLogic::class, logic.QuotaLogic(
+                log = ctx.get(neton.logging.LoggerFactory::class).get("logic.gateway-quota"),
             ))
         }
 

@@ -20,16 +20,16 @@ object GatewayModuleManifest : ModuleInitializer {
 
     override val dependsOn: List<String> = listOf("system")
 
-    override val stats: Map<String, Int> = mapOf("routes" to 15, "logics" to 2)
+    override val stats: Map<String, Int> = mapOf("routes" to 31, "logics" to 3)
 
     /** SQL embed 进 binary（gradle generateMigrationResources task 生成）。 */
     override fun migrations(): List<MigrationSource> = init.generated.GatewayMigrationResources.sources
 
     override fun initialize(ctx: NetonContext) {
-        // 注册 Logic 组件（2 个）
+        // 注册 Logic 组件（3 个）
         GatewayLogicInitializer.initialize(ctx)
 
-        // 注册路由（4 个控制器）
+        // 注册路由（8 个控制器）
         GatewayRouteInitializer.initialize(ctx)
 
     }
