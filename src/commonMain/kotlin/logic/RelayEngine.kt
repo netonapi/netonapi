@@ -69,18 +69,22 @@ class RelayEngine(
         repeat(maxAttempts) {
             val channel = RelayRouter.pick(candidates, tried, Random) ?: return@repeat
             tried += channel.id
-            // 协议兼容：Slice 1 仅支持同协议（inbound 与渠道 type 一致）；跨协议 IR 转换属 Slice 2
-            val adapter = adapterForChannel(channel.type)
-            if (adapter == null || adapter.id != inbound.id) {
+            val upstream = adapterForChannel(channel.type)
+            if (upstream == null) {
+                lastError = "unknown channel type ${channel.type}"
+                return@repeat
+            }
+            val transform = buildTransform(inbound, upstream, rawBody, channel)
+            if (transform == null) {
                 lastError = "cross-protocol relay (inbound=${inbound.id} → channel.type=${channel.type}) not yet supported"
                 return@repeat
             }
             val key = channelLogic.pickKey(channel.id)
             if (key == null) { lastError = "channel ${channel.id} has no available key"; return@repeat }
 
-            val rewritten = adapter.rewrite(rawBody, channel)
+            val rewritten = transform.rewritten
             val outcome = try {
-                execute(ctx, channel, key.apiKey, rewritten, adapter, path, token, group, startMs)
+                execute(ctx, channel, key.apiKey, transform, path, token, group, startMs)
             } catch (e: NetonHttpException) {
                 val err = e.error
                 val retryable = when (err) {
@@ -109,23 +113,61 @@ class RelayEngine(
         else -> null
     }
 
+    /**
+     * 组装转发变换：同协议 = 恒等透传；跨协议 = codec 转换（spec 决策 A，产品侧直译）。
+     * 返回 null 表示该 (inbound × 渠道) 组合暂不支持。
+     */
+    private fun buildTransform(
+        inbound: ProtocolAdapter, upstream: ProtocolAdapter, rawBody: String, channel: Channel,
+    ): RelayTransform? {
+        // 同协议：模型映射 + 协议原生改写，响应恒等透传
+        if (inbound.id == upstream.id) {
+            val rw = upstream.rewrite(rawBody, channel)
+            return RelayTransform(
+                rewritten = rw, upstream = upstream,
+                transformResponseBody = { it },
+                streamTransformerFactory = null,
+            )
+        }
+        // 跨协议：Anthropic 入站 → OpenAI 上游（Slice 2）
+        if (inbound.id == "anthropic" && upstream.id == "openai") {
+            // 先在 Anthropic body 上映射 model（不注入 OpenAI 专属 stream_options）
+            val mapped = RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
+            val openaiBody = logic.protocol.codec.AnthropicToOpenAiRequest.convert(mapped.body)
+            return RelayTransform(
+                rewritten = Rewritten(openaiBody, mapped.requestModel, mapped.upstreamModel, mapped.stream),
+                upstream = upstream,
+                transformResponseBody = { logic.protocol.codec.OpenAiToAnthropicResponse.convert(it) },
+                streamTransformerFactory = {
+                    val sm = logic.protocol.codec.OpenAiToAnthropicStream(model = mapped.requestModel)
+                    object : StreamTransformer {
+                        override fun feed(chunk: String) = sm.feed(chunk)
+                        override fun finish() = sm.finish()
+                    }
+                },
+            )
+        }
+        return null
+    }
+
     /** 成功返回非 null；可重试失败抛 NetonHttpException。 */
     private suspend fun execute(
         ctx: HttpContext,
         channel: Channel,
         apiKey: String,
-        rewritten: Rewritten,
-        adapter: ProtocolAdapter,
+        transform: RelayTransform,
         path: String,
         token: GatewayToken,
         group: String,
         startMs: Long,
     ): Unit? {
+        val rewritten = transform.rewritten
+        val upstream = transform.upstream
         val client = clientFor(channel)
         val request = NetonHttpRequest(
             method = NetonHttpMethod.Post,
-            url = channel.baseUrl.trimEnd('/') + adapter.upstreamPath(path),
-            headers = adapter.upstreamHeaders(apiKey),
+            url = channel.baseUrl.trimEnd('/') + upstream.upstreamPath(path),
+            headers = upstream.upstreamHeaders(apiKey),
             body = NetonHttpBody.Json(rewritten.body),
         )
 
@@ -136,18 +178,19 @@ class RelayEngine(
             }
             if (res.statusCode !in 200..299) {
                 recordLog(token, channel, rewritten, Usage(), group, startMs, "error", "upstream_${res.statusCode}", null)
-                respondRaw(ctx, res.statusCode, res.body)
+                respondRaw(ctx, res.statusCode, res.body)  // 上游错误 body 原样（擦除 headers）
                 return Unit
             }
             val ttfb = now() - startMs
-            val usage = adapter.extractUsage(res.body)
-            respondRaw(ctx, 200, res.body)
+            val usage = upstream.extractUsage(res.body)          // usage 从上游原生响应提取
+            respondRaw(ctx, 200, transform.transformResponseBody(res.body))  // body 按需转协议
             bill(token, channel, rewritten, usage, group, startMs, ttfb)
             return Unit
         }
 
         // 流式：首字节前的失败由 stream() 抛 Http 异常（可重试窗口）；开流后直通不回头
-        val accumulator = adapter.streamUsageAccumulator()
+        val accumulator = upstream.streamUsageAccumulator()   // usage 累加喂上游原生块
+        val streamTransformer = transform.streamTransformerFactory?.invoke()
         var ttfbMs: Long? = null
         ctx.response.status = HttpStatus.OK
         ctx.response.contentType = "text/event-stream; charset=utf-8"
@@ -156,30 +199,44 @@ class RelayEngine(
         try {
             ctx.response.stream {
                 client.stream(request).collect { chunk ->
-                    when (chunk) {
-                        is NetonHttpStreamChunk.Bytes -> {
-                            if (ttfbMs == null) ttfbMs = now() - startMs
-                            writeChunk(chunk.bytes)
-                            accumulator.feed(chunk.bytes.decodeToString())
-                        }
-                        is NetonHttpStreamChunk.Text -> {
-                            if (ttfbMs == null) ttfbMs = now() - startMs
-                            writeChunk(chunk.text)
-                            accumulator.feed(chunk.text)
-                        }
-                        is NetonHttpStreamChunk.End -> {}
+                    val text = when (chunk) {
+                        is NetonHttpStreamChunk.Bytes -> chunk.bytes.decodeToString()
+                        is NetonHttpStreamChunk.Text -> chunk.text
+                        is NetonHttpStreamChunk.End -> return@collect
+                    }
+                    if (ttfbMs == null) ttfbMs = now() - startMs
+                    accumulator.feed(text)  // 始终喂上游原文用于计费
+                    if (streamTransformer != null) {
+                        val converted = streamTransformer.feed(text)
+                        if (converted.isNotEmpty()) writeChunk(converted)
+                    } else {
+                        writeChunk(text)  // 同协议直通
                     }
                 }
+                // 跨协议：补收尾事件（message_delta/message_stop）
+                streamTransformer?.finish()?.let { if (it.isNotEmpty()) writeChunk(it) }
             }
         } catch (e: NetonHttpException) {
             if (ttfbMs == null) throw e  // 首字节前：交给重试
-            // 开流后中断：尽力计费收尾，不再重试
             log.warn("relay stream aborted mid-flight channel=${channel.id}: ${e.error}")
             bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs, status = "partial")
             return Unit
         }
         bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs)
         return Unit
+    }
+
+    /** 转发变换：请求体已终态；响应体/流按需转协议（同协议为恒等）。 */
+    class RelayTransform(
+        val rewritten: Rewritten,
+        val upstream: ProtocolAdapter,
+        val transformResponseBody: (String) -> String,
+        val streamTransformerFactory: (() -> StreamTransformer)?,
+    )
+
+    interface StreamTransformer {
+        fun feed(chunk: String): String
+        fun finish(): String
     }
 
     private suspend fun bill(

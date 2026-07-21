@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="logic.protocol.codec.OpenAiToAnthropicResponseTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-07-21T22:26:05.730Z" hostname="mac" time="0.0">
+  <properties/>
+  <testcase name="plainTextResponse[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicResponseTest" time="0.0"/>
+  <testcase name="toolCallsBecomeToolUseBlocks[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicResponseTest" time="0.0"/>
+  <testcase name="finishReasonMapping[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicResponseTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
