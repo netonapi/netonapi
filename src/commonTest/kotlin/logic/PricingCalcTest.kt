@@ -86,14 +86,14 @@ class PricingValidationTest {
     @kotlin.test.Test
     fun ratioRangeEnforced() {
         kotlin.test.assertEquals("0.8", PricingCalc.requireRatio("0.80"))
-        kotlin.test.assertFailsWith<IllegalArgumentException> { PricingCalc.requireRatio("0") }
-        kotlin.test.assertFailsWith<IllegalArgumentException> { PricingCalc.requireRatio("101") }
-        kotlin.test.assertFailsWith<IllegalArgumentException> { PricingCalc.requireRatio("-1") }
+        kotlin.test.assertFailsWith<neton.core.http.ValidationException> { PricingCalc.requireRatio("0") }
+        kotlin.test.assertFailsWith<neton.core.http.ValidationException> { PricingCalc.requireRatio("101") }
+        kotlin.test.assertFailsWith<neton.core.http.ValidationException> { PricingCalc.requireRatio("-1") }
     }
 
     @kotlin.test.Test
     fun priceRejectsNegative() {
-        kotlin.test.assertFailsWith<IllegalArgumentException> { PricingCalc.requirePrice("-2.5") }
+        kotlin.test.assertFailsWith<neton.core.http.ValidationException> { PricingCalc.requirePrice("-2.5") }
         kotlin.test.assertEquals("2.5", PricingCalc.requirePrice("2.50"))
     }
 

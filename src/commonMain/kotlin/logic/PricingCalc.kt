@@ -1,6 +1,8 @@
 package logic
 
 import model.ModelPrice
+import neton.core.http.ValidationException
+import neton.core.http.ValidationError
 
 /** 上游回报的用量。 */
 data class Usage(
@@ -44,19 +46,23 @@ object PricingCalc {
         return if (neg && n != "0") "-$n" else n
     }
 
+    private fun invalid(field: String, msg: String): Nothing =
+        throw ValidationException(listOf(ValidationError(path = field, message = msg)))
+
     /** 价格字段校验（非负，≤7 位整数），返回规范化串；供 admin 写接口使用。 */
     fun requirePrice(decimal: String, field: String = "price"): String {
-        require(isValidDecimal(decimal) && !decimal.trim().startsWith("-")) {
-            "$field must be a non-negative decimal (got '$decimal')"
-        }
+        if (!isValidDecimal(decimal) || decimal.trim().startsWith("-"))
+            invalid(field, "must be a non-negative decimal (got '$decimal')")
         return normalize(decimal)
     }
 
     /** 倍率/折扣校验（(0,100]），返回规范化串。 */
     fun requireRatio(decimal: String, field: String = "ratio"): String {
-        require(isValidDecimal(decimal, maxIntDigits = 3)) { "$field must be a decimal (got '$decimal')" }
+        if (!isValidDecimal(decimal, maxIntDigits = 3))
+            invalid(field, "must be a decimal (got '$decimal')")
         val v = parseScaled(decimal, 4)
-        require(v in 1..1_000_000) { "$field must be in (0, 100] (got '$decimal')" }
+        if (v !in 1..1_000_000)
+            invalid(field, "must be in (0, 100] (got '$decimal')")
         return normalize(decimal)
     }
 
