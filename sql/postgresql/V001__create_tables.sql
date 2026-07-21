@@ -14,7 +14,7 @@ CREATE TABLE gateway_channels (
     ttfb_timeout_ms BIGINT NOT NULL DEFAULT 30000,
     idle_timeout_ms BIGINT NOT NULL DEFAULT 90000,
     proxy_url VARCHAR(512),
-    cost_discount DECIMAL(10,4) NOT NULL DEFAULT 1.0,
+    cost_discount VARCHAR(32) NOT NULL DEFAULT '1.0',
     remark VARCHAR(512),
     deleted INT NOT NULL DEFAULT 0,
     created_at BIGINT,
@@ -80,10 +80,10 @@ CREATE INDEX idx_gateway_quota_tx_user ON gateway_quota_transactions(user_id, cr
 CREATE TABLE gateway_model_prices (
     id BIGSERIAL PRIMARY KEY,
     model VARCHAR(128) NOT NULL,
-    input_price DECIMAL(20,6) NOT NULL DEFAULT 0,
-    output_price DECIMAL(20,6) NOT NULL DEFAULT 0,
-    cache_read_price DECIMAL(20,6) NOT NULL DEFAULT 0,
-    cache_write_price DECIMAL(20,6) NOT NULL DEFAULT 0,
+    input_price VARCHAR(32) NOT NULL DEFAULT '0',
+    output_price VARCHAR(32) NOT NULL DEFAULT '0',
+    cache_read_price VARCHAR(32) NOT NULL DEFAULT '0',
+    cache_write_price VARCHAR(32) NOT NULL DEFAULT '0',
     per_request_price BIGINT,
     sale_override TEXT,
     source VARCHAR(16) NOT NULL DEFAULT 'manual',
@@ -96,7 +96,7 @@ CREATE UNIQUE INDEX uk_gateway_model_prices_model ON gateway_model_prices(model)
 CREATE TABLE gateway_groups (
     id BIGSERIAL PRIMARY KEY,
     name VARCHAR(64) NOT NULL,
-    ratio DECIMAL(10,4) NOT NULL DEFAULT 1.0,
+    ratio VARCHAR(32) NOT NULL DEFAULT '1.0',
     description VARCHAR(256),
     deleted INT NOT NULL DEFAULT 0,
     created_at BIGINT,
@@ -127,4 +127,4 @@ CREATE INDEX idx_gateway_usage_logs_user ON gateway_usage_logs(user_id, created_
 CREATE INDEX idx_gateway_usage_logs_channel ON gateway_usage_logs(channel_id, created_at);
 
 -- 种子：默认分组
-INSERT INTO gateway_groups (name, ratio, description, created_at) VALUES ('default', 1.0, '默认分组', 0);
+INSERT INTO gateway_groups (name, ratio, description, created_at) VALUES ('default', '1.0', '默认分组', 0);

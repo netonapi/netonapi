@@ -85,7 +85,7 @@ class RelayEngine(
                     respondRaw(ctx, err.statusCode, err.body ?: """{"error":{"message":"upstream error","type":"upstream_error","code":${err.statusCode}}}""")
                     return
                 }
-                lastError = err.toString().take(200)
+                lastError = err.toString().replace("\n", " ").take(160)
                 log.warn("relay retry channel=${channel.id} err=$lastError")
                 null
             }
@@ -212,7 +212,9 @@ class RelayEngine(
     ).id
 
     private suspend fun respondError(ctx: HttpContext, status: Int, code: String, message: String) {
-        respondRaw(ctx, status, """{"error":{"message":"$message","type":"$code","code":"$code"}}""")
+        // message 经 JsonPrimitive 序列化，保证转义合法（网络错误文本可能含引号/换行）
+        val m = kotlinx.serialization.json.JsonPrimitive(message).toString()
+        respondRaw(ctx, status, """{"error":{"message":$m,"type":"$code","code":"$code"}}""")
     }
 
     private suspend fun respondRaw(ctx: HttpContext, status: Int, body: String) {

@@ -41,3 +41,23 @@
 - SecureRandom：v1 令牌用 kotlin.random，安全强化列 M5
 - 价源同步（litellm/openrouter）与变价审计表：M3
 - 兑换码：M4
+
+## 中转引擎（M1b 已落地）
+
+- 入站：`POST /v1/chat/completions`、`POST /v1/embeddings`（gateway 组，TokenGuard 后）
+- 管线：预检（令牌预算/余额）→ RequestRewriter（JsonObject 保真：只动 model/param_override/include_usage）→
+  RelayRouter（priority 分层 + weight 加权随机 + 重试排除）→ NetonHttpClient（渠道 client 按配置键缓存）→
+  非流式透传 / SSE 直通（旁路 SseUsageAccumulator）→ PricingCalc（μUSD）→ QuotaLogic.consume + UsageLog
+- 重试：仅首字节前（连接错/超时/429/5xx），上限 min(3, 候选数)，同序列不重复渠道；开流后中断按 partial 计费收尾
+- 错误：OpenAI error 格式；429 insufficient_quota（对齐 OpenAI 语义，HttpStatus 无 402）/ 503 no_available_channel /
+  上游 4xx body 语义透传（擦除上游 headers）；message 经 JsonPrimitive 转义
+- 计费：以上游 usage 为准（流式靠 include_usage 尾包）；无 usage 记 partial 计零（M3 收紧为估算）；
+  未定价模型放行计零并 warn（M3 加兜底策略配置）
+- E2E 已验证（python 假上游）：模型映射/未知字段保真/SSE 逐块直通/[DONE] 透传/charged=7500·cost=4500 精确命中/
+  台账关联 usage:id/上游宕机 503/余额耗尽 429
+
+## 存量问题（框架级待办）
+
+- sqlx4k NUMERIC→String 解码不支持且失败即进程 abort（Rust unwrap panic）——decimal 一律 VARCHAR 存储绕过；
+  框架应把解码错误转为异常
+- 迁移运行时仅支持单方言 embed（postgresql）；mysql/sqlite 脚本已备，运行时按 driver 选方言是框架待办

@@ -79,6 +79,6 @@ tasks.matching { it.name.matches(Regex("kspKotlin(LinuxX64|LinuxArm64|MingwX64)"
 
 // Embed SQL migration resources into binary (no runtime file IO).
 extra["neton.migration.moduleId"] = "gateway"
-extra["neton.migration.dialects"] = listOf("postgresql", "mysql", "sqlite")
+extra["neton.migration.dialects"] = listOf("postgresql")  // TODO: 运行时多方言选择是框架级待办，mysql/sqlite 脚本已备好
 extra["neton.migration.sqlSourceDir"] = file("sql")
 apply(from = "../neton/scripts/embed-migration-resources.gradle.kts")
