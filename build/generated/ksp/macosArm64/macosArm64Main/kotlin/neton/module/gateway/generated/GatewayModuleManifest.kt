@@ -4,6 +4,7 @@ package neton.module.gateway.generated
 import neton.core.component.NetonContext
 import neton.core.module.ModuleInitializer
 import neton.core.module.MigrationSource
+import neton.module.gateway.generated.GatewayLogicInitializer
 import neton.module.gateway.generated.GatewayRouteInitializer
 
 /**
@@ -19,13 +20,16 @@ object GatewayModuleManifest : ModuleInitializer {
 
     override val dependsOn: List<String> = listOf("system")
 
-    override val stats: Map<String, Int> = mapOf("routes" to 1)
+    override val stats: Map<String, Int> = mapOf("routes" to 10, "logics" to 1)
 
     /** SQL embed 进 binary（gradle generateMigrationResources task 生成）。 */
     override fun migrations(): List<MigrationSource> = init.generated.GatewayMigrationResources.sources
 
     override fun initialize(ctx: NetonContext) {
-        // 注册路由（1 个控制器）
+        // 注册 Logic 组件（1 个）
+        GatewayLogicInitializer.initialize(ctx)
+
+        // 注册路由（2 个控制器）
         GatewayRouteInitializer.initialize(ctx)
 
     }
