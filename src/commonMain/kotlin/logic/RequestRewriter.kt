@@ -3,7 +3,7 @@ package logic
 import kotlinx.serialization.json.*
 import model.Channel
 
-data class Rewritten(val body: String, val upstreamModel: String, val stream: Boolean)
+data class Rewritten(val body: String, val requestModel: String, val upstreamModel: String, val stream: Boolean)
 
 /**
  * 同协议最小侵入改写（spec 决策 A）：只动 model / 合并 param_override / 流式补 include_usage，
@@ -35,6 +35,6 @@ object RequestRewriter {
                 put("stream_options", buildJsonObject { put("include_usage", JsonPrimitive(true)) })
             }
         }
-        return Rewritten(body = merged.toString(), upstreamModel = upstreamModel, stream = stream)
+        return Rewritten(body = merged.toString(), requestModel = requestModel, upstreamModel = upstreamModel, stream = stream)
     }
 }

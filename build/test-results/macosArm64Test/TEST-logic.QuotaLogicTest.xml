@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="logic.QuotaLogicTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-07-21T20:51:03.297Z" hostname="mac" time="0.0">
+<testsuite name="logic.QuotaLogicTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-07-21T20:54:37.979Z" hostname="mac" time="0.0">
   <properties/>
   <testcase name="consumeMathNeverGoesNegative[macosArm64]" classname="logic.QuotaLogicTest" time="0.0"/>
   <testcase name="grantAccumulates[macosArm64]" classname="logic.QuotaLogicTest" time="0.0"/>

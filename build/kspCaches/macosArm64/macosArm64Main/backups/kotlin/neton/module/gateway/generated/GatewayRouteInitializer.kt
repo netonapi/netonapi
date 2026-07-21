@@ -14,6 +14,7 @@ import neton.core.http.UploadFile
 import neton.core.http.UploadFiles
 import neton.core.http.ValidationException
 import neton.core.http.ValidationError
+import neton.logging.LoggerFactory
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.serializer
 import neton.validation.ValidatorRegistry
@@ -41,7 +42,7 @@ import kotlinx.serialization.builtins.nullable
  * KSP 自动生成的路由初始化器
  *
  * 此文件由 Neton KSP 处理器自动生成，请勿手动编辑。
- * 包含 8 个控制器的路由注册。
+ * 包含 9 个控制器的路由注册。
  */
 internal object GatewayRouteInitializer {
 
@@ -935,19 +936,67 @@ internal object GatewayRouteInitializer {
             )
         )
 
+        // === RelayController 控制器路由 ===
+
+        engine.registerRoute(
+            RouteDefinition(
+                pattern = "/v1/chat/completions",
+                method = HttpMethod.POST,
+                handler = object : RouteHandler {
+                    override suspend fun invoke(context: HttpContext, args: HandlerArgs): Any? {
+                        val ctrl = controller.gateway.RelayController(ctx.get(neton.logging.LoggerFactory::class).get("controller.gateway.RelayController"), ctx.get(logic.ChannelLogic::class), ctx.get(logic.TokenLogic::class), ctx.get(logic.QuotaLogic::class))
+                        
+                        return ctrl.chatCompletions(context, (context.getAttribute(SecurityAttributes.IDENTITY) as? Identity ?: throw neton.core.http.UnauthorizedException()))
+
+                    }
+                },
+                controllerClass = "controller.gateway.RelayController",
+                methodName = "chatCompletions",
+                routeGroup = "gateway",
+                allowAnonymous = false,
+                requireAuth = false,
+                permission = null,
+                rateLimit = null,
+                freshAuth = false
+            )
+        )
+
+        engine.registerRoute(
+            RouteDefinition(
+                pattern = "/v1/embeddings",
+                method = HttpMethod.POST,
+                handler = object : RouteHandler {
+                    override suspend fun invoke(context: HttpContext, args: HandlerArgs): Any? {
+                        val ctrl = controller.gateway.RelayController(ctx.get(neton.logging.LoggerFactory::class).get("controller.gateway.RelayController"), ctx.get(logic.ChannelLogic::class), ctx.get(logic.TokenLogic::class), ctx.get(logic.QuotaLogic::class))
+                        
+                        return ctrl.embeddings(context, (context.getAttribute(SecurityAttributes.IDENTITY) as? Identity ?: throw neton.core.http.UnauthorizedException()))
+
+                    }
+                },
+                controllerClass = "controller.gateway.RelayController",
+                methodName = "embeddings",
+                routeGroup = "gateway",
+                allowAnonymous = false,
+                requireAuth = false,
+                permission = null,
+                rateLimit = null,
+                freshAuth = false
+            )
+        )
+
     }
 
     /**
      * 获取总路由数量
      */
     private fun getTotalRoutes(): Int {
-        return 31
+        return 33
     }
 
     /**
      * 获取控制器统计信息
      */
     fun getControllerStats(): String {
-        return "Controllers: 8, Routes: ${getTotalRoutes()}"
+        return "Controllers: 9, Routes: ${getTotalRoutes()}"
     }
 }
