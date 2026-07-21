@@ -25,6 +25,8 @@ include(":module-payment")
 project(":module-payment").projectDir = file("../../Neton/neton-application-module-payment")
 include(":module-platform")
 project(":module-platform").projectDir = file("../../Neton/neton-application-module-platform")
+include(":module-gateway")
+project(":module-gateway").projectDir = file("../../Neton/neton-application-module-gateway")
 
 // 应用入口
 include(":application")
