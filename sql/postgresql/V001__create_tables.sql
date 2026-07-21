@@ -35,3 +35,23 @@ CREATE TABLE gateway_channel_keys (
     updated_at BIGINT
 );
 CREATE INDEX idx_gateway_channel_keys_channel ON gateway_channel_keys(channel_id, status, deleted);
+
+CREATE TABLE gateway_tokens (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    name VARCHAR(128) NOT NULL,
+    key_hash CHAR(64) NOT NULL,
+    key_display VARCHAR(32) NOT NULL,
+    quota_budget BIGINT,
+    quota_used BIGINT NOT NULL DEFAULT 0,
+    expires_at BIGINT,
+    allowed_models TEXT NOT NULL DEFAULT '',
+    allowed_ips TEXT NOT NULL DEFAULT '',
+    group_override VARCHAR(64),
+    status INT NOT NULL DEFAULT 1,
+    deleted INT NOT NULL DEFAULT 0,
+    created_at BIGINT,
+    updated_at BIGINT
+);
+CREATE UNIQUE INDEX uk_gateway_tokens_hash ON gateway_tokens(key_hash);
+CREATE INDEX idx_gateway_tokens_user ON gateway_tokens(user_id, deleted);

@@ -17,10 +17,13 @@ import neton.core.http.ValidationError
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.serializer
 import neton.validation.ValidatorRegistry
+import controller.admin.token.CreateTokenRequest
 import controller.admin.channel.dto.CreateChannelRequest
 import controller.admin.channel.dto.UpdateChannelRequest
 import controller.admin.channel.dto.AddKeyRequest
 import neton.core.http.JsonContent
+import controller.admin.token.IssuedTokenVO
+import controller.admin.token.TokenVO
 import model.Channel
 import controller.admin.channel.dto.ChannelKeyVO
 import kotlinx.serialization.builtins.nullable
@@ -30,7 +33,7 @@ import kotlinx.serialization.builtins.nullable
  * KSP 自动生成的路由初始化器
  *
  * 此文件由 Neton KSP 处理器自动生成，请勿手动编辑。
- * 包含 2 个控制器的路由注册。
+ * 包含 3 个控制器的路由注册。
  */
 internal object GatewayRouteInitializer {
 
@@ -48,6 +51,116 @@ internal object GatewayRouteInitializer {
      * 注册所有路由到请求引擎
      */
     private fun registerRoutes(engine: RequestEngine, ctx: neton.core.component.NetonContext) {
+
+        // === TokenController 控制器路由 ===
+
+        engine.registerRoute(
+            RouteDefinition(
+                pattern = "/gateway/token/create",
+                method = HttpMethod.POST,
+                handler = object : RouteHandler {
+                    override suspend fun invoke(context: HttpContext, args: HandlerArgs): Any? {
+                        val ctrl = controller.admin.token.TokenController(ctx.get(logic.TokenLogic::class))
+                        
+                        val _r = ctrl.create(run {
+                                val ct = context.request.contentType?.lowercase() ?: ""
+                                if (!ct.contains("application/json")) throw UnsupportedMediaTypeException("Body requires application/json")
+                                val raw = context.request.text()
+                                val body = try {
+                                    Json.decodeFromString(CreateTokenRequest.serializer(), raw)
+                                } catch (e: Exception) {
+                                    throw ValidationException(listOf(ValidationError(path = "\$", message = "Invalid JSON body", code = "InvalidJson")))
+                                }
+                                val registry = context.getApplicationContext()?.getOrNull(neton.validation.ValidatorRegistry::class)
+                                val validator = registry?.get(CreateTokenRequest::class)
+                                val errors = validator?.validate(body)
+                                if (!errors.isNullOrEmpty()) throw ValidationException(errors)
+                                body
+                            })
+                        return JsonContent(Json.encodeToString(IssuedTokenVO.serializer(), _r))
+
+                    }
+                },
+                controllerClass = "controller.admin.token.TokenController",
+                methodName = "create",
+                routeGroup = "admin",
+                allowAnonymous = false,
+                requireAuth = false,
+                permission = "gateway:token:create",
+                rateLimit = null,
+                freshAuth = false
+            )
+        )
+
+        engine.registerRoute(
+            RouteDefinition(
+                pattern = "/gateway/token/list-by-user/{userId}",
+                method = HttpMethod.GET,
+                handler = object : RouteHandler {
+                    override suspend fun invoke(context: HttpContext, args: HandlerArgs): Any? {
+                        val ctrl = controller.admin.token.TokenController(ctx.get(logic.TokenLogic::class))
+                        
+                        val _r = ctrl.listByUser(run { val _r = args.first("userId") as? String; if (_r == null) throw ValidationException(listOf(ValidationError(path = "userId", message = "is required", code = "Missing"))); ParamConverters.parseLong(_r) ?: throw ValidationException(listOf(ValidationError(path = "userId", message = "must be a valid integer", code = "Type"))) })
+                        return JsonContent(Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(TokenVO.serializer()), _r))
+
+                    }
+                },
+                controllerClass = "controller.admin.token.TokenController",
+                methodName = "listByUser",
+                routeGroup = "admin",
+                allowAnonymous = false,
+                requireAuth = false,
+                permission = "gateway:token:list",
+                rateLimit = null,
+                freshAuth = false
+            )
+        )
+
+        engine.registerRoute(
+            RouteDefinition(
+                pattern = "/gateway/token/update-status",
+                method = HttpMethod.PUT,
+                handler = object : RouteHandler {
+                    override suspend fun invoke(context: HttpContext, args: HandlerArgs): Any? {
+                        val ctrl = controller.admin.token.TokenController(ctx.get(logic.TokenLogic::class))
+                        
+                        return ctrl.updateStatus(run { val _r = args.first("id") as? String; if (_r == null) throw ValidationException(listOf(ValidationError(path = "id", message = "is required", code = "Missing"))); ParamConverters.parseLong(_r) ?: throw ValidationException(listOf(ValidationError(path = "id", message = "must be a valid integer", code = "Type"))) }, run { val _r = args.first("status") as? String; if (_r == null) throw ValidationException(listOf(ValidationError(path = "status", message = "is required", code = "Missing"))); ParamConverters.parseInt(_r) ?: throw ValidationException(listOf(ValidationError(path = "status", message = "must be a valid integer", code = "Type"))) })
+
+                    }
+                },
+                controllerClass = "controller.admin.token.TokenController",
+                methodName = "updateStatus",
+                routeGroup = "admin",
+                allowAnonymous = false,
+                requireAuth = false,
+                permission = "gateway:token:update",
+                rateLimit = null,
+                freshAuth = false
+            )
+        )
+
+        engine.registerRoute(
+            RouteDefinition(
+                pattern = "/gateway/token/delete/{id}",
+                method = HttpMethod.DELETE,
+                handler = object : RouteHandler {
+                    override suspend fun invoke(context: HttpContext, args: HandlerArgs): Any? {
+                        val ctrl = controller.admin.token.TokenController(ctx.get(logic.TokenLogic::class))
+                        
+                        return ctrl.delete(run { val _r = args.first("id") as? String; if (_r == null) throw ValidationException(listOf(ValidationError(path = "id", message = "is required", code = "Missing"))); ParamConverters.parseLong(_r) ?: throw ValidationException(listOf(ValidationError(path = "id", message = "must be a valid integer", code = "Type"))) })
+
+                    }
+                },
+                controllerClass = "controller.admin.token.TokenController",
+                methodName = "delete",
+                routeGroup = "admin",
+                allowAnonymous = false,
+                requireAuth = false,
+                permission = "gateway:token:delete",
+                rateLimit = null,
+                freshAuth = false
+            )
+        )
 
         // === ChannelController 控制器路由 ===
 
@@ -337,13 +450,13 @@ internal object GatewayRouteInitializer {
      * 获取总路由数量
      */
     private fun getTotalRoutes(): Int {
-        return 10
+        return 14
     }
 
     /**
      * 获取控制器统计信息
      */
     fun getControllerStats(): String {
-        return "Controllers: 2, Routes: ${getTotalRoutes()}"
+        return "Controllers: 3, Routes: ${getTotalRoutes()}"
     }
 }
