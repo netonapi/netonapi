@@ -15,7 +15,7 @@ kotlin {
                 entryPoint = "main"
             }
         }
-        val coreInterop = rootProject.file("../neton/neton-core/build/nativeInterop/${target.name}").absolutePath
+        val coreInterop = rootProject.file("../../Neton/neton/neton-core/build/nativeInterop/${target.name}").absolutePath
         target.binaries.forEach { binary ->
             binary.linkerOpts.add("-L$coreInterop")
             binary.linkerOpts.add("-lenv")
