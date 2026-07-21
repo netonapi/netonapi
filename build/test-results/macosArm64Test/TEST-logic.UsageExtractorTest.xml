@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="logic.UsageExtractorTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-21T22:06:33.553Z" hostname="mac" time="0.001">
+<testsuite name="logic.UsageExtractorTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-21T22:15:25.140Z" hostname="mac" time="0.001">
   <properties/>
-  <testcase name="extractsFromNonStreamResponse[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>
+  <testcase name="extractsFromNonStreamResponse[macosArm64]" classname="logic.UsageExtractorTest" time="0.001"/>
   <testcase name="extractsCachedTokens[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>
-  <testcase name="nullWhenNoUsage[macosArm64]" classname="logic.UsageExtractorTest" time="0.001"/>
+  <testcase name="nullWhenNoUsage[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>
   <testcase name="sseAccumulatorFindsTrailingUsage[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>
   <testcase name="sseAccumulatorHandlesTornChunks[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>
   <testcase name="sseAccumulatorNullWithoutUsage[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>

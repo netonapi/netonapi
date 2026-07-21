@@ -984,13 +984,36 @@ internal object GatewayRouteInitializer {
             )
         )
 
+        engine.registerRoute(
+            RouteDefinition(
+                pattern = "/v1/messages",
+                method = HttpMethod.POST,
+                handler = object : RouteHandler {
+                    override suspend fun invoke(context: HttpContext, args: HandlerArgs): Any? {
+                        val ctrl = controller.gateway.RelayController(ctx.get(neton.logging.LoggerFactory::class).get("controller.gateway.RelayController"), ctx.get(logic.ChannelLogic::class), ctx.get(logic.TokenLogic::class), ctx.get(logic.QuotaLogic::class))
+                        
+                        return ctrl.messages(context, (context.getAttribute(SecurityAttributes.IDENTITY) as? Identity ?: throw neton.core.http.UnauthorizedException()))
+
+                    }
+                },
+                controllerClass = "controller.gateway.RelayController",
+                methodName = "messages",
+                routeGroup = "gateway",
+                allowAnonymous = false,
+                requireAuth = false,
+                permission = null,
+                rateLimit = null,
+                freshAuth = false
+            )
+        )
+
     }
 
     /**
      * 获取总路由数量
      */
     private fun getTotalRoutes(): Int {
-        return 33
+        return 34
     }
 
     /**

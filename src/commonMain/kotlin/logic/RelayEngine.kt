@@ -16,6 +16,9 @@ import table.GatewayGroupTable
 import table.GatewayTokenTable
 import table.ModelPriceTable
 import table.UsageLogTable
+import logic.protocol.ProtocolAdapter
+import logic.protocol.OpenAiAdapter
+import logic.protocol.AnthropicAdapter
 import neton.database.dsl.*
 import kotlin.random.Random
 
@@ -30,34 +33,34 @@ class RelayEngine(
     private val quotaLogic: QuotaLogic,
 ) {
 
-    suspend fun relay(ctx: HttpContext, userId: Long, tokenId: Long, path: String) {
+    suspend fun relay(ctx: HttpContext, userId: Long, tokenId: Long, inbound: ProtocolAdapter, path: String) {
         val startMs = now()
         val rawBody = ctx.request.text()
 
         val token = tokenLogic.get(tokenId)
-        if (token == null || token.status != 1) return respondError(ctx, 401, "invalid_token", "token not found or disabled")
+        if (token == null || token.status != 1) return respondError(ctx, inbound, 401, "invalid_token", "token not found or disabled")
 
         // 预检：令牌预算 + 账户余额
         token.quotaBudget?.let { budget ->
-            if (token.quotaUsed >= budget) return respondError(ctx, 429, "insufficient_quota", "token budget exhausted")
+            if (token.quotaUsed >= budget) return respondError(ctx, inbound, 429, "insufficient_quota", "token budget exhausted")
         }
         if (quotaLogic.account(userId).balance <= 0) {
-            return respondError(ctx, 429, "insufficient_quota", "account balance exhausted")
+            return respondError(ctx, inbound, 429, "insufficient_quota", "account balance exhausted")
         }
 
         val group = token.groupOverride?.takeIf { it.isNotBlank() } ?: "default"
         val requestModel = runCatching { RequestRewriter.rewrite(rawBody, DUMMY).requestModel }.getOrElse {
-            return respondError(ctx, 400, "invalid_request_error", "request body is not valid JSON")
+            return respondError(ctx, inbound, 400, "invalid_request_error", "request body is not valid JSON")
         }
-        if (requestModel.isEmpty()) return respondError(ctx, 400, "invalid_request_error", "model is required")
+        if (requestModel.isEmpty()) return respondError(ctx, inbound, 400, "invalid_request_error", "model is required")
 
         // 令牌模型白名单
         if (token.allowedModels.isNotBlank() &&
             !token.allowedModels.split(',').map { it.trim() }.contains(requestModel)
-        ) return respondError(ctx, 403, "model_not_allowed", "model '$requestModel' not allowed for this token")
+        ) return respondError(ctx, inbound, 403, "model_not_allowed", "model '$requestModel' not allowed for this token")
 
         val candidates = RelayRouter.candidates(channelLogic.listEnabled(), requestModel, group)
-        if (candidates.isEmpty()) return respondError(ctx, 503, "no_available_channel", "no channel available for model '$requestModel'")
+        if (candidates.isEmpty()) return respondError(ctx, inbound, 503, "no_available_channel", "no channel available for model '$requestModel'")
 
         val tried = mutableSetOf<Long>()
         var lastError: String? = null
@@ -66,12 +69,18 @@ class RelayEngine(
         repeat(maxAttempts) {
             val channel = RelayRouter.pick(candidates, tried, Random) ?: return@repeat
             tried += channel.id
+            // 协议兼容：Slice 1 仅支持同协议（inbound 与渠道 type 一致）；跨协议 IR 转换属 Slice 2
+            val adapter = adapterForChannel(channel.type)
+            if (adapter == null || adapter.id != inbound.id) {
+                lastError = "cross-protocol relay (inbound=${inbound.id} → channel.type=${channel.type}) not yet supported"
+                return@repeat
+            }
             val key = channelLogic.pickKey(channel.id)
             if (key == null) { lastError = "channel ${channel.id} has no available key"; return@repeat }
 
-            val rewritten = RequestRewriter.rewrite(rawBody, channel)
+            val rewritten = adapter.rewrite(rawBody, channel)
             val outcome = try {
-                execute(ctx, channel, key.apiKey, rewritten, path, token, group, startMs)
+                execute(ctx, channel, key.apiKey, rewritten, adapter, path, token, group, startMs)
             } catch (e: NetonHttpException) {
                 val err = e.error
                 val retryable = when (err) {
@@ -82,7 +91,7 @@ class RelayEngine(
                 if (!retryable && err is NetonHttpError.Http) {
                     // 非重试 4xx：语义透传（body 原样，擦除上游 headers）
                     recordLog(token, channel, rewritten, Usage(), group, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
-                    respondRaw(ctx, err.statusCode, err.body ?: """{"error":{"message":"upstream error","type":"upstream_error","code":${err.statusCode}}}""")
+                    respondRaw(ctx, err.statusCode, err.body ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
                     return
                 }
                 lastError = err.toString().replace("\n", " ").take(160)
@@ -91,7 +100,13 @@ class RelayEngine(
             }
             if (outcome != null) return  // 成功（计费与日志已在 execute 内完成）
         }
-        respondError(ctx, 503, "no_available_channel", lastError ?: "all channels failed")
+        respondError(ctx, inbound, 503, "no_available_channel", lastError ?: "all channels failed")
+    }
+
+    private fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {
+        "openai_compatible", "azure_openai" -> OpenAiAdapter
+        "anthropic" -> AnthropicAdapter
+        else -> null
     }
 
     /** 成功返回非 null；可重试失败抛 NetonHttpException。 */
@@ -100,6 +115,7 @@ class RelayEngine(
         channel: Channel,
         apiKey: String,
         rewritten: Rewritten,
+        adapter: ProtocolAdapter,
         path: String,
         token: GatewayToken,
         group: String,
@@ -108,11 +124,8 @@ class RelayEngine(
         val client = clientFor(channel)
         val request = NetonHttpRequest(
             method = NetonHttpMethod.Post,
-            url = channel.baseUrl.trimEnd('/') + path,
-            headers = mapOf(
-                "Authorization" to "Bearer $apiKey",
-                "Content-Type" to "application/json",
-            ),
+            url = channel.baseUrl.trimEnd('/') + adapter.upstreamPath(path),
+            headers = adapter.upstreamHeaders(apiKey),
             body = NetonHttpBody.Json(rewritten.body),
         )
 
@@ -127,14 +140,14 @@ class RelayEngine(
                 return Unit
             }
             val ttfb = now() - startMs
-            val usage = UsageExtractor.fromJson(res.body)
+            val usage = adapter.extractUsage(res.body)
             respondRaw(ctx, 200, res.body)
             bill(token, channel, rewritten, usage, group, startMs, ttfb)
             return Unit
         }
 
         // 流式：首字节前的失败由 stream() 抛 Http 异常（可重试窗口）；开流后直通不回头
-        val accumulator = SseUsageAccumulator()
+        val accumulator = adapter.streamUsageAccumulator()
         var ttfbMs: Long? = null
         ctx.response.status = HttpStatus.OK
         ctx.response.contentType = "text/event-stream; charset=utf-8"
@@ -211,10 +224,8 @@ class RelayEngine(
         )
     ).id
 
-    private suspend fun respondError(ctx: HttpContext, status: Int, code: String, message: String) {
-        // message 经 JsonPrimitive 序列化，保证转义合法（网络错误文本可能含引号/换行）
-        val m = kotlinx.serialization.json.JsonPrimitive(message).toString()
-        respondRaw(ctx, status, """{"error":{"message":$m,"type":"$code","code":"$code"}}""")
+    private suspend fun respondError(ctx: HttpContext, inbound: ProtocolAdapter, status: Int, code: String, message: String) {
+        respondRaw(ctx, status, inbound.errorBody(code, message))
     }
 
     private suspend fun respondRaw(ctx: HttpContext, status: Int, body: String) {

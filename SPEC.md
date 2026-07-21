@@ -66,3 +66,11 @@
   上游修复应含：NUMERIC→BigDecimal→String 类型分派 + 行解码 Result 化经 FFI 返回（issue 草稿见
   NewGate/docs/issues/sqlx4k-numeric-decode-p0.md）
 - 迁移运行时仅支持单方言 embed（postgresql）；mysql/sqlite 脚本已备，运行时按 driver 选方言是框架待办
+
+## M2 Slice 1：Claude /v1/messages 同协议透传（已落地）
+
+- `ProtocolAdapter` 抽象：认证头/请求改写/usage 提取/流式旁路/error 体按协议分派；RelayEngine 不散落 if(type)
+- OpenAiAdapter（Bearer/include_usage 注入/OpenAI usage）、AnthropicAdapter（x-api-key+anthropic-version/不注入 stream_options/message_start+message_delta usage/上游 /v1/messages）
+- 渠道类型→适配器：openai_compatible|azure_openai→openai，anthropic→anthropic
+- Slice 1 仅同协议（inbound.id==channel adapter.id）；跨协议返回 503 明确降级（等 Slice 2 IR 转换）
+- E2E 验证：Claude 非流式透传 + x-api-key 头正确（auth_ok=true）+ 计费 7500/4500；流式 message_start/delta usage 入账；OpenAI 入站→anthropic 渠道 503 cross-protocol

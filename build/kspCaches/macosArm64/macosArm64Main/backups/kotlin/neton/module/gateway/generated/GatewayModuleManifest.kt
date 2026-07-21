@@ -20,7 +20,7 @@ object GatewayModuleManifest : ModuleInitializer {
 
     override val dependsOn: List<String> = listOf("system")
 
-    override val stats: Map<String, Int> = mapOf("routes" to 33, "logics" to 3)
+    override val stats: Map<String, Int> = mapOf("routes" to 34, "logics" to 3)
 
     /** SQL embed 进 binary（gradle generateMigrationResources task 生成）。 */
     override fun migrations(): List<MigrationSource> = init.generated.GatewayMigrationResources.sources

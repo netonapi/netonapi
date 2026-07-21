@@ -6,6 +6,9 @@ import logic.RelayEngine
 import logic.TokenLogic
 import neton.core.annotations.Controller
 import neton.core.annotations.Post
+import logic.protocol.OpenAiAdapter
+import logic.protocol.AnthropicAdapter
+import logic.protocol.ProtocolAdapter
 import neton.core.http.HttpContext
 import neton.core.interfaces.Identity
 import neton.logging.Logger
@@ -23,13 +26,17 @@ class RelayController(
 
     @Post("/chat/completions")
     suspend fun chatCompletions(ctx: HttpContext, identity: Identity) =
-        relay(ctx, identity, "/v1/chat/completions")
+        relay(ctx, identity, OpenAiAdapter, "/v1/chat/completions")
 
     @Post("/embeddings")
     suspend fun embeddings(ctx: HttpContext, identity: Identity) =
-        relay(ctx, identity, "/v1/embeddings")
+        relay(ctx, identity, OpenAiAdapter, "/v1/embeddings")
 
-    private suspend fun relay(ctx: HttpContext, identity: Identity, path: String) {
+    @Post("/messages")
+    suspend fun messages(ctx: HttpContext, identity: Identity) =
+        relay(ctx, identity, AnthropicAdapter, "/v1/messages")
+
+    private suspend fun relay(ctx: HttpContext, identity: Identity, inbound: ProtocolAdapter, path: String) {
         val tokenId = (identity as? GatewayTokenIdentity)?.tokenId
         val userId = identity.id.toLongOrNull()
         if (tokenId == null || userId == null) {
@@ -37,6 +44,6 @@ class RelayController(
             ctx.response.json("""{"error":{"message":"invalid identity","type":"invalid_token","code":"invalid_token"}}""")
             return
         }
-        engine.relay(ctx, userId, tokenId, path)
+        engine.relay(ctx, userId, tokenId, inbound, path)
     }
 }

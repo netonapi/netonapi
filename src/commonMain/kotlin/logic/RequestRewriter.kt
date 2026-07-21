@@ -13,7 +13,7 @@ object RequestRewriter {
 
     private val json = Json { ignoreUnknownKeys = false }
 
-    fun rewrite(rawBody: String, channel: Channel): Rewritten {
+    fun rewrite(rawBody: String, channel: Channel, injectStreamOptions: Boolean = true): Rewritten {
         val obj = json.parseToJsonElement(rawBody).jsonObject
         val requestModel = obj["model"]?.jsonPrimitive?.contentOrNull ?: ""
         val stream = obj["stream"]?.jsonPrimitive?.booleanOrNull ?: false
@@ -31,7 +31,7 @@ object RequestRewriter {
             obj.forEach { (k, v) -> put(k, v) }
             put("model", JsonPrimitive(upstreamModel))
             override?.forEach { (k, v) -> put(k, v) }
-            if (stream && !obj.containsKey("stream_options")) {
+            if (injectStreamOptions && stream && !obj.containsKey("stream_options")) {
                 put("stream_options", buildJsonObject { put("include_usage", JsonPrimitive(true)) })
             }
         }
