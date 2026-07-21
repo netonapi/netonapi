@@ -40,8 +40,10 @@ class PriceController {
         ModelPriceTable.insert(
             ModelPrice(
                 model = request.model,
-                inputPrice = request.inputPrice, outputPrice = request.outputPrice,
-                cacheReadPrice = request.cacheReadPrice, cacheWritePrice = request.cacheWritePrice,
+                inputPrice = logic.PricingCalc.requirePrice(request.inputPrice, "inputPrice"),
+                outputPrice = logic.PricingCalc.requirePrice(request.outputPrice, "outputPrice"),
+                cacheReadPrice = logic.PricingCalc.requirePrice(request.cacheReadPrice, "cacheReadPrice"),
+                cacheWritePrice = logic.PricingCalc.requirePrice(request.cacheWritePrice, "cacheWritePrice"),
                 perRequestPrice = request.perRequestPrice, saleOverride = request.saleOverride,
             )
         ).id
@@ -53,8 +55,10 @@ class PriceController {
             ?: throw IllegalArgumentException("gateway price id=${request.id} not found")
         ModelPriceTable.update(current.copy(
             model = request.model,
-            inputPrice = request.inputPrice, outputPrice = request.outputPrice,
-            cacheReadPrice = request.cacheReadPrice, cacheWritePrice = request.cacheWritePrice,
+            inputPrice = logic.PricingCalc.requirePrice(request.inputPrice, "inputPrice"),
+            outputPrice = logic.PricingCalc.requirePrice(request.outputPrice, "outputPrice"),
+            cacheReadPrice = logic.PricingCalc.requirePrice(request.cacheReadPrice, "cacheReadPrice"),
+            cacheWritePrice = logic.PricingCalc.requirePrice(request.cacheWritePrice, "cacheWritePrice"),
             perRequestPrice = request.perRequestPrice, saleOverride = request.saleOverride,
         ))
     }

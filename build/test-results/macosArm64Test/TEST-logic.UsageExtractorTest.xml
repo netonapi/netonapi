@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="logic.UsageExtractorTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-21T21:01:17.638Z" hostname="mac" time="0.0">
+<testsuite name="logic.UsageExtractorTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-21T21:51:37.760Z" hostname="mac" time="0.0">
   <properties/>
   <testcase name="extractsFromNonStreamResponse[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>
   <testcase name="extractsCachedTokens[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>

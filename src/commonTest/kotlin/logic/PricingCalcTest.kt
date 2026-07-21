@@ -65,3 +65,43 @@ class PricingCalcTest {
         assertEquals(24_000L, PricingCalc.cost(usage, price, "0.6"))
     }
 }
+
+class PricingValidationTest {
+    @kotlin.test.Test
+    fun rejectsMalformedDecimals() {
+        for (bad in listOf("", "abc", "1.2.3", "--1", "1e5", " ", ".", "12345678")) {
+            kotlin.test.assertFalse(PricingCalc.isValidDecimal(bad), "应拒绝: '$bad'")
+        }
+        kotlin.test.assertFailsWith<IllegalArgumentException> { PricingCalc.parseMicro("abc") }
+    }
+
+    @kotlin.test.Test
+    fun normalizesEquivalentForms() {
+        kotlin.test.assertEquals("1.5", PricingCalc.normalize("01.5000"))
+        kotlin.test.assertEquals("1", PricingCalc.normalize("1.0"))
+        kotlin.test.assertEquals("0.5", PricingCalc.normalize(".5"))
+        kotlin.test.assertEquals("0", PricingCalc.normalize("0.000"))
+    }
+
+    @kotlin.test.Test
+    fun ratioRangeEnforced() {
+        kotlin.test.assertEquals("0.8", PricingCalc.requireRatio("0.80"))
+        kotlin.test.assertFailsWith<IllegalArgumentException> { PricingCalc.requireRatio("0") }
+        kotlin.test.assertFailsWith<IllegalArgumentException> { PricingCalc.requireRatio("101") }
+        kotlin.test.assertFailsWith<IllegalArgumentException> { PricingCalc.requireRatio("-1") }
+    }
+
+    @kotlin.test.Test
+    fun priceRejectsNegative() {
+        kotlin.test.assertFailsWith<IllegalArgumentException> { PricingCalc.requirePrice("-2.5") }
+        kotlin.test.assertEquals("2.5", PricingCalc.requirePrice("2.50"))
+    }
+
+    @kotlin.test.Test
+    fun overflowIsLoudNotSilent() {
+        // 7 位整数上限价 × 巨量 tokens → 必须抛而不是回绕
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            PricingCalc.tokenCost(Int.MAX_VALUE, PricingCalc.parseMicro("9999999"))
+        }
+    }
+}

@@ -58,6 +58,11 @@
 
 ## 存量问题（框架级待办）
 
-- sqlx4k NUMERIC→String 解码不支持且失败即进程 abort（Rust unwrap panic）——decimal 一律 VARCHAR 存储绕过；
-  框架应把解码错误转为异常
+- **P0 驱动可靠性缺陷（sqlx4k 1.12.0）**：PostgreSQL 参数化查询走二进制协议，NUMERIC 无 BigDecimal
+  分派、未支持类型落到 `get_unchecked::<&str>`，解码失败在 Rust 侧 fetchAll 阶段 panic（release
+  `panic=abort`）直接终止进程——发生在结果返回 Kotlin 之前，Kotlin 侧 catch/converter 均无效。
+  **范围性规则（非永久禁令）**：在 sqlx4k 修复前，Neton 1.x 参数化查询不得直接返回 NUMERIC/DECIMAL 列；
+  业务用整数最小单位、VARCHAR，或自定义 SQL 显式 `::text`/`::bigint`。
+  上游修复应含：NUMERIC→BigDecimal→String 类型分派 + 行解码 Result 化经 FFI 返回（issue 草稿见
+  NewGate/docs/issues/sqlx4k-numeric-decode-p0.md）
 - 迁移运行时仅支持单方言 embed（postgresql）；mysql/sqlite 脚本已备，运行时按 driver 选方言是框架待办

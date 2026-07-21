@@ -25,7 +25,7 @@ class ChannelController(private val channelLogic: ChannelLogic) {
                 groups = request.groups, models = request.models,
                 modelMapping = request.modelMapping, paramOverride = request.paramOverride,
                 priority = request.priority, weight = request.weight,
-                proxyUrl = request.proxyUrl, costDiscount = request.costDiscount,
+                proxyUrl = request.proxyUrl, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
                 remark = request.remark,
             )
         )
@@ -43,7 +43,7 @@ class ChannelController(private val channelLogic: ChannelLogic) {
             groups = request.groups, models = request.models,
             modelMapping = request.modelMapping, paramOverride = request.paramOverride,
             priority = request.priority, weight = request.weight,
-            proxyUrl = request.proxyUrl, costDiscount = request.costDiscount,
+            proxyUrl = request.proxyUrl, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
             remark = request.remark,
         ))
     }

@@ -27,14 +27,14 @@ class GroupController {
     @Post("/create")
     @Permission("gateway:group:create")
     suspend fun create(@Body request: SaveGroupRequest): Long =
-        GatewayGroupTable.insert(GatewayGroup(name = request.name, ratio = request.ratio, description = request.description)).id
+        GatewayGroupTable.insert(GatewayGroup(name = request.name, ratio = logic.PricingCalc.requireRatio(request.ratio), description = request.description)).id
 
     @Put("/update")
     @Permission("gateway:group:update")
     suspend fun update(@Body request: SaveGroupRequest) {
         val current = GatewayGroupTable.get(request.id)
             ?: throw IllegalArgumentException("gateway group id=${request.id} not found")
-        GatewayGroupTable.update(current.copy(name = request.name, ratio = request.ratio, description = request.description))
+        GatewayGroupTable.update(current.copy(name = request.name, ratio = logic.PricingCalc.requireRatio(request.ratio), description = request.description))
     }
 
     @Delete("/delete/{id}")
