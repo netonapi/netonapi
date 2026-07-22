@@ -469,6 +469,29 @@ internal object GatewayRouteInitializer {
 
         engine.registerRoute(
             RouteDefinition(
+                pattern = "/gateway/channel/revive/{id}",
+                method = HttpMethod.PUT,
+                handler = object : RouteHandler {
+                    override suspend fun invoke(context: HttpContext, args: HandlerArgs): Any? {
+                        val ctrl = controller.admin.channel.ChannelController(ctx.get(logic.ChannelLogic::class))
+                        
+                        return ctrl.revive(run { val _r = args.first("id") as? String; if (_r == null) throw ValidationException(listOf(ValidationError(path = "id", message = "is required", code = "Missing"))); ParamConverters.parseLong(_r) ?: throw ValidationException(listOf(ValidationError(path = "id", message = "must be a valid integer", code = "Type"))) })
+
+                    }
+                },
+                controllerClass = "controller.admin.channel.ChannelController",
+                methodName = "revive",
+                routeGroup = "admin",
+                allowAnonymous = false,
+                requireAuth = false,
+                permission = "gateway:channel:update",
+                rateLimit = null,
+                freshAuth = false
+            )
+        )
+
+        engine.registerRoute(
+            RouteDefinition(
                 pattern = "/gateway/channel/delete/{id}",
                 method = HttpMethod.DELETE,
                 handler = object : RouteHandler {
@@ -1038,7 +1061,7 @@ internal object GatewayRouteInitializer {
      * 获取总路由数量
      */
     private fun getTotalRoutes(): Int {
-        return 35
+        return 36
     }
 
     /**

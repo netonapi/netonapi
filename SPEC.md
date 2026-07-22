@@ -106,3 +106,10 @@
   含经 hub 免费组合的 Gemini↔Anthropic 双跳。embeddings 目前仅 openai 透传。
 - （历史勘误：曾误将 Gemini 入站失败归为「框架 URI 损坏/sqlx4k 堆损坏」，实为测试脚本 zsh
   `$m:generateContent` 参数修饰符展开把 URL 改坏；服务端从无此问题。用 `${m}:...` 即正常。）
+
+## M3-a：渠道容错（自动禁用 + 恢复，已落地）
+
+- FailurePolicy 纯策略：连续失败达阈值（默认 5）自动禁用 Key（status=2）；渠道无可用 Key 则挂起（status=2）
+- RelayEngine 接线：429/5xx/网络/超时 + 上游 401/403 计 Key 失败；成功清零 fail_count；其它 4xx（客户端错）不计
+- 管理端 `PUT /admin/gateway/channel/revive/{id}`：渠道启用 + 全部 Key 复位
+- E2E：连打只回 500 的渠道 5 次 → key status=2 failCount=5、channel status=2；revive 后全复位

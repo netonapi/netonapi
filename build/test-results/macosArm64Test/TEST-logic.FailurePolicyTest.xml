@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="logic.FailurePolicyTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-07-22T23:29:05.740Z" hostname="mac" time="0.001">
+  <properties/>
+  <testcase name="keyDisabledAtThreshold[macosArm64]" classname="logic.FailurePolicyTest" time="0.0"/>
+  <testcase name="channelSuspendedWhenNoUsableKey[macosArm64]" classname="logic.FailurePolicyTest" time="0.0"/>
+  <testcase name="nextFailCountResetsOnSuccess[macosArm64]" classname="logic.FailurePolicyTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

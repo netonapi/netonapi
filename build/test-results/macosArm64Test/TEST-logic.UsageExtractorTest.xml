@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="logic.UsageExtractorTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-22T08:29:13.763Z" hostname="mac" time="0.0">
+<testsuite name="logic.UsageExtractorTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-22T23:29:05.743Z" hostname="mac" time="0.001">
   <properties/>
-  <testcase name="extractsFromNonStreamResponse[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>
+  <testcase name="extractsFromNonStreamResponse[macosArm64]" classname="logic.UsageExtractorTest" time="0.001"/>
   <testcase name="extractsCachedTokens[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>
   <testcase name="nullWhenNoUsage[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>
   <testcase name="sseAccumulatorFindsTrailingUsage[macosArm64]" classname="logic.UsageExtractorTest" time="0.0"/>

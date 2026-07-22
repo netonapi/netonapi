@@ -92,16 +92,21 @@ class RelayEngine(
                     else -> false
                 }
                 if (!retryable && err is NetonHttpError.Http) {
-                    // 非重试 4xx：语义透传（body 原样，擦除上游 headers）
+                    // 上游认证错（401/403）归咎于 Key；其它 4xx 是客户端问题，不计 Key 失败
+                    if (err.statusCode == 401 || err.statusCode == 403) channelLogic.recordKeyFailure(key, "upstream_${err.statusCode}")
                     recordLog(token, channel, rewritten, Usage(), group, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
                     respondRaw(ctx, err.statusCode, err.body ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
                     return
                 }
                 lastError = err.toString().replace("\n", " ").take(160)
+                channelLogic.recordKeyFailure(key, lastError)  // 429/5xx/网络/超时 → 计 Key 失败
                 log.warn("relay retry channel=${channel.id} err=$lastError")
                 null
             }
-            if (outcome != null) return  // 成功（计费与日志已在 execute 内完成）
+            if (outcome != null) {
+                channelLogic.recordKeySuccess(key)  // 成功清零 fail_count
+                return  // 成功（计费与日志已在 execute 内完成）
+            }
         }
         respondError(ctx, inbound, 503, "no_available_channel", lastError ?: "all channels failed")
     }

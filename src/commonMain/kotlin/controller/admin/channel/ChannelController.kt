@@ -53,6 +53,11 @@ class ChannelController(private val channelLogic: ChannelLogic) {
     suspend fun updateStatus(@Query id: Long, @Query status: Int) =
         channelLogic.updateStatus(id, status)
 
+    /** 手动恢复自动禁用的渠道：渠道启用 + 全部 Key 复位。 */
+    @Put("/revive/{id}")
+    @Permission("gateway:channel:update")
+    suspend fun revive(@PathVariable id: Long) = channelLogic.reviveChannel(id)
+
     @Delete("/delete/{id}")
     @Permission("gateway:channel:delete")
     suspend fun delete(@PathVariable id: Long) = channelLogic.delete(id)
