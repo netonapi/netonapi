@@ -19,6 +19,9 @@ import table.UsageLogTable
 import logic.protocol.ProtocolAdapter
 import logic.protocol.OpenAiAdapter
 import logic.protocol.AnthropicAdapter
+import logic.protocol.GeminiAdapter
+import logic.protocol.ProtocolCodecs
+import logic.protocol.StreamStage
 import neton.database.dsl.*
 import kotlin.random.Random
 
@@ -33,9 +36,9 @@ class RelayEngine(
     private val quotaLogic: QuotaLogic,
 ) {
 
-    suspend fun relay(ctx: HttpContext, userId: Long, tokenId: Long, inbound: ProtocolAdapter, path: String) {
+    suspend fun relay(ctx: HttpContext, userId: Long, tokenId: Long, inbound: ProtocolAdapter, path: String, rawBodyOverride: String? = null) {
         val startMs = now()
-        val rawBody = ctx.request.text()
+        val rawBody = rawBodyOverride ?: ctx.request.text()
 
         val token = tokenLogic.get(tokenId)
         if (token == null || token.status != 1) return respondError(ctx, inbound, 401, "invalid_token", "token not found or disabled")
@@ -74,11 +77,7 @@ class RelayEngine(
                 lastError = "unknown channel type ${channel.type}"
                 return@repeat
             }
-            val transform = buildTransform(inbound, upstream, rawBody, channel)
-            if (transform == null) {
-                lastError = "cross-protocol relay (inbound=${inbound.id} → channel.type=${channel.type}) not yet supported"
-                return@repeat
-            }
+            val transform = buildTransform(inbound, upstream, rawBody, channel, path)
             val key = channelLogic.pickKey(channel.id)
             if (key == null) { lastError = "channel ${channel.id} has no available key"; return@repeat }
 
@@ -110,60 +109,67 @@ class RelayEngine(
     private fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {
         "openai_compatible", "azure_openai" -> OpenAiAdapter
         "anthropic" -> AnthropicAdapter
+        "gemini" -> GeminiAdapter
         else -> null
     }
 
     /**
-     * 组装转发变换：同协议 = 恒等透传；跨协议 = codec 转换（spec 决策 A，产品侧直译）。
-     * 返回 null 表示该 (inbound × 渠道) 组合暂不支持。
+     * 组装转发变换（枢纽模型：OpenAI ChatCompletions 为内部规范）。
+     * 同协议 = 恒等透传（保真，决策 A）；跨协议 = inbound→hub→upstream 组合，
+     * openai 端各段恒等，Gemini↔Anthropic 经 hub 免费组合。
      */
     private fun buildTransform(
-        inbound: ProtocolAdapter, upstream: ProtocolAdapter, rawBody: String, channel: Channel,
-    ): RelayTransform? {
+        inbound: ProtocolAdapter, upstream: ProtocolAdapter, rawBody: String, channel: Channel, path: String,
+    ): RelayTransform {
         // 同协议：模型映射 + 协议原生改写，响应恒等透传
         if (inbound.id == upstream.id) {
             val rw = upstream.rewrite(rawBody, channel)
-            return RelayTransform(
-                rewritten = rw, upstream = upstream,
-                transformResponseBody = { it },
-                streamTransformerFactory = null,
-            )
+            val up = upstreamPathFor(upstream, path, rw.upstreamModel, rw.stream)
+            return RelayTransform(rw, upstream, up, { it }, null)
         }
-        // 跨协议：Anthropic 入站 → OpenAI 上游（Slice 2）
-        if (inbound.id == "anthropic" && upstream.id == "openai") {
-            val mapped = RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
-            val openaiBody = logic.protocol.codec.AnthropicToOpenAiRequest.convert(mapped.body)
-            return RelayTransform(
-                rewritten = Rewritten(openaiBody, mapped.requestModel, mapped.upstreamModel, mapped.stream),
-                upstream = upstream,
-                transformResponseBody = { logic.protocol.codec.OpenAiToAnthropicResponse.convert(it) },
-                streamTransformerFactory = {
-                    val sm = logic.protocol.codec.OpenAiToAnthropicStream(model = mapped.requestModel)
-                    object : StreamTransformer {
-                        override fun feed(chunk: String) = sm.feed(chunk)
-                        override fun finish() = sm.finish()
-                    }
-                },
-            )
+        // 跨协议：inbound → hub(OpenAI) → upstream
+        val mapped = RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
+        val hubBody = ProtocolCodecs.requestToHub(inbound.id)(mapped.body)
+        // 上游是 OpenAI 时补 include_usage（流式尾包）
+        val upstreamBody = if (upstream.id == "openai" && mapped.stream) {
+            RequestRewriter.injectIncludeUsage(hubBody)
+        } else {
+            ProtocolCodecs.requestFromHub(upstream.id)(hubBody)
         }
-        // 跨协议：OpenAI 入站 → Anthropic 上游（Slice 3，反向）
-        if (inbound.id == "openai" && upstream.id == "anthropic") {
-            val mapped = RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
-            val anthropicBody = logic.protocol.codec.OpenAiToAnthropicRequest.convert(mapped.body)
-            return RelayTransform(
-                rewritten = Rewritten(anthropicBody, mapped.requestModel, mapped.upstreamModel, mapped.stream),
-                upstream = upstream,
-                transformResponseBody = { logic.protocol.codec.AnthropicToOpenAiResponse.convert(it) },
-                streamTransformerFactory = {
-                    val sm = logic.protocol.codec.AnthropicToOpenAiStream(model = mapped.requestModel)
-                    object : StreamTransformer {
-                        override fun feed(chunk: String) = sm.feed(chunk)
-                        override fun finish() = sm.finish()
-                    }
-                },
-            )
+        return RelayTransform(
+            rewritten = Rewritten(upstreamBody, mapped.requestModel, mapped.upstreamModel, mapped.stream),
+            upstream = upstream,
+            upstreamPath = upstreamPathFor(upstream, path, mapped.upstreamModel, mapped.stream),
+            transformResponseBody = { upstreamNative ->
+                val hub = ProtocolCodecs.responseToHub(upstream.id)(upstreamNative)
+                ProtocolCodecs.responseFromHub(inbound.id)(hub)
+            },
+            streamTransformerFactory = {
+                val toHub = ProtocolCodecs.streamToHub(upstream.id, mapped.requestModel)
+                val fromHub = ProtocolCodecs.streamFromHub(inbound.id, mapped.requestModel)
+                ChainedStreamTransformer(listOfNotNull(toHub, fromHub))
+            },
+        )
+    }
+
+    /** 组合多个流式阶段：feed 链式；finish 时每阶段先消费上阶段 flush 输出再自己 flush。 */
+    private class ChainedStreamTransformer(private val stages: List<StreamStage>) : StreamTransformer {
+        override fun feed(chunk: String): String {
+            var cur = chunk
+            for (s in stages) {
+                if (cur.isEmpty()) return ""
+                cur = s.feed(cur)
+            }
+            return cur
         }
-        return null
+        override fun finish(): String {
+            var carry = ""  // 上一阶段的 flush 输出，流入下一阶段
+            for (s in stages) {
+                val fed = if (carry.isNotEmpty()) s.feed(carry) else ""
+                carry = fed + s.finish()
+            }
+            return carry
+        }
     }
 
     /** 成功返回非 null；可重试失败抛 NetonHttpException。 */
@@ -182,7 +188,7 @@ class RelayEngine(
         val client = clientFor(channel)
         val request = NetonHttpRequest(
             method = NetonHttpMethod.Post,
-            url = channel.baseUrl.trimEnd('/') + upstream.upstreamPath(path),
+            url = channel.baseUrl.trimEnd('/') + transform.upstreamPath,
             headers = upstream.upstreamHeaders(apiKey),
             body = NetonHttpBody.Json(rewritten.body),
         )
@@ -242,13 +248,23 @@ class RelayEngine(
         return Unit
     }
 
-    /** 转发变换：请求体已终态；响应体/流按需转协议（同协议为恒等）。 */
+    /** 转发变换：请求体/上游路径已终态；响应体/流按需转协议（同协议为恒等）。 */
     class RelayTransform(
         val rewritten: Rewritten,
         val upstream: ProtocolAdapter,
+        val upstreamPath: String,
         val transformResponseBody: (String) -> String,
         val streamTransformerFactory: (() -> StreamTransformer)?,
     )
+
+    /** 上游端点路径：openai 保留入站路径（含 embeddings），anthropic 固定 /v1/messages，
+     *  gemini 用上游模型名 + action 重建。 */
+    private fun upstreamPathFor(upstream: ProtocolAdapter, inboundPath: String, upstreamModel: String, stream: Boolean): String =
+        when (upstream.id) {
+            "anthropic" -> "/v1/messages"
+            "gemini" -> "/v1beta/models/$upstreamModel:" + if (stream) "streamGenerateContent?alt=sse" else "generateContent"
+            else -> if (inboundPath.startsWith("/v1/")) inboundPath else "/v1/chat/completions"
+        }
 
     interface StreamTransformer {
         fun feed(chunk: String): String

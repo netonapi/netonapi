@@ -42,7 +42,7 @@ import kotlinx.serialization.builtins.nullable
  * KSP 自动生成的路由初始化器
  *
  * 此文件由 Neton KSP 处理器自动生成，请勿手动编辑。
- * 包含 9 个控制器的路由注册。
+ * 包含 10 个控制器的路由注册。
  */
 internal object GatewayRouteInitializer {
 
@@ -936,6 +936,31 @@ internal object GatewayRouteInitializer {
             )
         )
 
+        // === GeminiRelayController 控制器路由 ===
+
+        engine.registerRoute(
+            RouteDefinition(
+                pattern = "/v1beta/models/{modelAction}",
+                method = HttpMethod.POST,
+                handler = object : RouteHandler {
+                    override suspend fun invoke(context: HttpContext, args: HandlerArgs): Any? {
+                        val ctrl = controller.gateway.GeminiRelayController(ctx.get(neton.logging.LoggerFactory::class).get("controller.gateway.GeminiRelayController"), ctx.get(logic.ChannelLogic::class), ctx.get(logic.TokenLogic::class), ctx.get(logic.QuotaLogic::class))
+                        
+                        return ctrl.generate(run { val _r = args.first("modelAction") as? String; if (_r == null) throw ValidationException(listOf(ValidationError(path = "modelAction", message = "is required", code = "Missing"))); _r }, context, (context.getAttribute(SecurityAttributes.IDENTITY) as? Identity ?: throw neton.core.http.UnauthorizedException()))
+
+                    }
+                },
+                controllerClass = "controller.gateway.GeminiRelayController",
+                methodName = "generate",
+                routeGroup = "gateway",
+                allowAnonymous = false,
+                requireAuth = false,
+                permission = null,
+                rateLimit = null,
+                freshAuth = false
+            )
+        )
+
         // === RelayController 控制器路由 ===
 
         engine.registerRoute(
@@ -1013,13 +1038,13 @@ internal object GatewayRouteInitializer {
      * 获取总路由数量
      */
     private fun getTotalRoutes(): Int {
-        return 34
+        return 35
     }
 
     /**
      * 获取控制器统计信息
      */
     fun getControllerStats(): String {
-        return "Controllers: 9, Routes: ${getTotalRoutes()}"
+        return "Controllers: 10, Routes: ${getTotalRoutes()}"
     }
 }

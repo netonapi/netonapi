@@ -94,3 +94,13 @@
 - buildTransform 新增 inbound=openai ∧ channel=anthropic 分支
 - E2E：OpenAI 请求→Anthropic 假上游→OpenAI 响应（非流式+流式 chunk 序列），计费按 Anthropic usage 7500/4500
 - **协议矩阵闭合**：{OpenAI,Anthropic}² 四格全通（透传×2 + codec×2）
+
+## M2 Slice 3：Gemini 接入 + OpenAI 枢纽重构
+
+- **架构重构**：OpenAI ChatCompletions 为内部枢纽。跨协议 = inbound→hub→upstream 组合（ProtocolCodecs），
+  openai 端各段恒等；三协议只需 2×N 组转换，Gemini↔Anthropic 经 hub 免费组合。现有 4 格逐格等价保持。
+- Gemini↔OpenAI 六向 codec（req/resp/stream 各双向）全单测通过；GeminiAdapter（x-goog-api-key/usageMetadata）
+- RelayTransform 携带 upstreamPath（Gemini 上游 /v1beta/models/{model}:{action}）；ChainedStreamTransformer 组合双跳流式
+- **可用矩阵（3×3 中 6 格稳定）**：OpenAI/Anthropic 入站 → 三上游全通（含经 hub 的 Gemini 上游）
+- **Gemini 入站 3 格阻塞**：框架级 P1 bug——Ktor CIO(K/N) 含冒号路径段 URI 每进程启动概率损坏
+  （见 NewGate/docs/issues/ktor-cio-colon-uri-corruption-p1.md）。codec/controller 已就位，框架修复后零改动生效。

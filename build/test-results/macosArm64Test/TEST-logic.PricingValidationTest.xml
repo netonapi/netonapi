@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="logic.PricingValidationTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-07-21T22:34:06.395Z" hostname="mac" time="0.0">
+<testsuite name="logic.PricingValidationTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-07-22T07:42:13.063Z" hostname="mac" time="0.0">
   <properties/>
   <testcase name="rejectsMalformedDecimals[macosArm64]" classname="logic.PricingValidationTest" time="0.0"/>
   <testcase name="normalizesEquivalentForms[macosArm64]" classname="logic.PricingValidationTest" time="0.0"/>

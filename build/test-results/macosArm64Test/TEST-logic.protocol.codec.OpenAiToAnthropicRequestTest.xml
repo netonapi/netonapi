@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="logic.protocol.codec.OpenAiToAnthropicRequestTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-07-21T22:34:06.398Z" hostname="mac" time="0.0">
+<testsuite name="logic.protocol.codec.OpenAiToAnthropicRequestTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-07-22T07:42:13.066Z" hostname="mac" time="0.001">
   <properties/>
-  <testcase name="systemMessageBecomesSystemField[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicRequestTest" time="0.0"/>
+  <testcase name="systemMessageBecomesSystemField[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicRequestTest" time="0.001"/>
   <testcase name="maxTokensDefaultedWhenMissing[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicRequestTest" time="0.0"/>
   <testcase name="maxTokensPreserved[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicRequestTest" time="0.0"/>
   <testcase name="assistantToolCallsBecomeToolUseBlocks[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicRequestTest" time="0.0"/>
