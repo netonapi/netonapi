@@ -37,16 +37,15 @@ class GeminiRelayController(
             ctx.response.json(GeminiAdapter.errorBody("invalid_token", "invalid identity"))
             return
         }
-        // 冒号在路径变量捕获上跨 HTTP 栈不可靠——从完整请求 path 解析 model:action
-        val segment = ctx.request.path.substringAfterLast("/models/").substringBefore('?')
-        val colon = segment.indexOf(':')
+        // modelAction 由路由参数绑定，形如 "gemini-1.5-pro:generateContent"
+        val colon = modelAction.indexOf(':')
         if (colon < 0) {
             ctx.response.status = neton.core.http.HttpStatus.BAD_REQUEST
             ctx.response.json(GeminiAdapter.errorBody("invalid_request", "expected models/{model}:{action}"))
             return
         }
-        val model = segment.substring(0, colon)
-        val action = segment.substring(colon + 1)
+        val model = modelAction.substring(0, colon)
+        val action = modelAction.substring(colon + 1).substringBefore('?')
         val stream = action == "streamGenerateContent"
 
         val raw = ctx.request.text()
@@ -61,7 +60,7 @@ class GeminiRelayController(
             put("stream", JsonPrimitive(stream))
         }.toString()
 
-        val path = ctx.request.path
+        val path = "/v1beta/models/$modelAction"
         engine.relay(ctx, userId, tokenId, GeminiAdapter, path, rawBodyOverride = normalized)
     }
 }

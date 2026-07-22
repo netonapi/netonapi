@@ -101,6 +101,8 @@
   openai 端各段恒等；三协议只需 2×N 组转换，Gemini↔Anthropic 经 hub 免费组合。现有 4 格逐格等价保持。
 - Gemini↔OpenAI 六向 codec（req/resp/stream 各双向）全单测通过；GeminiAdapter（x-goog-api-key/usageMetadata）
 - RelayTransform 携带 upstreamPath（Gemini 上游 /v1beta/models/{model}:{action}）；ChainedStreamTransformer 组合双跳流式
-- **可用矩阵（3×3 中 6 格稳定）**：OpenAI/Anthropic 入站 → 三上游全通（含经 hub 的 Gemini 上游）
-- **Gemini 入站 3 格阻塞**：框架级 P1 bug——Ktor CIO(K/N) 含冒号路径段 URI 每进程启动概率损坏
-  （见 NewGate/docs/issues/ktor-cio-colon-uri-corruption-p1.md）。codec/controller 已就位，框架修复后零改动生效。
+- GeminiRelayController：`@Post("/{modelAction}")` 直接用绑定的 modelAction split 冒号，注入 model+stream 交引擎
+- **3×3 协议矩阵全通（9/9）**：OpenAI/Anthropic/Gemini 三入站 × 三上游全部 E2E 验证（非流式 + 流式 + 计费），
+  含经 hub 免费组合的 Gemini↔Anthropic 双跳。embeddings 目前仅 openai 透传。
+- （历史勘误：曾误将 Gemini 入站失败归为「框架 URI 损坏/sqlx4k 堆损坏」，实为测试脚本 zsh
+  `$m:generateContent` 参数修饰符展开把 URL 改坏；服务端从无此问题。用 `${m}:...` 即正常。）
