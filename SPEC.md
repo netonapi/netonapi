@@ -65,7 +65,13 @@
   业务用整数最小单位、VARCHAR，或自定义 SQL 显式 `::text`/`::bigint`。
   上游修复应含：NUMERIC→BigDecimal→String 类型分派 + 行解码 Result 化经 FFI 返回（issue 草稿见
   NewGate/docs/issues/sqlx4k-numeric-decode-p0.md）
-- 迁移运行时仅支持单方言 embed（postgresql）；mysql/sqlite 脚本已备，运行时按 driver 选方言是框架待办
+- **数据库支持范围：仅 PostgreSQL 与 MySQL（不含 SQLite）**。sqlx4k 的 Native 驱动编译期单选、不能由同一
+  二进制运行时切换，故定义为两种构建产物：`-Pneton.database.driver=postgres`（默认）与 `=mysql`，分别发布
+  二进制/镜像标签，CI 对两者跑同一组可靠性测试。gateway 迁移嵌入方言已跟随 `neton.database.driver`
+  （postgres→postgresql / mysql→mysql，见 build.gradle.kts）。启动应校验配置库类型与编译驱动一致、不一致即退出（待办）。
+  **当前状态**：PostgreSQL 已端到端验证（harness 9/9）；MySQL 为代码结构预留——迁移脚本已备（sql/mysql/），
+  账务两条自增 SQL（`x = x + delta`）在 InnoDB 语法上成立，但命名参数/affected rows/事务回读/并发结果
+  必须通过真实 MySQL harness 后才能宣布"MySQL 已支持"。迁移引擎的 search_path 复位为 PostgreSQL 专属（MySQL 分支不发）。
 
 ## M2 Slice 1：Claude /v1/messages 同协议透传（已落地）
 

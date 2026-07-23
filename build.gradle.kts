@@ -78,7 +78,15 @@ tasks.matching { it.name.matches(Regex("kspKotlin(LinuxX64|LinuxArm64|MingwX64)"
 }
 
 // Embed SQL migration resources into binary (no runtime file IO).
+// 迁移方言跟随编译期 sqlx4k 驱动(neton.database.driver，与框架同名)：sqlx4k Native 驱动编译期单选、
+// 不能运行时切换，故 PostgreSQL / MySQL 各产出独立二进制/镜像。NewGate 仅支持 postgres|mysql(不含 sqlite)。默认 postgres。
+// 与框架一致：neton.database.driver 大小写不敏感（框架侧同样 lowercase() 归一），避免 =MYSQL 时框架接受、gateway 拒绝。
+val ngMigrationDialect = when (val d = ((project.findProperty("neton.database.driver") as? String) ?: "postgres").lowercase()) {
+    "postgres" -> "postgresql"
+    "mysql" -> "mysql"
+    else -> error("NewGate 仅支持 -Pneton.database.driver=postgres|mysql；收到 '$d'")
+}
 extra["neton.migration.moduleId"] = "gateway"
-extra["neton.migration.dialects"] = listOf("postgresql")  // TODO: 运行时多方言选择是框架级待办，mysql/sqlite 脚本已备好
+extra["neton.migration.dialects"] = listOf(ngMigrationDialect)
 extra["neton.migration.sqlSourceDir"] = file("sql")
 apply(from = "../neton/scripts/embed-migration-resources.gradle.kts")
