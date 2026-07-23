@@ -22,7 +22,7 @@ class RelayRouterTest {
             ch(4, status = 0),                            // 禁用
             ch(5, models = "", mapping = """{"gpt-test":"upstream-x"}"""), // 映射键命中
         )
-        val got = RelayRouter.candidates(chans, model = "gpt-test", group = "default").map { it.id }
+        val got = RelayRouter.candidates(chans, model = "gpt-test", group = "default", nowMs = 0).map { it.id }
         assertEquals(listOf(1L, 5L), got)
     }
 

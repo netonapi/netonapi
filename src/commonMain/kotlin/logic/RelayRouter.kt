@@ -6,8 +6,8 @@ import kotlin.random.Random
 /** 渠道路由纯函数：候选过滤 + priority 分层 + 层内 weight 加权随机 + 重试排除。 */
 object RelayRouter {
 
-    /** status=1 ∩ 未在 429 冷却期 ∩ 模型命中（models 清单或 modelMapping 键）∩ 分组交集。 */
-    fun candidates(channels: List<Channel>, model: String, group: String, nowMs: Long = 0): List<Channel> =
+    /** status=1 ∩ 未在 429 冷却期 ∩ 模型命中（models 清单或 modelMapping 键）∩ 分组交集。nowMs 必传，避免漏传致冷却过滤失效。 */
+    fun candidates(channels: List<Channel>, model: String, group: String, nowMs: Long): List<Channel> =
         channels.filter { ch ->
             ch.status == 1 &&
                 ch.cooldownUntil <= nowMs &&

@@ -376,14 +376,12 @@ class RelayEngine(
                     // token 请求中途被删：账户级三表照提交（收入不丢），quotaUsed 略过（per-token 计数已无意义）。
                     // 不回滚（回滚=已服务请求不计费=收入泄漏）；不变量降级为账户级三项相等。
                     log.warn("relay bill: token deleted mid-request; account settled, quotaUsed skipped tokenId=${token.id} userId=${token.userId} logId=$logId charged=$charged")
-                } else token.quotaBudget?.let {
-                    // 预算并发超支缓解：多个请求同时通过预检后都扣费可致 quotaUsed 超预算。已服务请求照扣（后付费），
-                    // 但一旦 quotaUsed 超过预算立即禁用令牌（status=0）阻止后续请求，并告警。
-                    val disabled = neton.database.dbContext().execute(
-                        "UPDATE gateway_tokens SET status = 0 WHERE id = :id AND quota_budget IS NOT NULL AND quota_used > quota_budget AND status = 1",
-                        mapOf("id" to token.id),
-                    )
-                    if (disabled > 0) log.warn("gateway token budget exceeded → disabled tokenId=${token.id} userId=${token.userId}")
+                } else token.quotaBudget?.let { budget ->
+                    // 软预算告警：并发下预检（quotaUsed>=budget 拒）无法防超支——已服务请求照扣（后付费）。
+                    // 硬预算（reserve/finalize：请求前条件预留、完成后按实际结算释放差额）为独立设计，未落地。
+                    if (token.quotaUsed + charged > budget) {
+                        log.warn("gateway token over soft budget tokenId=${token.id} userId=${token.userId} budget=$budget used=${token.quotaUsed + charged}（硬预算待 reserve/finalize）")
+                    }
                 }
             }
         }
