@@ -60,6 +60,7 @@ class ChannelLogic(private val log: Logger) {
             }.update {
                 set(ChannelKey::failCount, newCount)
                 set(ChannelKey::status, if (disable) 2 else 1)
+                set(ChannelKey::lastUsedAt, nowMillis())  // 失败也更新 → LRU 轮转到其他 Key，不死磕坏 Key
                 set(ChannelKey::lastError, error?.take(500))
             }
             if (updated > 0) {

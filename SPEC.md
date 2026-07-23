@@ -127,8 +127,15 @@
 - **Key 状态 CAS**：recordKeyFailure/Success 改列级 CAS（重读+条件更新，并发不丢计数、不复活已禁用 Key）；
   429 限流不计永久禁用（仅 5xx/网络/超时/401/403）；reviveChannel 只复位自动禁用(status=2)、保留手动禁用(status=0)。
   E2E：5×500 触发 auto-key 禁用、manual-key 保持 0；revive 后 auto-key 复位、manual 仍 0。
-- **仍待办**（Codex 指出，未闭环）：结算幂等键/唯一约束；预付费 reserve/finalize 模型；溢出检查；结算失败 outbox；
-  真实 DB 并发/故障注入集成测试入 CI；429 cooldown/backoff（当前仅不计禁用，无退避）；token budget 仅粗粒度预检可超支。
+- **断连结算修复（Codex 三轮 #1）**：downstream 断连的 bill 放 withContext(NonCancellable)+withTimeoutOrNull(5s)——
+  否则已 cancelled 协程里 bill 的 DB 挂起会立即再取消、丢账。catch Throwable（断连可为 Cancellation 或 IOException），
+  Cancellation 重抛。E2E：curl --max-time 1 断流 → partial 用量日志已落。
+- **分类统一（Codex #4）**：非流式 401/403 也计 Key 失败（此前只在流式/throw 路径计）；E2E：非流式 3×403 → failCount=3。
+- **Key 轮转（Codex #5）**：recordKeyFailure 也更新 lastUsedAt → LRU 轮转到其他 Key 不死磕坏 Key。
+- 删死代码 consume()（无调用方且非事务化）。token 中途删除：账户级三表照提交+warn（不回滚，避免已服务请求不计费=收入泄漏，此处推回 Codex #3）。
+- **仍待办**（Codex 列，未闭环）：结算幂等键/唯一约束；预付费 reserve/finalize；溢出检查；结算 outbox；
+  首建账户并发唯一键冲突/DB 死锁重试分类；**真实 PostgreSQL 并发/故障注入 harness 入 CI**（最重要）；
+  429 cooldown/backoff（当前仅不计禁用无退避）；token budget 粗粒度可超支。
 
 ## 待办（Codex 评审确认的真实差距，未完成）
 

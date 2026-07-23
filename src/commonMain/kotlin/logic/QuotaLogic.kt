@@ -63,31 +63,6 @@ class QuotaLogic(private val log: Logger) {
         return newBalance
     }
 
-    /**
-     * 扣减：余额不足返回 false。并发安全：balance+version 条件更新，冲突重读重试（最多 3 次）。
-     */
-    suspend fun consume(userId: Long, amount: Long, ref: String?): Boolean {
-        require(amount >= 0) { "consume amount must be >= 0" }
-        if (amount == 0L) return true
-        repeat(3) {
-            val acc = account(userId)
-            val newBalance = balanceAfterConsume(acc.balance, amount) ?: return false
-            val updated = QuotaAccountTable.query {
-                where { and(QuotaAccount::id eq acc.id, QuotaAccount::version eq acc.version) }
-            }.update {
-                set(QuotaAccount::balance, newBalance)
-                set(QuotaAccount::version, acc.version + 1)
-            }
-            if (updated > 0) {
-                QuotaTransactionTable.insert(
-                    QuotaTransaction(userId = userId, type = "consume", amount = -amount, balanceAfter = newBalance, ref = ref)
-                )
-                return true
-            }
-        }
-        log.warn("quota consume contention user=$userId amount=$amount")
-        return false
-    }
 
     suspend fun transactions(userId: Long): List<QuotaTransaction> =
         QuotaTransactionTable.query { where { QuotaTransaction::userId eq userId } }.list()

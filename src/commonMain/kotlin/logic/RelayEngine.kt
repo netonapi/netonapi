@@ -84,7 +84,7 @@ class RelayEngine(
 
             val rewritten = transform.rewritten
             val outcome: RelayOutcome? = try {
-                execute(ctx, channel, key.apiKey, transform, path, token, group, startMs)
+                execute(ctx, channel, key.id, key.apiKey, transform, path, token, group, startMs)
             } catch (e: NetonHttpException) {
                 val err = e.error
                 val retryable = when (err) {
@@ -188,6 +188,7 @@ class RelayEngine(
     private suspend fun execute(
         ctx: HttpContext,
         channel: Channel,
+        keyId: Long,
         apiKey: String,
         transform: RelayTransform,
         path: String,
@@ -211,6 +212,8 @@ class RelayEngine(
                 throw NetonHttpException(NetonHttpError.Http(res.statusCode, "HTTP ${res.statusCode}", res.body))
             }
             if (res.statusCode !in 200..299) {
+                // 401/403 = 凭证级失败，计 Key 失败（与流式/外层分类统一）；其它 4xx 是客户端问题
+                if (res.statusCode == 401 || res.statusCode == 403) channelLogic.recordKeyFailure(keyId, "upstream_${res.statusCode}")
                 recordLog(token, channel, rewritten, Usage(), group, startMs, "error", "upstream_${res.statusCode}", null)
                 respondRaw(ctx, res.statusCode, res.body)  // 上游错误 body 原样（擦除 headers）
                 return RelayOutcome.PARTIAL  // 上游语义错误：终态，不当 Key 成功
@@ -285,11 +288,18 @@ class RelayEngine(
                     streamTransformer?.finish()?.let { if (it.isNotEmpty()) writeChunk(it) }
                 }
             }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            // downstream 断连：已计部分 usage，仍需结算（不能丢账），再抛出让请求结束
+        } catch (e: Throwable) {
+            // downstream 断连（可能是 CancellationException 或 IOException，Ktor 两种都有）：
+            // 协程通常已 cancelled，bill 的 DB 挂起会立即再被取消——必须在 NonCancellable+超时里结算，否则丢账。
             billed = true
-            bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs, status = "partial")
-            throw e
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                kotlinx.coroutines.withTimeoutOrNull(5000) {
+                    bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs, status = "partial")
+                } ?: log.warn("relay partial-bill timed out on disconnect channel=${channel.id}")
+            }
+            if (e is kotlinx.coroutines.CancellationException) throw e  // 结构化并发要求重抛取消
+            log.warn("relay stream downstream error channel=${channel.id}: $e")
+            return@coroutineScope RelayOutcome.PARTIAL
         }
         if (!billed) {
             bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs,
