@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="logic.protocol.codec.AnthropicToOpenAiRequestTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-22T23:29:05.745Z" hostname="mac" time="0.0">
+<testsuite name="logic.protocol.codec.AnthropicToOpenAiRequestTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-23T07:12:27.287Z" hostname="mac" time="0.001">
   <properties/>
   <testcase name="plainTextConversation[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
   <testcase name="systemStringBecomesLeadingMessage[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
   <testcase name="textBlocksJoin[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
   <testcase name="imageBlockToDataUrl[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
   <testcase name="toolUseAndToolResultRoundtrip[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
-  <testcase name="toolsSchemaAndChoice[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
+  <testcase name="toolsSchemaAndChoice[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.001"/>
   <testcase name="stopSequencesRenamed[macosArm64]" classname="logic.protocol.codec.AnthropicToOpenAiRequestTest" time="0.0"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>

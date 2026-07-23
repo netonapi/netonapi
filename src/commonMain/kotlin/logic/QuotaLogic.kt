@@ -16,19 +16,38 @@ class QuotaLogic(private val log: Logger) {
 
     suspend fun grant(userId: Long, amount: Long, type: String = "grant", ref: String? = null): Long {
         require(amount > 0) { "grant amount must be positive" }
-        val acc = account(userId)
-        val newBalance = balanceAfterGrant(acc.balance, amount)
-        QuotaAccountTable.query {
-            where { and(QuotaAccount::id eq acc.id, QuotaAccount::version eq acc.version) }
-        }.update {
-            set(QuotaAccount::balance, newBalance)
-            set(QuotaAccount::version, acc.version + 1)
+        return applyDelta(userId, amount, type, ref)
+    }
+
+    /**
+     * 结算（后付费）：无条件扣减 charged，即使余额转负——保证 usage_log.charged 恒有对应台账扣款。
+     * 与 consume() 的区别：consume 余额不足即拒（预付/校验场景）；settle 用于已服务请求的最终结算。
+     */
+    suspend fun settle(userId: Long, amount: Long, ref: String?): Long {
+        require(amount >= 0) { "settle amount must be >= 0" }
+        if (amount == 0L) return account(userId).balance
+        return applyDelta(userId, -amount, "consume", ref)
+    }
+
+    /** 原子应用余额增量（version 条件更新，冲突重读重试）；delta 可正可负，允许转负。 */
+    private suspend fun applyDelta(userId: Long, delta: Long, type: String, ref: String?): Long {
+        repeat(5) {
+            val acc = account(userId)
+            val newBalance = acc.balance + delta
+            val updated = QuotaAccountTable.query {
+                where { and(QuotaAccount::id eq acc.id, QuotaAccount::version eq acc.version) }
+            }.update {
+                set(QuotaAccount::balance, newBalance)
+                set(QuotaAccount::version, acc.version + 1)
+            }
+            if (updated > 0) {
+                QuotaTransactionTable.insert(
+                    QuotaTransaction(userId = userId, type = type, amount = delta, balanceAfter = newBalance, ref = ref)
+                )
+                return newBalance
+            }
         }
-        QuotaTransactionTable.insert(
-            QuotaTransaction(userId = userId, type = type, amount = amount, balanceAfter = newBalance, ref = ref)
-        )
-        log.info("quota grant user=$userId amount=$amount balance=$newBalance type=$type")
-        return newBalance
+        error("quota applyDelta contention user=$userId delta=$delta after 5 retries")
     }
 
     /**

@@ -1,6 +1,7 @@
 package logic
 
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import model.Channel
@@ -215,42 +216,73 @@ class RelayEngine(
             return Unit
         }
 
-        // 流式：首字节前的失败由 stream() 抛 Http 异常（可重试窗口）；开流后直通不回头
-        val accumulator = upstream.streamUsageAccumulator()   // usage 累加喂上游原生块
+        // 流式：先确认上游首字节再提交 downstream——否则 downstream 一旦提交（committed），
+        // 首字节前上游失败时无法换渠道重试（会撞 ResponseAlreadyCommitted）。
+        val accumulator = upstream.streamUsageAccumulator()
         val streamTransformer = transform.streamTransformerFactory?.invoke()
-        var ttfbMs: Long? = null
+        return streamWithPreflight(ctx, client, request, accumulator, streamTransformer, token, channel, rewritten, group, startMs)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private suspend fun streamWithPreflight(
+        ctx: HttpContext, client: NetonHttpClient, request: NetonHttpRequest,
+        accumulator: logic.protocol.StreamUsageAccumulator, streamTransformer: StreamTransformer?,
+        token: GatewayToken, channel: Channel, rewritten: Rewritten, group: String, startMs: Long,
+    ): Unit = kotlinx.coroutines.coroutineScope {
+        // producer 捕获上游异常存入 openError（不外抛，避免 cancel scope 抢占我们的重试异常）
+        var openError: Throwable? = null
+        val chunks = this@coroutineScope.produce<String>(capacity = 64) {
+            try {
+                client.stream(request).collect { chunk ->
+                    when (chunk) {
+                        is NetonHttpStreamChunk.Bytes -> send(chunk.bytes.decodeToString())
+                        is NetonHttpStreamChunk.Text -> send(chunk.text)
+                        is NetonHttpStreamChunk.End -> {}
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                openError = e
+            }
+        }
+        // 等首块：channel 正常 close 且 openError 非空 = 首字节前失败（downstream 未提交，可重试）
+        val firstResult = chunks.receiveCatching()
+        if (firstResult.isClosed) {
+            openError?.let { cause ->
+                if (cause is NetonHttpException) throw cause
+                throw NetonHttpException(NetonHttpError.Network(cause.message ?: "stream open failed", cause as? Throwable))
+            }
+            // 空流（无块无错）：视为成功空响应
+        }
+        val ttfbMs = now() - startMs
         ctx.response.status = HttpStatus.OK
         ctx.response.contentType = "text/event-stream; charset=utf-8"
         ctx.response.header("Cache-Control", "no-cache")
         ctx.response.header("X-Accel-Buffering", "no")
-        try {
-            ctx.response.stream {
-                client.stream(request).collect { chunk ->
-                    val text = when (chunk) {
-                        is NetonHttpStreamChunk.Bytes -> chunk.bytes.decodeToString()
-                        is NetonHttpStreamChunk.Text -> chunk.text
-                        is NetonHttpStreamChunk.End -> return@collect
-                    }
-                    if (ttfbMs == null) ttfbMs = now() - startMs
-                    accumulator.feed(text)  // 始终喂上游原文用于计费
-                    if (streamTransformer != null) {
-                        val converted = streamTransformer.feed(text)
-                        if (converted.isNotEmpty()) writeChunk(converted)
-                    } else {
-                        writeChunk(text)  // 同协议直通
-                    }
-                }
-                // 跨协议：补收尾事件（message_delta/message_stop）
+        var aborted = false
+        ctx.response.stream {
+            fun relayText(text: String) {
+                accumulator.feed(text)
+            }
+            suspend fun writeOut(text: String) {
+                relayText(text)
+                if (streamTransformer != null) {
+                    val c = streamTransformer.feed(text); if (c.isNotEmpty()) writeChunk(c)
+                } else writeChunk(text)
+            }
+            firstResult.getOrNull()?.let { writeOut(it) }  // 空流（首块即 close 无异常）则跳过
+            for (text in chunks) writeOut(text)             // producer 捕获错误，此处仅正常收流
+            // 已提交后上游中断：openError 非空 → 尽力收尾，不再重试
+            if (openError != null) {
+                aborted = true
+                log.warn("relay stream aborted mid-flight channel=${channel.id}: $openError")
+            } else {
                 streamTransformer?.finish()?.let { if (it.isNotEmpty()) writeChunk(it) }
             }
-        } catch (e: NetonHttpException) {
-            if (ttfbMs == null) throw e  // 首字节前：交给重试
-            log.warn("relay stream aborted mid-flight channel=${channel.id}: ${e.error}")
-            bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs, status = "partial")
-            return Unit
         }
-        bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs)
-        return Unit
+        bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs,
+             status = if (aborted) "partial" else if (accumulator.usage() != null) "ok" else "partial")
     }
 
     /** 转发变换：请求体/上游路径已终态；响应体/流按需转协议（同协议为恒等）。 */
@@ -295,9 +327,16 @@ class RelayEngine(
 
         val logId = recordLog(token, channel, rewritten, effectiveUsage, group, startMs, status, null, ttfbMs, charged, cost)
         if (charged > 0) {
-            quotaLogic.consume(token.userId, charged, ref = "usage:$logId")
-            val current = GatewayTokenTable.get(token.id)
-            if (current != null) GatewayTokenTable.update(current.copy(quotaUsed = current.quotaUsed + charged))
+            // 后付费结算：settle 无条件扣减（允许转负），保证 log.charged 恒有对应扣款台账
+            quotaLogic.settle(token.userId, charged, ref = "usage:$logId")
+            // 令牌 quotaUsed 累加（与账户扣款一致）；乐观锁重读避免并发覆盖
+            repeat(5) {
+                val current = GatewayTokenTable.get(token.id) ?: return@repeat
+                val updated = GatewayTokenTable.query {
+                    where { and(GatewayToken::id eq token.id, GatewayToken::quotaUsed eq current.quotaUsed) }
+                }.update { set(GatewayToken::quotaUsed, current.quotaUsed + charged) }
+                if (updated > 0) return
+            }
         }
     }
 

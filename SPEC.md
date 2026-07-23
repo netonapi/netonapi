@@ -113,3 +113,26 @@
 - RelayEngine 接线：429/5xx/网络/超时 + 上游 401/403 计 Key 失败；成功清零 fail_count；其它 4xx（客户端错）不计
 - 管理端 `PUT /admin/gateway/channel/revive/{id}`：渠道启用 + 全部 Key 复位
 - E2E：连打只回 500 的渠道 5 次 → key status=2 failCount=5、channel status=2；revive 后全复位
+
+## M3-b：计费账务闭环 + 流式重试修复（Codex 评审，已修）
+
+- **流式首字节前重试**：改 streamWithPreflight——先经独立 producer 拉上游、确认首块后才提交 downstream；
+  首字节前失败（连接拒绝/非2xx/超时）在 downstream 未提交时抛出，Router 可换渠道，不再撞 ResponseAlreadyCommitted。
+  producer 捕获上游异常存 openError（不外抛避免 cancel scope 抢占重试异常）。E2E：dead 渠道→live 渠道流式成功。
+- **账务闭环**：QuotaLogic.settle() 后付费无条件扣减（允许转负），保证 usage_log.charged 恒有对应台账扣款；
+  bill() 用 settle 替代被忽略结果的 consume；token.quotaUsed 走 CAS 更新。grant()/applyDelta() 检查乐观锁行数、
+  冲突重试 5 次、失败抛错（不再写虚假 grant 台账）。E2E：余额 1000 请求 7500 → 结算 -6500、台账-7500 一致、
+  负余额预检 429 拦截。
+
+## 待办（Codex 评审确认的真实差距，未完成）
+
+- 原生认证载体：仅 Bearer sk-；Anthropic x-api-key / Gemini x-goog-api-key|?key= 未映射到 NewGate token
+- Azure OpenAI 未实现（api-key 头/deployment URL/api-version），当前 azure_openai 走 OpenAiAdapter
+- IP 白名单仅字段无校验；RPM/TPM/并发流上限未实现；ttfbTimeoutMs 未接超时
+- 渠道 Key 明文存储（设计要求加密）；base/proxy URL 无 SSRF 校验
+- 未定价模型/无 usage 请求免费放行（收入泄漏）；saleOverride 未参与计费；反向模型映射未执行
+- codec 有损：thinking/cache_control/多模态/多 candidate/结构化输出等未覆盖；跨协议上游 4xx 未按入站协议重序列化
+- /v1/models 返回空；扩展端点（Responses/Images/Audio/Rerank）未实现
+- 管理台契约错位：日志页调 /gateway/log/page（后端只有 list-by-*）；多 Key/测速/健康 UI 缺；令牌页字段不全
+- 3×3 = 文本聊天核心子集 baseline E2E，非完整协议兼容；E2E 脚本未入库/未入 CI
+- fork 卫生：application.conf/database.conf 仍留 privchat 名/库地址/默认 JWT 占位
