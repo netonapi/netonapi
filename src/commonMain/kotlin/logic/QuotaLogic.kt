@@ -30,33 +30,24 @@ class QuotaLogic(private val log: Logger) {
     }
 
     /**
-     * 原子应用余额增量：每次尝试包一个事务（余额条件更新 + 台账插入同事务，全或无），
-     * 冲突（version 变化）则整事务回滚、重读重试（新事务见已提交数据）。delta 可正可负，允许转负。
+     * 原子应用余额增量：余额自增 + 台账插入同一事务（全或无）。delta 可正可负，允许转负。
+     * 自增在 SQL 内计算（balance = balance + delta），行级锁串行化并发写，无 version 竞争、无重试。
      */
-    suspend fun applyDelta(userId: Long, delta: Long, type: String, ref: String?): Long {
-        repeat(5) {
-            val newBalance = neton.database.dbContext().transaction {
-                debitInTx(userId, delta, type, ref)
-            }
-            if (newBalance != null) return newBalance
-        }
-        error("quota applyDelta contention user=$userId delta=$delta after 5 retries")
-    }
+    suspend fun applyDelta(userId: Long, delta: Long, type: String, ref: String?): Long =
+        neton.database.dbContext().transaction { debitInTx(userId, delta, type, ref) }
 
     /**
-     * 事务内条件扣减：读账户 → version 条件更新 → 插台账。冲突返回 null（调用方在事务外重试）。
-     * 供 bill() 在同一事务内与 usage_log/token 一起提交（账务全或无）。
+     * 事务内原子扣减：balance = balance + delta 在 SQL 内自增（行级锁串行化并发扣减，无 version 竞争），
+     * 事务内回读得准确 balanceAfter，插台账。供 bill() 与 usage_log/token 同事务提交（账务全或无）。
      */
-    suspend fun debitInTx(userId: Long, delta: Long, type: String, ref: String?): Long? {
+    suspend fun debitInTx(userId: Long, delta: Long, type: String, ref: String?): Long {
         val acc = account(userId)
-        val newBalance = acc.balance + delta
-        val updated = QuotaAccountTable.query {
-            where { and(QuotaAccount::id eq acc.id, QuotaAccount::version eq acc.version) }
-        }.update {
-            set(QuotaAccount::balance, newBalance)
-            set(QuotaAccount::version, acc.version + 1)
-        }
-        if (updated == 0L) return null  // 冲突：调用方回滚重试
+        val affected = neton.database.dbContext().execute(
+            "UPDATE gateway_quota_accounts SET balance = balance + :delta, version = version + 1 WHERE id = :id",
+            mapOf("delta" to delta, "id" to acc.id),
+        )
+        check(affected == 1L) { "debit affected $affected rows (expected 1) userId=$userId accountId=${acc.id}" }
+        val newBalance = account(userId).balance  // 事务内回读：本 tx 持行锁，读到本次自增结果
         QuotaTransactionTable.insert(
             QuotaTransaction(userId = userId, type = type, amount = delta, balanceAfter = newBalance, ref = ref)
         )

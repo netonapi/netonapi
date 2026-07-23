@@ -121,10 +121,14 @@
   openError（不外抛避免 cancel scope 抢占重试异常）。E2E：dead→live 流式成功。
 - **stream outcome**：execute 返回 SUCCESS/PARTIAL——仅完整成功清 Key failCount；中断/上游 4xx 为 PARTIAL 不改 Key
   状态；downstream 断连（CancellationException）先 bill(partial) 再抛，不丢账。
-- **账务事务化**：bill() 把 usage_log + 余额 CAS 扣减 + 台账 + token.quotaUsed 放**同一 dbContext().transaction**，
-  冲突抛 BillConflict 回滚整事务、外层重试；不变量：**活跃 token**——Σlog.charged == Σ台账扣款 == 余额变化 == token.quotaUsed（E2E 四者=45000）；
-  **中途删除的 token**——降级为账户级三项相等（log/余额/台账），quotaUsed 略过并 warn。
-  settle 无条件扣减允许转负（后付费）；grant/applyDelta 每次尝试独立事务 + 乐观锁行数检查（不写虚假 grant）。
+- **账务事务化 + 原子扣减**：bill() 把 usage_log + 余额扣减 + 台账 + token.quotaUsed 放**同一 dbContext().transaction**。
+  余额/quotaUsed 均用 SQL 自增（`balance = balance + delta` / `quota_used = quota_used + charged`，raw execute），
+  PostgreSQL 行级锁串行化并发结算——**无 version CAS 竞争、无重试丢单**（此前 5 次乐观锁重试在单账户 20 并发下会耗尽、
+  抛 "bill contention" 丢账，harness S1 实测暴露：仅 9/20 计费）。debitInTx 校验 affected==1。
+  不变量：**活跃 token**——Σlog.charged == Σ台账扣款 == 余额变化 == token.quotaUsed（harness S1 20 并发四者=150000）；
+  **中途删除的 token**——`quota_used ... WHERE id AND deleted=0` 命中 0 行 → 账户级三项相等（log/余额/台账），quotaUsed 略过并 warn。
+  settle 无条件扣减允许转负（后付费）。两条自增 raw SQL 在 PostgreSQL 与 MySQL/InnoDB 语法上皆成立，
+  但 MySQL 侧需经真实 harness 验证命名参数/affected rows/事务回读/并发结果后方可宣布兼容。
 - **Key 状态 CAS**：recordKeyFailure/Success 改列级 CAS（重读+条件更新，并发不丢计数、不复活已禁用 Key）；
   429 限流不计永久禁用（仅 5xx/网络/超时/401/403）；reviveChannel 只复位自动禁用(status=2)、保留手动禁用(status=0)。
   E2E：5×500 触发 auto-key 禁用、manual-key 保持 0；revive 后 auto-key 复位、manual 仍 0。
@@ -136,9 +140,19 @@
 - **分类统一（Codex #4）**：非流式 401/403 也计 Key 失败（此前只在流式/throw 路径计）；E2E：非流式 3×403 → failCount=3。
 - **Key 轮转（Codex #5）**：recordKeyFailure 也更新 lastUsedAt → LRU 轮转到其他 Key 不死磕坏 Key。
 - 删死代码 consume()（无调用方且非事务化）。token 中途删除：账户级三表照提交+warn（不回滚，避免已服务请求不计费=收入泄漏，此处推回 Codex #3）。
-- **仍待办**（Codex 列，未闭环）：结算幂等键/唯一约束；预付费 reserve/finalize；溢出检查；结算 outbox；
-  首建账户并发唯一键冲突/DB 死锁重试分类；**真实 PostgreSQL 并发/故障注入 harness 入 CI**（最重要）；
-  429 cooldown/backoff（当前仅不计禁用无退避）；token budget 粗粒度可超支。
+- **可靠性 harness（已落地，本机 9/9 绿）**：`harness/run.sh`（NewGate 仓）一条命令——隔离测试数据库 +
+  假上游（`fakes.py`，含 `/inflight` 在途计数）+ 真实网关，6 场景 9 断言：S1 20 并发四项不变量、S2 dead→live
+  流式重试、S3 断连四项一致 + producer 拆除（在途归零）、S4 401/403 禁用 & 429 不禁用、S5 revive 保留手动禁用、
+  S6 token 中途删除账户级一致 + warn。迁移根因修复：payment/V001 的 `set_config('search_path','',false)` 污染
+  pooled 连接 → MigrationEngine 每个 PG 迁移事务开头 `SET search_path TO DEFAULT` 复位（会话级、提交后持久修复连接、
+  不硬编码 public；不改任何已应用 V001 checksum）。
+- **harness/CI 仍待办**（Codex 评审，紧接下一提交）：改用 PostgreSQL service/container + 动态分配应用/fake 端口（当前固定
+  5432/8080/9920–9991，仅"隔离库"非"隔离实例"）；入 CI；四个写入点分别注入异常验证整事务 rollback；结算幂等键/唯一约束
+  重复提交；**首建账户并发唯一键冲突**；upstream midstream abort；DB 死锁/连接中断重试分类；结算 timeout/outbox；
+  token budget 并发超支；预付费 reserve/finalize；溢出检查；429 cooldown/backoff。
+- **迁移 search_path 复位的严格证明（待补）**：现有 contract test 仅证明复位 SQL 在脚本 DDL 前发送；fresh-DB harness
+  证明全量迁移成功，但未严格证明"提交后同一物理池连接已干净"。应补 pool-size=1 的真实 PostgreSQL 集成测试：
+  脚本 A 污染会话 → 脚本 B 用未限定 DDL → 迁移后复用同一连接，`SHOW search_path` 等于连接默认值且未限定查询成功。
 
 ## 待办（Codex 评审确认的真实差距，未完成）
 

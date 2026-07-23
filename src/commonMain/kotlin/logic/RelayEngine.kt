@@ -14,7 +14,6 @@ import neton.core.http.HttpStatus
 import neton.http.client.*
 import neton.logging.Logger
 import table.GatewayGroupTable
-import table.GatewayTokenTable
 import table.ModelPriceTable
 import table.UsageLogTable
 import logic.protocol.ProtocolAdapter
@@ -360,37 +359,25 @@ class RelayEngine(
         val cost = if (price != null) PricingCalc.cost(effectiveUsage, price, channel.costDiscount) else 0L
         if (price == null) log.warn("relay unpriced model=${rewritten.requestModel}（放行计零，请配置定价）")
 
-        // 账务全或无：usage_log + 余额扣减 + 台账 + token.quotaUsed 同一事务提交；
-        // 冲突抛 BillConflict 使整事务回滚（含 log 插入），外层重试（新事务见已提交数据）。
-        repeat(5) {
-            try {
-                neton.database.dbContext().transaction {
-                    val logId = recordLog(token, channel, rewritten, effectiveUsage, group, startMs, status, null, ttfbMs, charged, cost)
-                    if (charged > 0) {
-                        quotaLogic.debitInTx(token.userId, -charged, "consume", "usage:$logId")
-                            ?: throw BillConflict  // 余额 CAS 冲突 → 回滚整事务
-                        val current = GatewayTokenTable.get(token.id)
-                        if (current != null) {
-                            val updated = GatewayTokenTable.query {
-                                where { and(GatewayToken::id eq token.id, GatewayToken::quotaUsed eq current.quotaUsed) }
-                            }.update { set(GatewayToken::quotaUsed, current.quotaUsed + charged) }
-                            if (updated == 0L) throw BillConflict  // token CAS 冲突 → 回滚
-                        } else {
-                            // token 请求中途被删：账户级三表照提交（收入不丢），quotaUsed 略过（per-token 计数已无意义）。
-                            // 不回滚（回滚=已服务请求不计费=收入泄漏）；不变量降级为账户级三项相等。
-                            log.warn("relay bill: token deleted mid-request; account settled, quotaUsed skipped tokenId=${token.id} userId=${token.userId} logId=$logId charged=$charged")
-                        }
-                    }
+        // 账务全或无：usage_log + 余额扣减 + 台账 + token.quotaUsed 同一事务提交。
+        // 余额/quotaUsed 均用 SQL 自增（x = x + delta），行级锁串行化并发结算，无 version 竞争、无重试丢单。
+        neton.database.dbContext().transaction {
+            val logId = recordLog(token, channel, rewritten, effectiveUsage, group, startMs, status, null, ttfbMs, charged, cost)
+            if (charged > 0) {
+                quotaLogic.debitInTx(token.userId, -charged, "consume", "usage:$logId")
+                // token.quotaUsed 原子自增；deleted=0 守卫：请求中途被删（硬删/软删）时 0 行受影响。
+                val updated = neton.database.dbContext().execute(
+                    "UPDATE gateway_tokens SET quota_used = quota_used + :c WHERE id = :id AND deleted = 0",
+                    mapOf("c" to charged, "id" to token.id),
+                )
+                if (updated == 0L) {
+                    // token 请求中途被删：账户级三表照提交（收入不丢），quotaUsed 略过（per-token 计数已无意义）。
+                    // 不回滚（回滚=已服务请求不计费=收入泄漏）；不变量降级为账户级三项相等。
+                    log.warn("relay bill: token deleted mid-request; account settled, quotaUsed skipped tokenId=${token.id} userId=${token.userId} logId=$logId charged=$charged")
                 }
-                return  // 提交成功
-            } catch (e: BillConflict) {
-                // 回滚后重试
             }
         }
-        error("bill contention user=${token.userId} logModel=${rewritten.requestModel}")
     }
-
-    private object BillConflict : RuntimeException("billing optimistic-lock conflict")
 
     /** 识别下游断连（IO/传输层）异常：类名/消息含 IO/Closed/Broken/pipe/reset/Channel。 */
     private fun isDownstreamDisconnect(e: Throwable): Boolean {
