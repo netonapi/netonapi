@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="logic.protocol.codec.OpenAiToAnthropicStreamTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-07-23T07:12:27.290Z" hostname="mac" time="0.0">
-  <properties/>
-  <testcase name="textStreamProducesValidAnthropicSequence[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicStreamTest" time="0.0"/>
-  <testcase name="emptyStreamStillWellFormed[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicStreamTest" time="0.0"/>
-  <testcase name="toolCallStreamProducesToolUseBlock[macosArm64]" classname="logic.protocol.codec.OpenAiToAnthropicStreamTest" time="0.0"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>
