@@ -114,15 +114,21 @@
 - 管理端 `PUT /admin/gateway/channel/revive/{id}`：渠道启用 + 全部 Key 复位
 - E2E：连打只回 500 的渠道 5 次 → key status=2 failCount=5、channel status=2；revive 后全复位
 
-## M3-b：计费账务闭环 + 流式重试修复（Codex 评审，已修）
+## M3-b：可靠性收口（Codex 两轮评审，基础路径已落地，DB 并发集成测试待入 CI）
 
-- **流式首字节前重试**：改 streamWithPreflight——先经独立 producer 拉上游、确认首块后才提交 downstream；
-  首字节前失败（连接拒绝/非2xx/超时）在 downstream 未提交时抛出，Router 可换渠道，不再撞 ResponseAlreadyCommitted。
-  producer 捕获上游异常存 openError（不外抛避免 cancel scope 抢占重试异常）。E2E：dead 渠道→live 渠道流式成功。
-- **账务闭环**：QuotaLogic.settle() 后付费无条件扣减（允许转负），保证 usage_log.charged 恒有对应台账扣款；
-  bill() 用 settle 替代被忽略结果的 consume；token.quotaUsed 走 CAS 更新。grant()/applyDelta() 检查乐观锁行数、
-  冲突重试 5 次、失败抛错（不再写虚假 grant 台账）。E2E：余额 1000 请求 7500 → 结算 -6500、台账-7500 一致、
-  负余额预检 429 拦截。
+- **流式首字节前重试**：streamWithPreflight——独立 producer 拉上游、确认首块后才提交 downstream；
+  首字节前失败在 downstream 未提交时抛出可换渠道，不撞 ResponseAlreadyCommitted。producer 捕获上游异常存
+  openError（不外抛避免 cancel scope 抢占重试异常）。E2E：dead→live 流式成功。
+- **stream outcome**：execute 返回 SUCCESS/PARTIAL——仅完整成功清 Key failCount；中断/上游 4xx 为 PARTIAL 不改 Key
+  状态；downstream 断连（CancellationException）先 bill(partial) 再抛，不丢账。
+- **账务事务化**：bill() 把 usage_log + 余额 CAS 扣减 + 台账 + token.quotaUsed 放**同一 dbContext().transaction**，
+  冲突抛 BillConflict 回滚整事务、外层重试；保证 Σlog.charged == Σ台账扣款 == 余额变化 == token.quotaUsed（E2E 验证四者=45000）。
+  settle 无条件扣减允许转负（后付费）；grant/applyDelta 每次尝试独立事务 + 乐观锁行数检查（不写虚假 grant）。
+- **Key 状态 CAS**：recordKeyFailure/Success 改列级 CAS（重读+条件更新，并发不丢计数、不复活已禁用 Key）；
+  429 限流不计永久禁用（仅 5xx/网络/超时/401/403）；reviveChannel 只复位自动禁用(status=2)、保留手动禁用(status=0)。
+  E2E：5×500 触发 auto-key 禁用、manual-key 保持 0；revive 后 auto-key 复位、manual 仍 0。
+- **仍待办**（Codex 指出，未闭环）：结算幂等键/唯一约束；预付费 reserve/finalize 模型；溢出检查；结算失败 outbox；
+  真实 DB 并发/故障注入集成测试入 CI；429 cooldown/backoff（当前仅不计禁用，无退避）；token budget 仅粗粒度预检可超支。
 
 ## 待办（Codex 评审确认的真实差距，未完成）
 

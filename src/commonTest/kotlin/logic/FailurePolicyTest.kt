@@ -27,3 +27,15 @@ class FailurePolicyTest {
         assertEquals(4, FailurePolicy.nextFailCount(current = 3, success = false))
     }
 }
+
+class FailurePolicyEdgeTest {
+    @Test fun suspendOnlyWhenNoStatus1Key() {
+        fun k(s: Int) = model.ChannelKey(id = 1, channelId = 1, apiKey = "x", status = s)
+        // status=2(自动禁用) 全部 → 挂起
+        kotlin.test.assertTrue(FailurePolicy.shouldSuspendChannel(listOf(k(2), k(2))))
+        // 有一个 status=0(手动禁用) 但无 status=1 → 仍挂起（无可用 Key）
+        kotlin.test.assertTrue(FailurePolicy.shouldSuspendChannel(listOf(k(0), k(2))))
+        // 有 status=1 → 不挂起
+        kotlin.test.assertFalse(FailurePolicy.shouldSuspendChannel(listOf(k(0), k(1))))
+    }
+}

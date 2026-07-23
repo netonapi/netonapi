@@ -45,26 +45,42 @@ class ChannelLogic(private val log: Logger) {
 
     // ===== 容错：失败计数 / 自动禁用 / 渠道挂起（FailurePolicy 应用侧） =====
 
-    /** 记一次 Key 失败：fail_count+1，达阈值自动禁用（status=2）；若渠道全部 Key 失效则挂起渠道。 */
-    suspend fun recordKeyFailure(key: ChannelKey, error: String?) {
-        val newCount = FailurePolicy.nextFailCount(key.failCount, success = false)
-        val disable = FailurePolicy.shouldDisableKey(newCount)
-        ChannelKeyTable.update(
-            key.copy(
-                failCount = newCount,
-                status = if (disable) 2 else key.status,
-                lastError = error?.take(500),
-            )
-        )
-        if (disable) {
-            log.warn("gateway key auto-disabled channel=${key.channelId} key=${key.id} failCount=$newCount")
-            maybeSuspendChannel(key.channelId)
+    /**
+     * 记一次 Key 失败：列级 CAS 自增 fail_count（并发不丢计数），达阈值自动禁用（status=2）；
+     * 渠道全部 Key 失效则挂起。重读最新行避免整对象覆盖（Codex 评审 #3）。
+     */
+    suspend fun recordKeyFailure(keyId: Long, error: String?) {
+        repeat(5) {
+            val cur = ChannelKeyTable.get(keyId) ?: return
+            if (cur.status != 1) return  // 已被禁用，不再累计
+            val newCount = FailurePolicy.nextFailCount(cur.failCount, success = false)
+            val disable = FailurePolicy.shouldDisableKey(newCount)
+            val updated = ChannelKeyTable.query {
+                where { and(ChannelKey::id eq keyId, ChannelKey::failCount eq cur.failCount, ChannelKey::status eq 1) }
+            }.update {
+                set(ChannelKey::failCount, newCount)
+                set(ChannelKey::status, if (disable) 2 else 1)
+                set(ChannelKey::lastError, error?.take(500))
+            }
+            if (updated > 0) {
+                if (disable) {
+                    log.warn("gateway key auto-disabled channel=${cur.channelId} key=$keyId failCount=$newCount")
+                    maybeSuspendChannel(cur.channelId)
+                }
+                return
+            }
         }
     }
 
-    /** 记一次成功：清零 fail_count，更新 lastUsedAt。 */
-    suspend fun recordKeySuccess(key: ChannelKey) {
-        ChannelKeyTable.update(key.copy(failCount = 0, lastUsedAt = nowMillis(), lastError = null))
+    /** 记一次成功：仅当 status=1 时清零 fail_count（不复活已禁用 Key），列级更新。 */
+    suspend fun recordKeySuccess(keyId: Long) {
+        ChannelKeyTable.query {
+            where { and(ChannelKey::id eq keyId, ChannelKey::status eq 1) }
+        }.update {
+            set(ChannelKey::failCount, 0)
+            set(ChannelKey::lastUsedAt, nowMillis())
+            set(ChannelKey::lastError, null)
+        }
     }
 
     private suspend fun maybeSuspendChannel(channelId: Long) {
@@ -74,9 +90,14 @@ class ChannelLogic(private val log: Logger) {
         }
     }
 
-    /** 管理端手动恢复：渠道 status=1，其 Key 全部复位（status=1, failCount=0）。 */
+    /**
+     * 管理端手动恢复：渠道启用 + 仅复位**自动禁用**（status=2）的 Key；
+     * 手动禁用（status=0）保持不动（保留人工语义，Codex 评审 #3）。
+     */
     suspend fun reviveChannel(channelId: Long) {
-        listKeys(channelId).forEach { ChannelKeyTable.update(it.copy(status = 1, failCount = 0, lastError = null)) }
+        listKeys(channelId).filter { it.status == 2 }.forEach {
+            ChannelKeyTable.update(it.copy(status = 1, failCount = 0, lastError = null))
+        }
         updateStatus(channelId, 1)
     }
 

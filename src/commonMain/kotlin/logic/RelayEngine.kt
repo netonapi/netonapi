@@ -83,7 +83,7 @@ class RelayEngine(
             if (key == null) { lastError = "channel ${channel.id} has no available key"; return@repeat }
 
             val rewritten = transform.rewritten
-            val outcome = try {
+            val outcome: RelayOutcome? = try {
                 execute(ctx, channel, key.apiKey, transform, path, token, group, startMs)
             } catch (e: NetonHttpException) {
                 val err = e.error
@@ -94,23 +94,29 @@ class RelayEngine(
                 }
                 if (!retryable && err is NetonHttpError.Http) {
                     // 上游认证错（401/403）归咎于 Key；其它 4xx 是客户端问题，不计 Key 失败
-                    if (err.statusCode == 401 || err.statusCode == 403) channelLogic.recordKeyFailure(key, "upstream_${err.statusCode}")
+                    if (err.statusCode == 401 || err.statusCode == 403) channelLogic.recordKeyFailure(key.id, "upstream_${err.statusCode}")
                     recordLog(token, channel, rewritten, Usage(), group, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
                     respondRaw(ctx, err.statusCode, err.body ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
                     return
                 }
                 lastError = err.toString().replace("\n", " ").take(160)
-                channelLogic.recordKeyFailure(key, lastError)  // 429/5xx/网络/超时 → 计 Key 失败
+                // 429（限流）是暂时性的，不计入永久禁用；仅 5xx/网络/超时计 Key 失败（Codex 评审 #3）
+                val is429 = (err as? NetonHttpError.Http)?.statusCode == 429
+                if (!is429) channelLogic.recordKeyFailure(key.id, lastError)
                 log.warn("relay retry channel=${channel.id} err=$lastError")
                 null
             }
             if (outcome != null) {
-                channelLogic.recordKeySuccess(key)  // 成功清零 fail_count
-                return  // 成功（计费与日志已在 execute 内完成）
+                // 仅完整成功清零 fail_count；partial（中断/上游 4xx）不当作 Key 成功
+                if (outcome == RelayOutcome.SUCCESS) channelLogic.recordKeySuccess(key.id)
+                return  // 已终态（计费与日志已在 execute 内完成）
             }
         }
         respondError(ctx, inbound, 503, "no_available_channel", lastError ?: "all channels failed")
     }
+
+    /** 单次转发结果：SUCCESS=完整成功；PARTIAL=已响应但非完整成功（中断/上游语义错误），不改 Key 状态。 */
+    private enum class RelayOutcome { SUCCESS, PARTIAL }
 
     private fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {
         "openai_compatible", "azure_openai" -> OpenAiAdapter
@@ -178,7 +184,7 @@ class RelayEngine(
         }
     }
 
-    /** 成功返回非 null；可重试失败抛 NetonHttpException。 */
+    /** 返回 SUCCESS/PARTIAL（已终态）；可重试失败抛 NetonHttpException（downstream 未提交）。 */
     private suspend fun execute(
         ctx: HttpContext,
         channel: Channel,
@@ -188,7 +194,7 @@ class RelayEngine(
         token: GatewayToken,
         group: String,
         startMs: Long,
-    ): Unit? {
+    ): RelayOutcome {
         val rewritten = transform.rewritten
         val upstream = transform.upstream
         val client = clientFor(channel)
@@ -207,13 +213,13 @@ class RelayEngine(
             if (res.statusCode !in 200..299) {
                 recordLog(token, channel, rewritten, Usage(), group, startMs, "error", "upstream_${res.statusCode}", null)
                 respondRaw(ctx, res.statusCode, res.body)  // 上游错误 body 原样（擦除 headers）
-                return Unit
+                return RelayOutcome.PARTIAL  // 上游语义错误：终态，不当 Key 成功
             }
             val ttfb = now() - startMs
             val usage = upstream.extractUsage(res.body)          // usage 从上游原生响应提取
             respondRaw(ctx, 200, transform.transformResponseBody(res.body))  // body 按需转协议
             bill(token, channel, rewritten, usage, group, startMs, ttfb)
-            return Unit
+            return RelayOutcome.SUCCESS
         }
 
         // 流式：先确认上游首字节再提交 downstream——否则 downstream 一旦提交（committed），
@@ -228,7 +234,7 @@ class RelayEngine(
         ctx: HttpContext, client: NetonHttpClient, request: NetonHttpRequest,
         accumulator: logic.protocol.StreamUsageAccumulator, streamTransformer: StreamTransformer?,
         token: GatewayToken, channel: Channel, rewritten: Rewritten, group: String, startMs: Long,
-    ): Unit = kotlinx.coroutines.coroutineScope {
+    ): RelayOutcome = kotlinx.coroutines.coroutineScope {
         // producer 捕获上游异常存入 openError（不外抛，避免 cancel scope 抢占我们的重试异常）
         var openError: Throwable? = null
         val chunks = this@coroutineScope.produce<String>(capacity = 64) {
@@ -261,28 +267,35 @@ class RelayEngine(
         ctx.response.header("Cache-Control", "no-cache")
         ctx.response.header("X-Accel-Buffering", "no")
         var aborted = false
-        ctx.response.stream {
-            fun relayText(text: String) {
-                accumulator.feed(text)
+        var billed = false
+        try {
+            ctx.response.stream {
+                suspend fun writeOut(text: String) {
+                    accumulator.feed(text)  // 始终喂上游原文用于计费
+                    if (streamTransformer != null) {
+                        val c = streamTransformer.feed(text); if (c.isNotEmpty()) writeChunk(c)
+                    } else writeChunk(text)
+                }
+                firstResult.getOrNull()?.let { writeOut(it) }  // 空流（首块即 close 无异常）则跳过
+                for (text in chunks) writeOut(text)             // producer 捕获错误，此处仅正常收流
+                if (openError != null) {
+                    aborted = true
+                    log.warn("relay stream aborted mid-flight channel=${channel.id}: $openError")
+                } else {
+                    streamTransformer?.finish()?.let { if (it.isNotEmpty()) writeChunk(it) }
+                }
             }
-            suspend fun writeOut(text: String) {
-                relayText(text)
-                if (streamTransformer != null) {
-                    val c = streamTransformer.feed(text); if (c.isNotEmpty()) writeChunk(c)
-                } else writeChunk(text)
-            }
-            firstResult.getOrNull()?.let { writeOut(it) }  // 空流（首块即 close 无异常）则跳过
-            for (text in chunks) writeOut(text)             // producer 捕获错误，此处仅正常收流
-            // 已提交后上游中断：openError 非空 → 尽力收尾，不再重试
-            if (openError != null) {
-                aborted = true
-                log.warn("relay stream aborted mid-flight channel=${channel.id}: $openError")
-            } else {
-                streamTransformer?.finish()?.let { if (it.isNotEmpty()) writeChunk(it) }
-            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // downstream 断连：已计部分 usage，仍需结算（不能丢账），再抛出让请求结束
+            billed = true
+            bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs, status = "partial")
+            throw e
         }
-        bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs,
-             status = if (aborted) "partial" else if (accumulator.usage() != null) "ok" else "partial")
+        if (!billed) {
+            bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs,
+                 status = if (aborted) "partial" else if (accumulator.usage() != null) "ok" else "partial")
+        }
+        if (aborted) RelayOutcome.PARTIAL else RelayOutcome.SUCCESS
     }
 
     /** 转发变换：请求体/上游路径已终态；响应体/流按需转协议（同协议为恒等）。 */
@@ -325,20 +338,33 @@ class RelayEngine(
         val cost = if (price != null) PricingCalc.cost(effectiveUsage, price, channel.costDiscount) else 0L
         if (price == null) log.warn("relay unpriced model=${rewritten.requestModel}（放行计零，请配置定价）")
 
-        val logId = recordLog(token, channel, rewritten, effectiveUsage, group, startMs, status, null, ttfbMs, charged, cost)
-        if (charged > 0) {
-            // 后付费结算：settle 无条件扣减（允许转负），保证 log.charged 恒有对应扣款台账
-            quotaLogic.settle(token.userId, charged, ref = "usage:$logId")
-            // 令牌 quotaUsed 累加（与账户扣款一致）；乐观锁重读避免并发覆盖
-            repeat(5) {
-                val current = GatewayTokenTable.get(token.id) ?: return@repeat
-                val updated = GatewayTokenTable.query {
-                    where { and(GatewayToken::id eq token.id, GatewayToken::quotaUsed eq current.quotaUsed) }
-                }.update { set(GatewayToken::quotaUsed, current.quotaUsed + charged) }
-                if (updated > 0) return
+        // 账务全或无：usage_log + 余额扣减 + 台账 + token.quotaUsed 同一事务提交；
+        // 冲突抛 BillConflict 使整事务回滚（含 log 插入），外层重试（新事务见已提交数据）。
+        repeat(5) {
+            try {
+                neton.database.dbContext().transaction {
+                    val logId = recordLog(token, channel, rewritten, effectiveUsage, group, startMs, status, null, ttfbMs, charged, cost)
+                    if (charged > 0) {
+                        quotaLogic.debitInTx(token.userId, -charged, "consume", "usage:$logId")
+                            ?: throw BillConflict  // 余额 CAS 冲突 → 回滚整事务
+                        val current = GatewayTokenTable.get(token.id)
+                        if (current != null) {
+                            val updated = GatewayTokenTable.query {
+                                where { and(GatewayToken::id eq token.id, GatewayToken::quotaUsed eq current.quotaUsed) }
+                            }.update { set(GatewayToken::quotaUsed, current.quotaUsed + charged) }
+                            if (updated == 0L) throw BillConflict  // token CAS 冲突 → 回滚
+                        }
+                    }
+                }
+                return  // 提交成功
+            } catch (e: BillConflict) {
+                // 回滚后重试
             }
         }
+        error("bill contention user=${token.userId} logModel=${rewritten.requestModel}")
     }
+
+    private object BillConflict : RuntimeException("billing optimistic-lock conflict")
 
     private suspend fun recordLog(
         token: GatewayToken, channel: Channel, rewritten: Rewritten, usage: Usage,
