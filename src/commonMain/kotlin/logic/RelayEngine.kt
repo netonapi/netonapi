@@ -375,6 +375,10 @@ class RelayEngine(
                                 where { and(GatewayToken::id eq token.id, GatewayToken::quotaUsed eq current.quotaUsed) }
                             }.update { set(GatewayToken::quotaUsed, current.quotaUsed + charged) }
                             if (updated == 0L) throw BillConflict  // token CAS 冲突 → 回滚
+                        } else {
+                            // token 请求中途被删：账户级三表照提交（收入不丢），quotaUsed 略过（per-token 计数已无意义）。
+                            // 不回滚（回滚=已服务请求不计费=收入泄漏）；不变量降级为账户级三项相等。
+                            log.warn("relay bill: token deleted mid-request; account settled, quotaUsed skipped tokenId=${token.id} userId=${token.userId} logId=$logId charged=$charged")
                         }
                     }
                 }
