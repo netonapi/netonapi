@@ -122,14 +122,17 @@
 - **stream outcome**：execute 返回 SUCCESS/PARTIAL——仅完整成功清 Key failCount；中断/上游 4xx 为 PARTIAL 不改 Key
   状态；downstream 断连（CancellationException）先 bill(partial) 再抛，不丢账。
 - **账务事务化**：bill() 把 usage_log + 余额 CAS 扣减 + 台账 + token.quotaUsed 放**同一 dbContext().transaction**，
-  冲突抛 BillConflict 回滚整事务、外层重试；保证 Σlog.charged == Σ台账扣款 == 余额变化 == token.quotaUsed（E2E 验证四者=45000）。
+  冲突抛 BillConflict 回滚整事务、外层重试；不变量：**活跃 token**——Σlog.charged == Σ台账扣款 == 余额变化 == token.quotaUsed（E2E 四者=45000）；
+  **中途删除的 token**——降级为账户级三项相等（log/余额/台账），quotaUsed 略过并 warn。
   settle 无条件扣减允许转负（后付费）；grant/applyDelta 每次尝试独立事务 + 乐观锁行数检查（不写虚假 grant）。
 - **Key 状态 CAS**：recordKeyFailure/Success 改列级 CAS（重读+条件更新，并发不丢计数、不复活已禁用 Key）；
   429 限流不计永久禁用（仅 5xx/网络/超时/401/403）；reviveChannel 只复位自动禁用(status=2)、保留手动禁用(status=0)。
   E2E：5×500 触发 auto-key 禁用、manual-key 保持 0；revive 后 auto-key 复位、manual 仍 0。
-- **断连结算修复（Codex 三轮 #1）**：downstream 断连的 bill 放 withContext(NonCancellable)+withTimeoutOrNull(5s)——
-  否则已 cancelled 协程里 bill 的 DB 挂起会立即再取消、丢账。catch Throwable（断连可为 Cancellation 或 IOException），
-  Cancellation 重抛。E2E：curl --max-time 1 断流 → partial 用量日志已落。
+- **断连结算 + producer 生命周期（Codex 三/四轮 #1）**：downstream 断连的 bill 放 withContext(NonCancellable)+
+  withTimeoutOrNull(5s)（否则 cancelled 协程 bill 立即再取消丢账）。异常分类：CancellationException→取消 producer+
+  NonCancellable 结算+重抛；确认下游断连（IO/Closed/Broken/pipe）→取消 producer+结算+PARTIAL；其它（codec bug 等）→
+  取消 producer+结算+ERROR 日志+重抛（不伪装断连）。producer capacity=1（背压）+异常路径 chunks.cancel()（防 send() 挂起泄漏）。
+  E2E：perRequestPrice=5000 大块流断连 → log.charged=5000/tx=-5000/balance_delta=5000 全一致（真实扣款，非仅走到函数）。
 - **分类统一（Codex #4）**：非流式 401/403 也计 Key 失败（此前只在流式/throw 路径计）；E2E：非流式 3×403 → failCount=3。
 - **Key 轮转（Codex #5）**：recordKeyFailure 也更新 lastUsedAt → LRU 轮转到其他 Key 不死磕坏 Key。
 - 删死代码 consume()（无调用方且非事务化）。token 中途删除：账户级三表照提交+warn（不回滚，避免已服务请求不计费=收入泄漏，此处推回 Codex #3）。

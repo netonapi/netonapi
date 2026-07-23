@@ -240,7 +240,7 @@ class RelayEngine(
     ): RelayOutcome = kotlinx.coroutines.coroutineScope {
         // producer 捕获上游异常存入 openError（不外抛，避免 cancel scope 抢占我们的重试异常）
         var openError: Throwable? = null
-        val chunks = this@coroutineScope.produce<String>(capacity = 64) {
+        val chunks = this@coroutineScope.produce<String>(capacity = 1) {
             try {
                 client.stream(request).collect { chunk ->
                     when (chunk) {
@@ -289,17 +289,29 @@ class RelayEngine(
                 }
             }
         } catch (e: Throwable) {
-            // downstream 断连（可能是 CancellationException 或 IOException，Ktor 两种都有）：
-            // 协程通常已 cancelled，bill 的 DB 挂起会立即再被取消——必须在 NonCancellable+超时里结算，否则丢账。
-            billed = true
-            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                kotlinx.coroutines.withTimeoutOrNull(5000) {
-                    bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs, status = "partial")
-                } ?: log.warn("relay partial-bill timed out on disconnect channel=${channel.id}")
+            // 先停 producer：否则下游不再消费、producer 填满缓冲后永久挂在 send()，coroutineScope 等它导致请求不结束。
+            chunks.cancel()
+            // 响应已提交无法重试；尽力结算 partial（NonCancellable 防 cancelled 协程里 bill 的 DB 挂起立即丢账）。
+            if (!billed) {
+                billed = true
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    kotlinx.coroutines.withTimeoutOrNull(5000) {
+                        bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs, status = "partial")
+                    } ?: log.warn("relay partial-bill timed out on disconnect channel=${channel.id}")
+                }
             }
-            if (e is kotlinx.coroutines.CancellationException) throw e  // 结构化并发要求重抛取消
-            log.warn("relay stream downstream error channel=${channel.id}: $e")
-            return@coroutineScope RelayOutcome.PARTIAL
+            when {
+                e is kotlinx.coroutines.CancellationException -> throw e  // 结构化并发：必须重抛
+                isDownstreamDisconnect(e) -> {
+                    log.warn("relay stream downstream disconnect channel=${channel.id}: ${e::class.simpleName}")
+                    return@coroutineScope RelayOutcome.PARTIAL
+                }
+                else -> {
+                    // 非断连（codec bug/内部错误等）：不伪装成断连，ERROR 暴露，重抛（框架 committed handler 收尾）
+                    log.error("relay stream internal error channel=${channel.id}", cause = e)
+                    throw e
+                }
+            }
         }
         if (!billed) {
             bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs,
@@ -375,6 +387,13 @@ class RelayEngine(
     }
 
     private object BillConflict : RuntimeException("billing optimistic-lock conflict")
+
+    /** 识别下游断连（IO/传输层）异常：类名/消息含 IO/Closed/Broken/pipe/reset/Channel。 */
+    private fun isDownstreamDisconnect(e: Throwable): Boolean {
+        val n = (e::class.simpleName ?: "") + " " + (e.message ?: "")
+        return listOf("IOException", "Closed", "Broken", "pipe", "reset", "ClosedWriteChannel", "ChannelWrite")
+            .any { n.contains(it, ignoreCase = true) }
+    }
 
     private suspend fun recordLog(
         token: GatewayToken, channel: Channel, rewritten: Rewritten, usage: Usage,
