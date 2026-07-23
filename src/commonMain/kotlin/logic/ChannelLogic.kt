@@ -102,9 +102,25 @@ class ChannelLogic(private val log: Logger) {
         updateStatus(channelId, 1)
     }
 
+    /**
+     * 渠道 429 冷却：把 cooldown_until 抬到 now+backoff（取较大值，不缩短已有冷却）。
+     * 冷却期内该渠道不参与候选（RelayRouter 过滤），避免立即重试被限流的上游。
+     */
+    suspend fun recordChannelCooldown(channelId: Long, backoffMs: Long = COOLDOWN_MS) {
+        val until = nowMillis() + backoffMs
+        neton.database.dbContext().execute(
+            "UPDATE gateway_channels SET cooldown_until = GREATEST(cooldown_until, :until) WHERE id = :id",
+            mapOf("until" to until, "id" to channelId),
+        )
+        log.warn("gateway channel 429 cooldown channel=$channelId until=$until")
+    }
+
     private fun nowMillis(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 
     companion object {
+        /** 429 冷却退避时长（ms）。 */
+        const val COOLDOWN_MS: Long = 30_000L
+
         /** 选择策略纯函数：只取 status=1，按 lastUsedAt 轮转（最久未用优先）。 */
         fun pickAvailable(keys: List<ChannelKey>): ChannelKey? =
             keys.filter { it.status == 1 }.minByOrNull { it.lastUsedAt ?: 0L }

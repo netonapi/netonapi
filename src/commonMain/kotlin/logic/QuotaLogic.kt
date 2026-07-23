@@ -51,16 +51,44 @@ class QuotaLogic(private val log: Logger) {
      */
     suspend fun debitInTx(userId: Long, delta: Long, type: String, ref: String?): Long {
         val acc = account(userId)
+        // 结算幂等：ref 非空时先插台账哨兵（ref 唯一约束）。重复 ref（重试/outbox 重放）插入 0 行 → 已结算，
+        // 跳过余额自增，保证同一 usage 只扣一次。
+        if (ref != null) {
+            val ins = neton.database.dbContext().execute(
+                "INSERT INTO gateway_quota_transactions (user_id, type, amount, balance_after, ref, created_at) " +
+                    "VALUES (:uid, :t, :amt, 0, :ref, 0) ON CONFLICT (ref) WHERE ref IS NOT NULL DO NOTHING",
+                mapOf("uid" to userId, "t" to type, "amt" to delta, "ref" to ref),
+            )
+            if (ins == 0L) {
+                log.warn("quota debit idempotent skip: ref=$ref already settled userId=$userId")
+                return acc.balance
+            }
+        }
+        checkedAdd(acc.balance, delta)  // 溢出保护：转账前校验 BIGINT 不溢出
         val affected = neton.database.dbContext().execute(
             "UPDATE gateway_quota_accounts SET balance = balance + :delta, version = version + 1 WHERE id = :id",
             mapOf("delta" to delta, "id" to acc.id),
         )
         check(affected == 1L) { "debit affected $affected rows (expected 1) userId=$userId accountId=${acc.id}" }
         val newBalance = account(userId).balance  // 事务内回读：本 tx 持行锁，读到本次自增结果
-        QuotaTransactionTable.insert(
-            QuotaTransaction(userId = userId, type = type, amount = delta, balanceAfter = newBalance, ref = ref)
-        )
+        if (ref != null) {
+            neton.database.dbContext().execute(
+                "UPDATE gateway_quota_transactions SET balance_after = :b WHERE ref = :ref",
+                mapOf("b" to newBalance, "ref" to ref),
+            )
+        } else {
+            QuotaTransactionTable.insert(
+                QuotaTransaction(userId = userId, type = type, amount = delta, balanceAfter = newBalance, ref = null)
+            )
+        }
         return newBalance
+    }
+
+    /** BIGINT 溢出保护：同号相加结果变号即溢出。 */
+    private fun checkedAdd(a: Long, b: Long): Long {
+        val r = a + b
+        check((a xor r) and (b xor r) >= 0L) { "quota balance overflow: $a + $b" }
+        return r
     }
 
 
