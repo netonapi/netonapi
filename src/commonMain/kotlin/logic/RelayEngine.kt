@@ -230,14 +230,14 @@ class RelayEngine(
         // 首字节前上游失败时无法换渠道重试（会撞 ResponseAlreadyCommitted）。
         val accumulator = upstream.streamUsageAccumulator()
         val streamTransformer = transform.streamTransformerFactory?.invoke()
-        return streamWithPreflight(ctx, client, request, accumulator, streamTransformer, token, channel, rewritten, group, startMs)
+        return streamWithPreflight(ctx, client, request, accumulator, streamTransformer, token, channel, keyId, rewritten, group, startMs)
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private suspend fun streamWithPreflight(
         ctx: HttpContext, client: NetonHttpClient, request: NetonHttpRequest,
         accumulator: logic.protocol.StreamUsageAccumulator, streamTransformer: StreamTransformer?,
-        token: GatewayToken, channel: Channel, rewritten: Rewritten, group: String, startMs: Long,
+        token: GatewayToken, channel: Channel, keyId: Long, rewritten: Rewritten, group: String, startMs: Long,
     ): RelayOutcome = kotlinx.coroutines.coroutineScope {
         // producer 捕获上游异常存入 openError（不外抛，避免 cancel scope 抢占我们的重试异常）
         var openError: Throwable? = null
@@ -282,11 +282,18 @@ class RelayEngine(
                 }
                 firstResult.getOrNull()?.let { writeOut(it) }  // 空流（首块即 close 无异常）则跳过
                 for (text in chunks) writeOut(text)             // producer 捕获错误，此处仅正常收流
-                if (openError != null) {
-                    aborted = true
-                    log.warn("relay stream aborted mid-flight channel=${channel.id}: $openError")
-                } else {
-                    streamTransformer?.finish()?.let { if (it.isNotEmpty()) writeChunk(it) }
+                // 终止判定：上游出错，或传输层结束但未见协议终止标记（[DONE]/message_stop/finishReason）= 上游截断。
+                // 截断按 PARTIAL 收尾，且**不调 transformer.finish()**（不得伪造 [DONE]/message_stop 让客户端误判完整）。
+                when {
+                    openError != null -> {
+                        aborted = true
+                        log.warn("relay stream aborted mid-flight (upstream error) channel=${channel.id}: $openError")
+                    }
+                    !accumulator.terminalSeen() -> {
+                        aborted = true
+                        log.warn("relay stream ended without terminal marker (upstream truncated) channel=${channel.id}")
+                    }
+                    else -> streamTransformer?.finish()?.let { if (it.isNotEmpty()) writeChunk(it) }
                 }
             }
         } catch (e: Throwable) {
@@ -314,6 +321,9 @@ class RelayEngine(
                 }
             }
         }
+        // 上游截断/出错（非下游断连——下游断连在 catch 内已 return）：按网络失败策略计 Key 失败。
+        // 首字节后不重试渠道（外层对 PARTIAL 直接 return），只累计失败用于自动禁用/轮转。
+        if (aborted) channelLogic.recordKeyFailure(keyId, "stream_truncated")
         if (!billed) {
             bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs,
                  status = if (aborted) "partial" else if (accumulator.usage() != null) "ok" else "partial")

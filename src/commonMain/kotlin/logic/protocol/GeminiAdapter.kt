@@ -38,6 +38,7 @@ object GeminiAdapter : ProtocolAdapter {
     override fun streamUsageAccumulator(): StreamUsageAccumulator = object : StreamUsageAccumulator {
         private val buffer = StringBuilder()
         private var last: Usage? = null
+        private var terminal = false
         override fun feed(chunk: String) {
             buffer.append(chunk)
             while (true) {
@@ -53,10 +54,16 @@ object GeminiAdapter : ProtocolAdapter {
                             completionTokens = it["candidatesTokenCount"]?.jsonPrimitive?.intOrNull ?: 0,
                         )
                     }
+                    // 终态 finishReason（STOP/MAX_TOKENS/SAFETY 等非空）= 协议终止标记
+                    (obj["candidates"] as? JsonArray)?.forEach { c ->
+                        val fr = (c as? JsonObject)?.get("finishReason")?.jsonPrimitive?.contentOrNull
+                        if (!fr.isNullOrEmpty()) terminal = true
+                    }
                 }
             }
         }
         override fun usage() = last
+        override fun terminalSeen() = terminal
     }
 
     override fun errorBody(code: String, message: String): String {

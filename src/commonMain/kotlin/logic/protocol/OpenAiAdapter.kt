@@ -27,6 +27,7 @@ object OpenAiAdapter : ProtocolAdapter {
         private val acc = SseUsageAccumulator()
         override fun feed(chunk: String) = acc.feed(chunk)
         override fun usage() = acc.usage()
+        override fun terminalSeen() = acc.terminalSeen()
     }
 
     override fun errorBody(code: String, message: String): String {

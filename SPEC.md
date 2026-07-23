@@ -142,14 +142,15 @@
 - **429 渠道 cooldown（V003，已落地，待改进）**：429 把渠道 `cooldown_until` 抬到 now+30s（GREATEST），冷却期内
   RelayRouter.candidates 排除该渠道（harness S10）。**待改进（Codex P1）**：应优先冷却具体 Key 而非整个多 Key 渠道；
   解析 `Retry-After`/reset header（30s 仅 fallback）+ jitter；所有候选均限流应返回 429+Retry-After 而非伪装 503。
+- **流式 terminalSeen（已闭环）**：StreamUsageAccumulator 增 `terminalSeen()`——OpenAI `[DONE]`/非空 finish_reason、
+  Anthropic `message_stop`、Gemini 终态 `finishReason`。上游出错或传输层 EOF 但未见终止标记 = 上游截断 → PARTIAL，
+  **不调 transformer.finish()**（不伪造 [DONE]/message_stop），并按网络失败策略计 Key 失败（首字节后不重试渠道）。
+  harness S9（真实断言）：收块无伪造 [DONE]、status=partial、per-request 价四项一致(=3000)、Key failCount≥1、上游在途=0、有限时间结束。
 - **⚠️ 未闭环 P0（Codex 评审，14333ca 假闭环，已重新打开，不得标记完成）**：
   - **结算幂等未成立**：ref=usage:$logId，logId 每次重放都变→键不稳定；且重放时 debitInTx 跳余额但 bill 仍加 quotaUsed
     →破坏四项不变量。S8 仅测唯一索引、未走真实 bill 重放。需 durable settlement：请求入口稳定 settlementId（客户端
     Idempotency-Key 可作外部键）、usage/settlement 表对 settlementId 唯一、首插成功才做全部四项、重复整体 no-op(AlreadySettled)、
     同 key 不同用户/金额/摘要须报冲突。
-  - **midstream abort 误判 SUCCESS**：openError 仅在 producer 抛异常时设；上游正常 EOF 未见终止标记时 openError 空→返回
-    SUCCESS 并清 Key failCount。需协议级 terminalSeen（OpenAI [DONE]/finish_reason、Anthropic message_stop、Gemini finishReason），
-    未见终止标记的 EOF 必为 PARTIAL，不得由 transformer.finish() 伪造正常结束。S9 需断言 partial/账务非零一致/Key 计数/无伪造终止/inflight 归零/有限时间。
   - **token budget 非硬 cap**：已撤回"超支后禁用 token"的假 cap（曾滥用 status=0）；当前仅软预算预检+告警。硬预算需 reserve/finalize
     （请求前条件预留、完成后按实际结算释放差额，预算耗尽用独立状态表达）。
   - **结算失败丢收入**：非流式先返 200 再 bill、流式已提交；DB 断连/死锁/5s 超时则已服务未记账。需请求前 durable pending settlement +

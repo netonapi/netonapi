@@ -30,4 +30,10 @@ interface ProtocolAdapter {
 interface StreamUsageAccumulator {
     fun feed(chunk: String)
     fun usage(): Usage?
+
+    /**
+     * 是否已见到协议级终止标记（OpenAI `[DONE]`/非空 finish_reason；Anthropic `message_stop`；Gemini 终态 finishReason）。
+     * 传输层 EOF 但未见终止标记 = 上游截断 → 应按 PARTIAL 收尾（不得伪造正常结束）。
+     */
+    fun terminalSeen(): Boolean
 }

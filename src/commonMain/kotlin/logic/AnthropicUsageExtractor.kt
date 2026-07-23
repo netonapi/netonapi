@@ -35,6 +35,7 @@ class AnthropicSseUsageAccumulator : StreamUsageAccumulator {
     private var cacheRead = 0
     private var cacheWrite = 0
     private var seen = false
+    private var terminal = false
 
     override fun feed(chunk: String) {
         buffer.append(chunk)
@@ -47,6 +48,8 @@ class AnthropicSseUsageAccumulator : StreamUsageAccumulator {
                 val data = line.removePrefix("data:").trim()
                 if (data.isEmpty() || data == line || data == "[DONE]") continue
                 val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
+                // message_stop = 协议终止标记
+                if (obj["type"]?.jsonPrimitive?.contentOrNull == "message_stop") terminal = true
                 // message_start: {"type":"message_start","message":{"usage":{"input_tokens":..}}}
                 (obj["message"] as? JsonObject)?.get("usage")?.let { applyUsage(it as? JsonObject) }
                 // message_delta: {"type":"message_delta","usage":{"output_tokens":..}}
@@ -54,6 +57,8 @@ class AnthropicSseUsageAccumulator : StreamUsageAccumulator {
             }
         }
     }
+
+    override fun terminalSeen(): Boolean = terminal
 
     private fun applyUsage(u: JsonObject?) {
         if (u == null) return

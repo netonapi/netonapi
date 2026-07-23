@@ -30,6 +30,7 @@ object UsageExtractor {
 class SseUsageAccumulator {
     private val buffer = StringBuilder()
     private var last: Usage? = null
+    private var terminal = false
     private val json = Json { ignoreUnknownKeys = true }
 
     fun feed(chunk: String) {
@@ -42,12 +43,19 @@ class SseUsageAccumulator {
             buffer.deleteRange(0, idx + 2)
             for (line in event.lineSequence()) {
                 val data = line.removePrefix("data:").trim()
-                if (data.isEmpty() || data == line || data == "[DONE]") continue
+                if (data.isEmpty() || data == line) continue
+                if (data == "[DONE]") { terminal = true; continue }
                 val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
                 (obj["usage"] as? JsonObject)?.let { last = UsageExtractor.fromUsageObject(it) }
+                // 非空 finish_reason 也是终止标记（有的上游不发 [DONE]）
+                (obj["choices"] as? JsonArray)?.forEach { c ->
+                    val fr = (c as? JsonObject)?.get("finish_reason")
+                    if (fr != null && fr !is JsonNull && fr.jsonPrimitive.contentOrNull?.isNotEmpty() == true) terminal = true
+                }
             }
         }
     }
 
     fun usage(): Usage? = last
+    fun terminalSeen(): Boolean = terminal
 }
