@@ -133,8 +133,9 @@
   抛 "bill contention" 丢账，harness S1 实测暴露：仅 9/20 计费）。debitInTx 校验 affected==1。
   不变量：**活跃 token**——Σlog.charged == Σ台账扣款 == 余额变化 == token.quotaUsed（harness S1 20 并发四者=150000）；
   **中途删除的 token**——`quota_used ... WHERE id AND deleted=0` 命中 0 行 → 账户级三项相等（log/余额/台账），quotaUsed 略过并 warn。
-  settle 无条件扣减允许转负（后付费）。两条自增 raw SQL 在 PostgreSQL 与 MySQL/InnoDB 语法上皆成立，
-  但 MySQL 侧需经真实 harness 验证命名参数/affected rows/事务回读/并发结果后方可宣布兼容。
+  settle 无条件扣减允许转负（后付费）。account() 首建幂等（INSERT ... ON CONFLICT (user_id) DO NOTHING + 重读），
+  并发首请求不再撞 uk_gateway_quota_accounts_user 抛错丢账（harness S7：20 并发首建 → 账户唯一、无 500 崩溃）。
+  两条自增 + 首建 raw SQL 均 PostgreSQL 专用，MySQL 侧需经真实 harness 验证命名参数/affected rows/事务回读/并发结果后方可宣布兼容。
 - **Key 状态 CAS**：recordKeyFailure/Success 改列级 CAS（重读+条件更新，并发不丢计数、不复活已禁用 Key）；
   429 限流不计永久禁用（仅 5xx/网络/超时/401/403）；reviveChannel 只复位自动禁用(status=2)、保留手动禁用(status=0)。
   E2E：5×500 触发 auto-key 禁用、manual-key 保持 0；revive 后 auto-key 复位、manual 仍 0。
@@ -154,7 +155,7 @@
   不硬编码 public；不改任何已应用 V001 checksum）。
 - **harness/CI 仍待办**（Codex 评审，紧接下一提交）：改用 PostgreSQL service/container + 动态分配应用/fake 端口（当前固定
   5432/8080/9920–9991，仅"隔离库"非"隔离实例"）；入 CI；四个写入点分别注入异常验证整事务 rollback；结算幂等键/唯一约束
-  重复提交；**首建账户并发唯一键冲突**；upstream midstream abort；DB 死锁/连接中断重试分类；结算 timeout/outbox；
+  重复提交；upstream midstream abort；DB 死锁/连接中断重试分类；结算 timeout/outbox；
   token budget 并发超支；预付费 reserve/finalize；溢出检查；429 cooldown/backoff。
 - **迁移 search_path 复位的严格证明（待补）**：现有 contract test 仅证明复位 SQL 在脚本 DDL 前发送；fresh-DB harness
   证明全量迁移成功，但未严格证明"提交后同一物理池连接已干净"。应补 pool-size=1 的真实 PostgreSQL 集成测试：

@@ -10,9 +10,18 @@ import table.QuotaTransactionTable
 @neton.core.annotations.Logic(logger = "logic.gateway-quota")
 class QuotaLogic(private val log: Logger) {
 
-    suspend fun account(userId: Long): QuotaAccount =
-        QuotaAccountTable.oneWhere { QuotaAccount::userId eq userId }
-            ?: QuotaAccountTable.insert(QuotaAccount(userId = userId))
+    suspend fun account(userId: Long): QuotaAccount {
+        QuotaAccountTable.oneWhere { QuotaAccount::userId eq userId }?.let { return it }
+        // 并发首建：两个并发首请求都 miss 会各自 INSERT，撞唯一索引 uk_gateway_quota_accounts_user 抛错、
+        // 在 bill() 事务内回滚导致已服务请求丢账。ON CONFLICT DO NOTHING 幂等建账（balance/version 走列默认 0），
+        // 再重读（本次或并发对方插入的都可见）。raw SQL 为 PostgreSQL 专用，MySQL 待适配（INSERT IGNORE / ON DUPLICATE KEY）。
+        neton.database.dbContext().execute(
+            "INSERT INTO gateway_quota_accounts (user_id) VALUES (:uid) ON CONFLICT (user_id) DO NOTHING",
+            mapOf("uid" to userId),
+        )
+        return QuotaAccountTable.oneWhere { QuotaAccount::userId eq userId }
+            ?: error("account create-or-read failed userId=$userId")
+    }
 
     suspend fun grant(userId: Long, amount: Long, type: String = "grant", ref: String? = null): Long {
         require(amount > 0) { "grant amount must be positive" }
