@@ -142,10 +142,13 @@
 - **429 渠道 cooldown（V003，已落地，待改进）**：429 把渠道 `cooldown_until` 抬到 now+30s（GREATEST），冷却期内
   RelayRouter.candidates 排除该渠道（harness S10）。**待改进（Codex P1）**：应优先冷却具体 Key 而非整个多 Key 渠道；
   解析 `Retry-After`/reset header（30s 仅 fallback）+ jitter；所有候选均限流应返回 429+Retry-After 而非伪装 503。
-- **流式 terminalSeen（已闭环）**：StreamUsageAccumulator 增 `terminalSeen()`——OpenAI `[DONE]`/非空 finish_reason、
-  Anthropic `message_stop`、Gemini 终态 `finishReason`。上游出错或传输层 EOF 但未见终止标记 = 上游截断 → PARTIAL，
-  **不调 transformer.finish()**（不伪造 [DONE]/message_stop），并按网络失败策略计 Key 失败（首字节后不重试渠道）。
-  harness S9（真实断言）：收块无伪造 [DONE]、status=partial、per-request 价四项一致(=3000)、Key failCount≥1、上游在途=0、有限时间结束。
+- **流式 terminalSeen（完全闭环）**：StreamUsageAccumulator 增 `terminalSeen()`——OpenAI `[DONE]` 绝对终止，无 `[DONE]`
+  时**所有已观察 choice index 都须 finish**（n>1 严谨）；Anthropic `message_stop`；Gemini 所有已观察 candidate 都终态 `finishReason`。
+  上游出错或传输层 EOF 但未见终止标记 = 上游截断 → PARTIAL，**不调 transformer.finish()**（不伪造 [DONE]/message_stop），
+  按网络失败策略计 Key 失败（首字节后不重试渠道）。harness S9：无伪造 [DONE]、status=partial、per-request 价四项一致、Key failCount≥1、在途=0、有限时间。
+- **SSE 解析基础（Codex 追加，已闭环）**：抽共享 `SseEventFramer`（3 累加器 + 4 流 codec 复用）——支持 `\n\n`/`\r\n\r\n`/`\r\r`、
+  边界或行被拆在任意 chunk、多行 data 字段（不再七处各修字符串查找）；producer 用增量 `Utf8StreamDecoder` 缓冲跨 chunk 被拆开的
+  多字节字符（中文/emoji 不再逐块 decodeToString 产生 U+FFFD）。单测覆盖 CRLF、任意 chunk 分片、逐字节 UTF-8 拆分、多 candidate 终止。
 - **⚠️ 未闭环 P0（Codex 评审，14333ca 假闭环，已重新打开，不得标记完成）**：
   - **结算幂等未成立**：ref=usage:$logId，logId 每次重放都变→键不稳定；且重放时 debitInTx 跳余额但 bill 仍加 quotaUsed
     →破坏四项不变量。S8 仅测唯一索引、未走真实 bill 重放。需 durable settlement：请求入口稳定 settlementId（客户端

@@ -36,34 +36,32 @@ object GeminiAdapter : ProtocolAdapter {
     }
 
     override fun streamUsageAccumulator(): StreamUsageAccumulator = object : StreamUsageAccumulator {
-        private val buffer = StringBuilder()
+        private val framer = SseEventFramer()
         private var last: Usage? = null
-        private var terminal = false
+        private val seenIdx = mutableSetOf<Int>()
+        private val finishedIdx = mutableSetOf<Int>()
         override fun feed(chunk: String) {
-            buffer.append(chunk)
-            while (true) {
-                val idx = buffer.indexOf("\n\n"); if (idx < 0) break
-                val ev = buffer.substring(0, idx); buffer.deleteRange(0, idx + 2)
-                for (line in ev.lineSequence()) {
-                    val data = line.removePrefix("data:").trim()
-                    if (data.isEmpty() || data == line) continue
-                    val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
-                    (obj["usageMetadata"] as? JsonObject)?.let {
-                        last = Usage(
-                            promptTokens = it["promptTokenCount"]?.jsonPrimitive?.intOrNull ?: 0,
-                            completionTokens = it["candidatesTokenCount"]?.jsonPrimitive?.intOrNull ?: 0,
-                        )
-                    }
-                    // 终态 finishReason（STOP/MAX_TOKENS/SAFETY 等非空）= 协议终止标记
-                    (obj["candidates"] as? JsonArray)?.forEach { c ->
-                        val fr = (c as? JsonObject)?.get("finishReason")?.jsonPrimitive?.contentOrNull
-                        if (!fr.isNullOrEmpty()) terminal = true
-                    }
+            for (raw in framer.frame(chunk)) {
+                val data = raw.trim()
+                if (data.isEmpty() || data == "[DONE]") continue
+                val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
+                (obj["usageMetadata"] as? JsonObject)?.let {
+                    last = Usage(
+                        promptTokens = it["promptTokenCount"]?.jsonPrimitive?.intOrNull ?: 0,
+                        completionTokens = it["candidatesTokenCount"]?.jsonPrimitive?.intOrNull ?: 0,
+                    )
+                }
+                // 终态 finishReason（STOP/MAX_TOKENS/SAFETY 等非空）= 该 candidate 终止；n>1 需所有已观察 candidate 都终止
+                (obj["candidates"] as? JsonArray)?.forEach { c ->
+                    val co = c as? JsonObject ?: return@forEach
+                    val idx = co["index"]?.jsonPrimitive?.intOrNull ?: 0
+                    seenIdx += idx
+                    if (!co["finishReason"]?.jsonPrimitive?.contentOrNull.isNullOrEmpty()) finishedIdx += idx
                 }
             }
         }
         override fun usage() = last
-        override fun terminalSeen() = terminal
+        override fun terminalSeen() = seenIdx.isNotEmpty() && finishedIdx.containsAll(seenIdx)
     }
 
     override fun errorBody(code: String, message: String): String {

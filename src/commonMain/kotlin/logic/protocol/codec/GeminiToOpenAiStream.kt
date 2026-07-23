@@ -5,7 +5,7 @@ import kotlinx.serialization.json.*
 /** Gemini streamGenerateContent SSE → OpenAI chunk 流。 */
 class GeminiToOpenAiStream(private val model: String) {
     private val json = Json { }
-    private val buffer = StringBuilder()
+    private val framer = logic.protocol.SseEventFramer()
     private var roleSent = false
     private var finished = false
     private var finishReason = "stop"
@@ -14,18 +14,12 @@ class GeminiToOpenAiStream(private val model: String) {
     private val id = "chatcmpl_gemini_stream"
 
     fun feed(chunk: String): String {
-        buffer.append(chunk)
         val out = StringBuilder()
-        while (true) {
-            val idx = buffer.indexOf("\n\n")
-            if (idx < 0) break
-            val event = buffer.substring(0, idx); buffer.deleteRange(0, idx + 2)
-            for (line in event.lineSequence()) {
-                val data = line.removePrefix("data:").trim()
-                if (data.isEmpty() || data == line || data == "[DONE]") continue
-                val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
-                process(obj, out)
-            }
+        for (raw in framer.frame(chunk)) {
+            val data = raw.trim()
+            if (data.isEmpty() || data == "[DONE]") continue
+            val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
+            process(obj, out)
         }
         return out.toString()
     }

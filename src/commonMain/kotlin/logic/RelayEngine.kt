@@ -242,14 +242,17 @@ class RelayEngine(
         // producer 捕获上游异常存入 openError（不外抛，避免 cancel scope 抢占我们的重试异常）
         var openError: Throwable? = null
         val chunks = this@coroutineScope.produce<String>(capacity = 1) {
+            // 增量 UTF-8 解码：跨 chunk 被拆开的多字节字符（中文/emoji）不再逐块 decodeToString 产生替换字符。
+            val utf8 = logic.protocol.Utf8StreamDecoder()
             try {
                 client.stream(request).collect { chunk ->
                     when (chunk) {
-                        is NetonHttpStreamChunk.Bytes -> send(chunk.bytes.decodeToString())
+                        is NetonHttpStreamChunk.Bytes -> { val s = utf8.decode(chunk.bytes); if (s.isNotEmpty()) send(s) }
                         is NetonHttpStreamChunk.Text -> send(chunk.text)
                         is NetonHttpStreamChunk.End -> {}
                     }
                 }
+                val tail = utf8.flush(); if (tail.isNotEmpty()) send(tail)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Throwable) {

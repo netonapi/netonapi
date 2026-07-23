@@ -28,7 +28,7 @@ object AnthropicUsageExtractor {
  * message_delta.usage 给 output（累积取最后）。合并成一个 Usage。
  */
 class AnthropicSseUsageAccumulator : StreamUsageAccumulator {
-    private val buffer = StringBuilder()
+    private val framer = logic.protocol.SseEventFramer()
     private val json = Json { ignoreUnknownKeys = true }
     private var input = 0
     private var output = 0
@@ -38,23 +38,16 @@ class AnthropicSseUsageAccumulator : StreamUsageAccumulator {
     private var terminal = false
 
     override fun feed(chunk: String) {
-        buffer.append(chunk)
-        while (true) {
-            val idx = buffer.indexOf("\n\n")
-            if (idx < 0) break
-            val event = buffer.substring(0, idx)
-            buffer.deleteRange(0, idx + 2)
-            for (line in event.lineSequence()) {
-                val data = line.removePrefix("data:").trim()
-                if (data.isEmpty() || data == line || data == "[DONE]") continue
-                val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
-                // message_stop = 协议终止标记
-                if (obj["type"]?.jsonPrimitive?.contentOrNull == "message_stop") terminal = true
-                // message_start: {"type":"message_start","message":{"usage":{"input_tokens":..}}}
-                (obj["message"] as? JsonObject)?.get("usage")?.let { applyUsage(it as? JsonObject) }
-                // message_delta: {"type":"message_delta","usage":{"output_tokens":..}}
-                (obj["usage"] as? JsonObject)?.let { applyUsage(it) }
-            }
+        for (raw in framer.frame(chunk)) {
+            val data = raw.trim()
+            if (data.isEmpty() || data == "[DONE]") continue
+            val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
+            // message_stop = 协议终止标记
+            if (obj["type"]?.jsonPrimitive?.contentOrNull == "message_stop") terminal = true
+            // message_start: {"type":"message_start","message":{"usage":{"input_tokens":..}}}
+            (obj["message"] as? JsonObject)?.get("usage")?.let { applyUsage(it as? JsonObject) }
+            // message_delta: {"type":"message_delta","usage":{"output_tokens":..}}
+            (obj["usage"] as? JsonObject)?.let { applyUsage(it) }
         }
     }
 

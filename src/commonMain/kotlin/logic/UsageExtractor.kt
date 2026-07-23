@@ -28,34 +28,31 @@ object UsageExtractor {
  * feed 输入与转发给客户端的块完全相同——只观察不修改。
  */
 class SseUsageAccumulator {
-    private val buffer = StringBuilder()
+    private val framer = logic.protocol.SseEventFramer()
     private var last: Usage? = null
-    private var terminal = false
+    private var doneSeen = false
+    private val seenIdx = mutableSetOf<Int>()
+    private val finishedIdx = mutableSetOf<Int>()
     private val json = Json { ignoreUnknownKeys = true }
 
     fun feed(chunk: String) {
-        buffer.append(chunk)
-        // 按事件边界（空行）切；余量留在 buffer 处理撕裂
-        while (true) {
-            val idx = buffer.indexOf("\n\n")
-            if (idx < 0) break
-            val event = buffer.substring(0, idx)
-            buffer.deleteRange(0, idx + 2)
-            for (line in event.lineSequence()) {
-                val data = line.removePrefix("data:").trim()
-                if (data.isEmpty() || data == line) continue
-                if (data == "[DONE]") { terminal = true; continue }
-                val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
-                (obj["usage"] as? JsonObject)?.let { last = UsageExtractor.fromUsageObject(it) }
-                // 非空 finish_reason 也是终止标记（有的上游不发 [DONE]）
-                (obj["choices"] as? JsonArray)?.forEach { c ->
-                    val fr = (c as? JsonObject)?.get("finish_reason")
-                    if (fr != null && fr !is JsonNull && fr.jsonPrimitive.contentOrNull?.isNotEmpty() == true) terminal = true
-                }
+        for (raw in framer.frame(chunk)) {
+            val data = raw.trim()
+            if (data.isEmpty()) continue
+            if (data == "[DONE]") { doneSeen = true; continue }
+            val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
+            (obj["usage"] as? JsonObject)?.let { last = UsageExtractor.fromUsageObject(it) }
+            (obj["choices"] as? JsonArray)?.forEach { c ->
+                val co = c as? JsonObject ?: return@forEach
+                val idx = co["index"]?.jsonPrimitive?.intOrNull ?: 0
+                seenIdx += idx
+                val fr = co["finish_reason"]
+                if (fr != null && fr !is JsonNull && fr.jsonPrimitive.contentOrNull?.isNotEmpty() == true) finishedIdx += idx
             }
         }
     }
 
     fun usage(): Usage? = last
-    fun terminalSeen(): Boolean = terminal
+    // [DONE] 是 OpenAI 绝对终止；无 [DONE] 时，所有已观察到的 choice index 都必须 finish（n>1 严谨）。
+    fun terminalSeen(): Boolean = doneSeen || (seenIdx.isNotEmpty() && finishedIdx.containsAll(seenIdx))
 }

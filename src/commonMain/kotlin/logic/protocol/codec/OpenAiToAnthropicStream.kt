@@ -11,7 +11,7 @@ import kotlinx.serialization.json.*
 class OpenAiToAnthropicStream(private val model: String) {
 
     private val json = Json { }
-    private val buffer = StringBuilder()
+    private val framer = logic.protocol.SseEventFramer()
 
     private var started = false
     private var textBlockOpen = false
@@ -27,19 +27,12 @@ class OpenAiToAnthropicStream(private val model: String) {
     private var outputTokens = 0
 
     fun feed(chunk: String): String {
-        buffer.append(chunk)
         val out = StringBuilder()
-        while (true) {
-            val idx = buffer.indexOf("\n\n")
-            if (idx < 0) break
-            val event = buffer.substring(0, idx)
-            buffer.deleteRange(0, idx + 2)
-            for (line in event.lineSequence()) {
-                val data = line.removePrefix("data:").trim()
-                if (data.isEmpty() || data == line || data == "[DONE]") continue
-                val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
-                processChunk(obj, out)
-            }
+        for (raw in framer.frame(chunk)) {
+            val data = raw.trim()
+            if (data.isEmpty() || data == "[DONE]") continue
+            val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
+            processChunk(obj, out)
         }
         return out.toString()
     }
