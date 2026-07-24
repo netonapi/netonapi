@@ -19,8 +19,8 @@ interface ProtocolAdapter {
     /** 非流式响应体 → usage。 */
     fun extractUsage(responseBody: String): Usage?
 
-    /** 流式旁路累加器（喂入透传的每个文本块）。 */
-    fun streamUsageAccumulator(): StreamUsageAccumulator
+    /** 流式旁路累加器（喂入透传的每个文本块）。requestBody 用于按协议解析期望 candidate 数（OpenAI n / Gemini candidateCount）。 */
+    fun streamUsageAccumulator(requestBody: String): StreamUsageAccumulator
 
     /** 协议原生 error JSON。 */
     fun errorBody(code: String, message: String): String

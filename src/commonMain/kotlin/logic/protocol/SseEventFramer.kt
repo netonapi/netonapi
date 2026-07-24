@@ -30,10 +30,11 @@ class SseEventFramer {
 
     /** 归一行尾（\r\n / \r → \n），并处理跨 chunk 被拆开的 CRLF（上一 chunk 末尾的 \r）。 */
     private fun appendNormalized(chunk: String) {
+        if (chunk.isEmpty()) return  // 空 chunk 不得消费 pendingCr（否则后续 \n 会被误当第二个换行造假边界）
         var i = 0
         if (pendingCr) {
             pendingCr = false
-            if (chunk.isNotEmpty() && chunk[0] == '\n') i = 1  // 上一 chunk 的 \r 与本 chunk 的 \n 组成 CRLF
+            if (chunk[0] == '\n') i = 1  // 上一 chunk 的 \r 与本 chunk 的 \n 组成 CRLF
         }
         while (i < chunk.length) {
             val c = chunk[i]

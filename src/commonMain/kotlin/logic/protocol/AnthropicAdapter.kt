@@ -24,7 +24,8 @@ object AnthropicAdapter : ProtocolAdapter {
 
     override fun extractUsage(responseBody: String): Usage? = AnthropicUsageExtractor.fromJson(responseBody)
 
-    override fun streamUsageAccumulator(): StreamUsageAccumulator = AnthropicUsageExtractor.accumulator()
+    // Anthropic Messages 固定单响应，无 n；requestBody 不需要，终止判定用 message_stop。
+    override fun streamUsageAccumulator(requestBody: String): StreamUsageAccumulator = AnthropicUsageExtractor.accumulator()
 
     override fun errorBody(code: String, message: String): String {
         val m = kotlinx.serialization.json.JsonPrimitive(message).toString()

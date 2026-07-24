@@ -228,7 +228,7 @@ class RelayEngine(
 
         // 流式：先确认上游首字节再提交 downstream——否则 downstream 一旦提交（committed），
         // 首字节前上游失败时无法换渠道重试（会撞 ResponseAlreadyCommitted）。
-        val accumulator = upstream.streamUsageAccumulator()
+        val accumulator = upstream.streamUsageAccumulator(rewritten.body)
         val streamTransformer = transform.streamTransformerFactory?.invoke()
         return streamWithPreflight(ctx, client, request, accumulator, streamTransformer, token, channel, keyId, rewritten, group, startMs)
     }

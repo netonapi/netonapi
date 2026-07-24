@@ -1,11 +1,16 @@
 package logic.protocol
 
+import logic.protocol.codec.AnthropicToOpenAiStream
+import logic.protocol.codec.OpenAiToAnthropicStream
+import logic.protocol.codec.GeminiToOpenAiStream
+import logic.protocol.codec.OpenAiToGeminiStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
+import kotlin.test.assertFails
 
-/** SSE 分帧 / 增量 UTF-8 解码 / 多 candidate 终止标记的回归。 */
+/** SSE 分帧 / 严格增量 UTF-8 / 期望 candidate 终止 / 各协议与 codec 接线的回归。 */
 class SseStreamingTest {
 
     // ===== SseEventFramer =====
@@ -24,21 +29,23 @@ class SseStreamingTest {
 
     @Test fun framer_crlf_split_across_chunks() {
         val f = SseEventFramer()
-        assertEquals(emptyList<String>(), f.frame("data: x\r")) // \r 落在本 chunk 末尾
-        assertEquals(listOf("x"), f.frame("\n\r\n"))            // 下一 chunk 的 \n 属于上一个 CRLF
+        assertEquals(emptyList<String>(), f.frame("data: x\r"))
+        assertEquals(listOf("x"), f.frame("\n\r\n"))
+    }
+
+    @Test fun framer_empty_chunk_preserves_pending_cr() {
+        val f = SseEventFramer()
+        assertEquals(emptyList<String>(), f.frame("data: x\r")) // 末尾 \r 挂起
+        assertEquals(emptyList<String>(), f.frame(""))          // 空 chunk 不得清 pendingCr
+        assertEquals(emptyList<String>(), f.frame("\n"))        // 属于上一个 CRLF 的行结束，不是空行
+        assertEquals(listOf("x"), f.frame("\r\n"))              // 真正的空行才产生事件
     }
 
     @Test fun framer_multiline_data() {
         assertEquals(listOf("line1\nline2"), SseEventFramer().frame("data: line1\ndata: line2\n\n"))
     }
 
-    @Test fun framer_data_split_mid_line() {
-        val f = SseEventFramer()
-        assertEquals(emptyList<String>(), f.frame("data: {\"a\":"))
-        assertEquals(listOf("{\"a\":1}"), f.frame("1}\n\n"))
-    }
-
-    // ===== Utf8StreamDecoder =====
+    // ===== Utf8StreamDecoder（严格） =====
 
     @Test fun utf8_reassembles_byte_at_a_time() {
         val d = Utf8StreamDecoder()
@@ -62,33 +69,112 @@ class SseStreamingTest {
         }
     }
 
-    // ===== 多 candidate 终止 =====
+    @Test fun utf8_flush_throws_on_truncated_2byte() {
+        val d = Utf8StreamDecoder()
+        val two = "é".encodeToByteArray()           // 2-byte
+        assertEquals("", d.decode(byteArrayOf(two[0]))) // 只喂 lead
+        assertFails { d.flush() }                     // EOF 截断 → 抛，不吐 U+FFFD
+    }
 
-    @Test fun openai_terminal_requires_all_observed_choices_finished() {
-        val acc = OpenAiAdapter.streamUsageAccumulator()
+    @Test fun utf8_flush_throws_on_truncated_3byte() {
+        val d = Utf8StreamDecoder()
+        val three = "你".encodeToByteArray()          // E4 BD A0
+        assertEquals("", d.decode(byteArrayOf(three[0], three[1])))
+        assertFails { d.flush() }
+    }
+
+    @Test fun utf8_decode_throws_on_invalid_lead() {
+        assertFails { Utf8StreamDecoder().decode(byteArrayOf(0xFF.toByte(), 0x41)) }
+    }
+
+    @Test fun utf8_flush_throws_on_lone_continuation() {
+        val d = Utf8StreamDecoder()
+        assertEquals("", d.decode(byteArrayOf(0x80.toByte()))) // 孤立 continuation：缓冲
+        assertFails { d.flush() }
+    }
+
+    // ===== 期望 candidate 终止（OpenAI n） =====
+
+    @Test fun openai_terminal_needs_all_expected_choices() {
+        val acc = OpenAiAdapter.streamUsageAccumulator("""{"n":2}""")
         acc.feed("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a\"}},{\"index\":1,\"delta\":{\"content\":\"b\"}}]}\n\n")
         assertFalse(acc.terminalSeen())
         acc.feed("data: {\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}]}\n\n")
         assertFalse(acc.terminalSeen(), "index 1 未 finish 不应终止")
         acc.feed("data: {\"choices\":[{\"index\":1,\"finish_reason\":\"stop\"}]}\n\n")
-        assertTrue(acc.terminalSeen(), "两个 candidate 都 finish → 终止")
+        assertTrue(acc.terminalSeen())
+    }
+
+    @Test fun openai_missing_expected_candidate_is_not_terminal() {
+        // 请求 n=2，损坏上游只发 index 0 并 finish，index 1 从未出现 → 必须判非终止
+        val acc = OpenAiAdapter.streamUsageAccumulator("""{"n":2}""")
+        acc.feed("data: {\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}]}\n\n")
+        assertFalse(acc.terminalSeen(), "n=2 但仅 index 0 出现，不应判完整")
     }
 
     @Test fun openai_done_is_absolute_terminal() {
-        val acc = OpenAiAdapter.streamUsageAccumulator()
+        val acc = OpenAiAdapter.streamUsageAccumulator("""{"n":1}""")
         acc.feed("data: {\"choices\":[{\"index\":0,\"delta\":{}}]}\n\ndata: [DONE]\n\n")
         assertTrue(acc.terminalSeen())
     }
 
-    @Test fun openai_no_terminal_when_truncated() {
-        val acc = OpenAiAdapter.streamUsageAccumulator()
-        acc.feed("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a\"}}]}\n\n")
-        assertFalse(acc.terminalSeen(), "无 finish_reason / [DONE] 的中断流不应判终止")
+    @Test fun openai_terminal_survives_crlf() {
+        val acc = OpenAiAdapter.streamUsageAccumulator("""{"n":1}""")
+        acc.feed("data: {\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}]}\r\n\r\n")
+        assertTrue(acc.terminalSeen())
     }
 
-    @Test fun openai_terminal_survives_crlf() {
-        val acc = OpenAiAdapter.streamUsageAccumulator()
-        acc.feed("data: {\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}]}\r\n\r\n")
-        assertTrue(acc.terminalSeen(), "CRLF 分帧下 finish_reason 仍应被解析")
+    // ===== Anthropic message_stop =====
+
+    @Test fun anthropic_message_stop_lf_and_crlf() {
+        val lf = AnthropicAdapter.streamUsageAccumulator("")
+        lf.feed("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+        assertTrue(lf.terminalSeen())
+        val crlf = AnthropicAdapter.streamUsageAccumulator("")
+        crlf.feed("event: message_stop\r\ndata: {\"type\":\"message_stop\"}\r\n\r\n")
+        assertTrue(crlf.terminalSeen())
+    }
+
+    @Test fun anthropic_message_stop_char_fragmented() {
+        val acc = AnthropicAdapter.streamUsageAccumulator("")
+        val full = "data: {\"type\":\"message_stop\"}\n\n"
+        for (ch in full) acc.feed(ch.toString())
+        assertTrue(acc.terminalSeen())
+    }
+
+    @Test fun anthropic_missing_stop_is_not_terminal() {
+        val acc = AnthropicAdapter.streamUsageAccumulator("")
+        acc.feed("data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n\n")
+        assertFalse(acc.terminalSeen())
+    }
+
+    // ===== Gemini candidateCount =====
+
+    @Test fun gemini_terminal_needs_all_candidates() {
+        val acc = GeminiAdapter.streamUsageAccumulator("""{"generationConfig":{"candidateCount":2}}""")
+        acc.feed("data: {\"candidates\":[{\"index\":0,\"finishReason\":\"STOP\"}]}\n\n")
+        assertFalse(acc.terminalSeen(), "candidate 1 未出现不应终止")
+        acc.feed("data: {\"candidates\":[{\"index\":1,\"finishReason\":\"STOP\"}]}\n\n")
+        assertTrue(acc.terminalSeen())
+    }
+
+    // ===== 四个 codec CRLF 接线 smoke =====
+
+    @Test fun codecs_pass_text_through_crlf() {
+        val a2o = AnthropicToOpenAiStream("m").feed(
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\r\n\r\n")
+        assertTrue(a2o.contains("hi"), "AnthropicToOpenAiStream CRLF: $a2o")
+
+        val o2a = OpenAiToAnthropicStream("m").feed(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n")
+        assertTrue(o2a.contains("hi"), "OpenAiToAnthropicStream CRLF: $o2a")
+
+        val g2o = GeminiToOpenAiStream("m").feed(
+            "data: {\"candidates\":[{\"index\":0,\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\r\n\r\n")
+        assertTrue(g2o.contains("hi"), "GeminiToOpenAiStream CRLF: $g2o")
+
+        val o2g = OpenAiToGeminiStream("m").feed(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n")
+        assertTrue(o2g.contains("hi"), "OpenAiToGeminiStream CRLF: $o2g")
     }
 }

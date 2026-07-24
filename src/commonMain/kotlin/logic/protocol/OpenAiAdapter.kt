@@ -1,5 +1,6 @@
 package logic.protocol
 
+import kotlinx.serialization.json.*
 import logic.RequestRewriter
 import logic.Rewritten
 import logic.SseUsageAccumulator
@@ -23,12 +24,18 @@ object OpenAiAdapter : ProtocolAdapter {
 
     override fun extractUsage(responseBody: String): Usage? = UsageExtractor.fromJson(responseBody)
 
-    override fun streamUsageAccumulator(): StreamUsageAccumulator = object : StreamUsageAccumulator {
-        private val acc = SseUsageAccumulator()
+    override fun streamUsageAccumulator(requestBody: String): StreamUsageAccumulator = object : StreamUsageAccumulator {
+        private val acc = SseUsageAccumulator(expectedChoices(requestBody))
         override fun feed(chunk: String) = acc.feed(chunk)
         override fun usage() = acc.usage()
         override fun terminalSeen() = acc.terminalSeen()
     }
+
+    private fun expectedChoices(body: String): Int =
+        runCatching {
+            kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                .parseToJsonElement(body).jsonObject["n"]?.jsonPrimitive?.intOrNull
+        }.getOrNull()?.coerceAtLeast(1) ?: 1
 
     override fun errorBody(code: String, message: String): String {
         val m = kotlinx.serialization.json.JsonPrimitive(message).toString()

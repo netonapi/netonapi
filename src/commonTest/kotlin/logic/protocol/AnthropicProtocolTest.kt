@@ -31,7 +31,7 @@ class AnthropicProtocolTest {
 
     @Test
     fun anthropicStreamUsageFromStartAndDelta() {
-        val acc = AnthropicAdapter.streamUsageAccumulator()
+        val acc = AnthropicAdapter.streamUsageAccumulator("")
         acc.feed("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1000,\"output_tokens\":1}}}\n\n")
         acc.feed("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n\n")
         acc.feed("event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":500}}\n\n")

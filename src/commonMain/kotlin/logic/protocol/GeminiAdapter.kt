@@ -35,10 +35,10 @@ object GeminiAdapter : ProtocolAdapter {
         )
     }
 
-    override fun streamUsageAccumulator(): StreamUsageAccumulator = object : StreamUsageAccumulator {
+    override fun streamUsageAccumulator(requestBody: String): StreamUsageAccumulator = object : StreamUsageAccumulator {
         private val framer = SseEventFramer()
         private var last: Usage? = null
-        private val seenIdx = mutableSetOf<Int>()
+        private val expected = candidateCount(requestBody)
         private val finishedIdx = mutableSetOf<Int>()
         override fun feed(chunk: String) {
             for (raw in framer.frame(chunk)) {
@@ -51,18 +51,23 @@ object GeminiAdapter : ProtocolAdapter {
                         completionTokens = it["candidatesTokenCount"]?.jsonPrimitive?.intOrNull ?: 0,
                     )
                 }
-                // 终态 finishReason（STOP/MAX_TOKENS/SAFETY 等非空）= 该 candidate 终止；n>1 需所有已观察 candidate 都终止
+                // 终态 finishReason（STOP/MAX_TOKENS/SAFETY 等非空）= 该 candidate 终止；需期望的全部 candidate 都终止
                 (obj["candidates"] as? JsonArray)?.forEach { c ->
                     val co = c as? JsonObject ?: return@forEach
                     val idx = co["index"]?.jsonPrimitive?.intOrNull ?: 0
-                    seenIdx += idx
                     if (!co["finishReason"]?.jsonPrimitive?.contentOrNull.isNullOrEmpty()) finishedIdx += idx
                 }
             }
         }
         override fun usage() = last
-        override fun terminalSeen() = seenIdx.isNotEmpty() && finishedIdx.containsAll(seenIdx)
+        override fun terminalSeen() = expected > 0 && (0 until expected).all { it in finishedIdx }
     }
+
+    private fun candidateCount(body: String): Int =
+        runCatching {
+            (json.parseToJsonElement(body).jsonObject["generationConfig"] as? JsonObject)
+                ?.get("candidateCount")?.jsonPrimitive?.intOrNull
+        }.getOrNull()?.coerceAtLeast(1) ?: 1
 
     override fun errorBody(code: String, message: String): String {
         val m = JsonPrimitive(message).toString()

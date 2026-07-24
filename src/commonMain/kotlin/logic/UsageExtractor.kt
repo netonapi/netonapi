@@ -27,11 +27,10 @@ object UsageExtractor {
  * 流式直通时旁路累积 SSE 文本，记录最后一个含 usage 的 data 行（OpenAI include_usage 尾包）。
  * feed 输入与转发给客户端的块完全相同——只观察不修改。
  */
-class SseUsageAccumulator {
+class SseUsageAccumulator(private val expectedChoices: Int = 1) {
     private val framer = logic.protocol.SseEventFramer()
     private var last: Usage? = null
     private var doneSeen = false
-    private val seenIdx = mutableSetOf<Int>()
     private val finishedIdx = mutableSetOf<Int>()
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -45,7 +44,6 @@ class SseUsageAccumulator {
             (obj["choices"] as? JsonArray)?.forEach { c ->
                 val co = c as? JsonObject ?: return@forEach
                 val idx = co["index"]?.jsonPrimitive?.intOrNull ?: 0
-                seenIdx += idx
                 val fr = co["finish_reason"]
                 if (fr != null && fr !is JsonNull && fr.jsonPrimitive.contentOrNull?.isNotEmpty() == true) finishedIdx += idx
             }
@@ -53,6 +51,7 @@ class SseUsageAccumulator {
     }
 
     fun usage(): Usage? = last
-    // [DONE] 是 OpenAI 绝对终止；无 [DONE] 时，所有已观察到的 choice index 都必须 finish（n>1 严谨）。
-    fun terminalSeen(): Boolean = doneSeen || (seenIdx.isNotEmpty() && finishedIdx.containsAll(seenIdx))
+    // [DONE] 是 OpenAI 绝对终止；无 [DONE] 时，请求期望的全部 n 个 choice index（0..n-1）都必须 finish——
+    // 仅"已观察到的都 finish"无法发现请求 n=2 但 index 1 从未出现的截断。
+    fun terminalSeen(): Boolean = doneSeen || (expectedChoices > 0 && (0 until expectedChoices).all { it in finishedIdx })
 }

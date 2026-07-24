@@ -146,9 +146,14 @@
   时**所有已观察 choice index 都须 finish**（n>1 严谨）；Anthropic `message_stop`；Gemini 所有已观察 candidate 都终态 `finishReason`。
   上游出错或传输层 EOF 但未见终止标记 = 上游截断 → PARTIAL，**不调 transformer.finish()**（不伪造 [DONE]/message_stop），
   按网络失败策略计 Key 失败（首字节后不重试渠道）。harness S9：无伪造 [DONE]、status=partial、per-request 价四项一致、Key failCount≥1、在途=0、有限时间。
-- **SSE 解析基础（Codex 追加，已闭环）**：抽共享 `SseEventFramer`（3 累加器 + 4 流 codec 复用）——支持 `\n\n`/`\r\n\r\n`/`\r\r`、
-  边界或行被拆在任意 chunk、多行 data 字段（不再七处各修字符串查找）；producer 用增量 `Utf8StreamDecoder` 缓冲跨 chunk 被拆开的
-  多字节字符（中文/emoji 不再逐块 decodeToString 产生 U+FFFD）。单测覆盖 CRLF、任意 chunk 分片、逐字节 UTF-8 拆分、多 candidate 终止。
+- **SSE 解析基础（Codex 两轮追加，已闭环）**：抽共享 `SseEventFramer`（3 累加器 + 4 流 codec 复用）——支持 `\n\n`/`\r\n\r\n`/`\r\r`、
+  边界或行被拆在任意 chunk、多行 data 字段；**空 chunk 不清 pendingCr**（否则后续 \n 造假边界）。producer 用增量 `Utf8StreamDecoder`
+  **严格解码**：完整前缀非法 UTF-8 或 EOF 仍有不完整尾部都抛 CharacterCodingException（绝不吐 U+FFFD）→ producer 记 openError → PARTIAL。
+  终止判定按**请求期望的 candidate 数**（OpenAI `n` / Gemini `candidateCount`，默认 1）：0..n-1 全 finish（或 OpenAI `[DONE]` 绝对终止）——
+  仅"已观察都 finish"无法发现 n=2 但 index 1 从未出现的截断。单测：CRLF/任意分片/空 chunk pendingCr、逐字节 UTF-8、非法 lead/孤立 continuation/
+  EOF 截断 2·3-byte、期望缺失 candidate 反例、Anthropic message_stop(LF/CRLF/逐字符/缺失)、Gemini candidateCount=2、四 codec CRLF 接线。
+  **框架待办（不阻塞 V004）**：Neton 自带 `Flow<NetonHttpStreamChunk>.parseSseEvents()` 仍逐 byte chunk decodeToString（同类 UTF-8 bug）；
+  gateway 当前不走它，后续应把共享 framer/decoder 上提框架，避免两套 SSE 实现漂移。
 - **⚠️ 未闭环 P0（Codex 评审，14333ca 假闭环，已重新打开，不得标记完成）**：
   - **结算幂等未成立**：ref=usage:$logId，logId 每次重放都变→键不稳定；且重放时 debitInTx 跳余额但 bill 仍加 quotaUsed
     →破坏四项不变量。S8 仅测唯一索引、未走真实 bill 重放。需 durable settlement：请求入口稳定 settlementId（客户端
