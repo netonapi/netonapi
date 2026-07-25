@@ -69,9 +69,21 @@
   二进制运行时切换，故定义为两种构建产物：`-Pneton.database.driver=postgres`（默认）与 `=mysql`，分别发布
   二进制/镜像标签，CI 对两者跑同一组可靠性测试。gateway 迁移嵌入方言已跟随 `neton.database.driver`
   （postgres→postgresql / mysql→mysql，见 build.gradle.kts）。启动应校验配置库类型与编译驱动一致、不一致即退出（待办）。
-  **当前状态**：PostgreSQL 已端到端验证（harness 9/9）；MySQL 为代码结构预留——迁移脚本已备（sql/mysql/），
-  账务两条自增 SQL（`x = x + delta`）在 InnoDB 语法上成立，但命名参数/affected rows/事务回读/并发结果
-  必须通过真实 MySQL harness 后才能宣布"MySQL 已支持"。迁移引擎的 search_path 复位为 PostgreSQL 专属（MySQL 分支不发）。
+  **当前状态**：PostgreSQL 已端到端验证（harness 13/13）；MySQL **尚不可运行**，见下方实测结论。
+  迁移引擎的 search_path 复位为 PostgreSQL 专属（MySQL 分支不发）。
+
+- **⚠️ MySQL 可运行性实测（2026-07，首次真实执行）**：mysql 构建产物**可链接**（`-Pneton.database.driver=mysql`
+  linkDebugExecutable 成功），gateway 自身的 MySQL 脚本**已修好并跑通**（V001 八表 + V003 唯一索引/cooldown，
+  含与 PG 对等的重复 ref 预检；此前 TEXT 带 DEFAULT 被 MySQL 拒绝，从未执行成功过）。
+  **但整机迁移仍失败**：NewGate 依赖的上游模块 **infra(6)/member(11)/payment(12)/platform(2) 共 31 个迁移脚本
+  只有 PostgreSQL 版本、无 MySQL 版本**，其 build.gradle 亦硬编码 `dialects = ["postgresql"]`，
+  在 mysql 构建下被整体跳过 → gateway V002 因 `system_menus` 不存在而失败。
+  **结论**：MySQL 支持不是 gateway 单模块问题，前置是**上游 4 个模块 31 个脚本的 MySQL 移植 + 方言派生**
+  （范围在 neton-application 模块栈，非 NewGate 自有代码）。在此之前：
+  - 不得宣称"MySQL 已支持"；
+  - **V004「PG/MySQL 从第一个状态机测试起并行验证」的硬约束当前无法满足**——MySQL 侧连基础表都建不起来。
+    可选路径：(a) 先移植上游 31 脚本再开 V004；(b) V004 先 PG 落地、MySQL 侧以「gateway 单模块 schema + 状态机
+    单元测试」并行验证（不含跨模块 E2E），待上游移植完成再补整机 MySQL harness。此为待决策项。
 
 ## M2 Slice 1：Claude /v1/messages 同协议透传（已落地）
 
