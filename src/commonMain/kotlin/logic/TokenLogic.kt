@@ -4,8 +4,8 @@ import model.GatewayToken
 import neton.database.dsl.*
 import neton.logging.Logger
 import neton.security.digest.Sha256
+import neton.security.random.SecureRandom
 import table.GatewayTokenTable
-import kotlin.random.Random
 
 data class IssuedToken(val plaintext: String, val record: GatewayToken)
 
@@ -58,8 +58,9 @@ class TokenLogic(private val log: Logger) {
     companion object {
         private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
-        fun generateKey(): String =
-            "sk-" + buildString(48) { repeat(48) { append(ALPHABET[Random.nextInt(ALPHABET.length)]) } }
+        // API 令牌必须用 CSPRNG：kotlin.random.Random 可由若干输出推断内部状态并预测后续令牌。
+        // SecureRandom.string 内部用拒绝采样，消除 62 字符表在 256 上的取模偏置（否则熵降低）。
+        fun generateKey(): String = "sk-" + SecureRandom.string(48, ALPHABET)
 
         fun hashKey(plaintext: String): String = Sha256.hex(plaintext)
 
