@@ -166,15 +166,28 @@
   EOF 截断 2·3-byte、期望缺失 candidate 反例、Anthropic message_stop(LF/CRLF/逐字符/缺失)、Gemini candidateCount=2、四 codec CRLF 接线。
   **框架待办（不阻塞 V004）**：Neton 自带 `Flow<NetonHttpStreamChunk>.parseSseEvents()` 仍逐 byte chunk decodeToString（同类 UTF-8 bug）；
   gateway 当前不走它，后续应把共享 framer/decoder 上提框架，避免两套 SSE 实现漂移。
-- **⚠️ 未闭环 P0（Codex 评审，14333ca 假闭环，已重新打开，不得标记完成）**：
-  - **结算幂等未成立**：ref=usage:$logId，logId 每次重放都变→键不稳定；且重放时 debitInTx 跳余额但 bill 仍加 quotaUsed
-    →破坏四项不变量。S8 仅测唯一索引、未走真实 bill 重放。需 durable settlement：请求入口稳定 settlementId（客户端
-    Idempotency-Key 可作外部键）、usage/settlement 表对 settlementId 唯一、首插成功才做全部四项、重复整体 no-op(AlreadySettled)、
-    同 key 不同用户/金额/摘要须报冲突。
-  - **token budget 非硬 cap**：已撤回"超支后禁用 token"的假 cap（曾滥用 status=0）；当前仅软预算预检+告警。硬预算需 reserve/finalize
-    （请求前条件预留、完成后按实际结算释放差额，预算耗尽用独立状态表达）。
-  - **结算失败丢收入**：非流式先返 200 再 bill、流式已提交；DB 断连/死锁/5s 超时则已服务未记账。需请求前 durable pending settlement +
-    稳定 settlementId + PG 40001/40P01·MySQL 1213/1205 有界退避重试 + 后台 outbox worker 重放 + finalize 幂等 + 无法建 pending 即拒调上游。
+- **V004 durable settlement（已闭环，harness 17/17）**：设计见 `docs/V004-durable-settlement-design.md`。
+  - **资金占位先行**：请求前按定价快照算保守上界（输出取 max_tokens / 模型 `default_max_output_tokens`，输入以 UTF-8
+    字节数为上界并标 estimated），在**同一事务**内写 settlement + 账户 `reserved_balance` + 令牌 `quota_reserved`；
+    条件更新保证 `balance-reserved_balance >= r` 与 `quota_used+quota_reserved+r <= quota_budget`，
+    affected=0 时区分余额不足/预算不足/令牌不可用（不同错误码）。**预留不成功即拒绝调上游**。
+    **无定价或无法确定输出上限 → 拒绝请求**（此前免费放行是收入泄漏）。
+  - **结算幂等（真闭环）**：台账 ref = `settlement:<CSPRNG settlementId>`，**键稳定**——重放插 0 行即整体 no-op，
+    不再是每次都变的 `usage:$logId`。客户端 `Idempotency-Key` 仅作外部映射键（长度 1..255 校验后存 SHA-256），
+    命中既有记录返回 409 且不重复调上游；fingerprint 用长度前缀编码消除拼接歧义。
+  - **硬预算**：预算在 reserve 阶段条件占位，并发请求不再穿透（此前的「事后禁用 token」假 cap 已撤回）。
+  - **结算失败可恢复**：`SettlementWorker.tick()`（不耦合调度，由 application 装配；另有 admin 端点供运维催办）
+    两阶段取件——短事务 `FOR UPDATE SKIP LOCKED` 打租约并提交，再以固定锁序 token→account→settlement 推进，
+    **不反转锁序**。重放 FINALIZE_PENDING、TTL 释放 RESERVED、TTL 将 UPSTREAM_STARTED 转 MANUAL_REVIEW
+    （**不自动退款**：崩溃时不知上游是否已计费）；退避带 jitter，40001/40P01 视为可重试，超上限转人工。
+  - **usage_log 原子性**：日志维度随 T3 落在 settlement 行，由 finalize 在扣款同事务内写出——既不会被 relay 与
+    finalizer 双写重复计账，worker 重放也能复现同一行。
+  - **能力边界（如实）**：✅ 收入有资金保障（预留先行）；⚠️ **结算自动恢复仅在 payload 已落库之后**——
+    T3 落库本身失败且进程崩溃（C3′）时真实 usage 永久丢失，在线用有界 NonCancellable 重试压低概率，
+    仍失败则保留预留转人工，**不按预留额自动结算**（预留是上界，自动扣会系统性超收）。
+  - 框架侧：`HttpStatus` 补 402/410/413/425/504——此前 `fromCode` 返回 null 会静默回落 502，把「余额不足」
+    伪装成上游故障；未映射码现在显式告警。
+
 - **Key 状态 CAS**：recordKeyFailure/Success 改列级 CAS（重读+条件更新，并发不丢计数、不复活已禁用 Key）；
   429 限流不计永久禁用（仅 5xx/网络/超时/401/403）；reviveChannel 只复位自动禁用(status=2)、保留手动禁用(status=0)。
   E2E：5×500 触发 auto-key 禁用、manual-key 保持 0；revive 后 auto-key 复位、manual 仍 0。
@@ -186,7 +199,7 @@
 - **分类统一（Codex #4）**：非流式 401/403 也计 Key 失败（此前只在流式/throw 路径计）；E2E：非流式 3×403 → failCount=3。
 - **Key 轮转（Codex #5）**：recordKeyFailure 也更新 lastUsedAt → LRU 轮转到其他 Key 不死磕坏 Key。
 - 删死代码 consume()（无调用方且非事务化）。token 中途删除：账户级三表照提交+warn（不回滚，避免已服务请求不计费=收入泄漏，此处推回 Codex #3）。
-- **可靠性 harness（已落地，本机 13/13 绿；S8/S9 断言偏弱待返工）**：`harness/run.sh`（NewGate 仓）一条命令——隔离测试数据库 +
+- **可靠性 harness（已落地，本机 17/17 绿）**：`harness/run.sh`（NewGate 仓）一条命令——隔离测试数据库 +
   假上游（`fakes.py`，含 `/inflight` 在途计数、midabort 模式）+ 真实网关，10 场景 13 断言。⚠️ S8 只测 DB 唯一索引（未走真实
   bill 重放路径）、S9 只验证收块+服务存活（未断言 partial/账务/Key 状态/无伪造终止）——见上"未闭环 P0"，需以稳定 settlementId
   经测试 seam 真实重放、并断言 midstream 的 partial 语义。场景：S1 20 并发四项不变量、
