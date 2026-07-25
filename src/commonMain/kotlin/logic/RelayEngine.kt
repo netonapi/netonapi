@@ -34,7 +34,11 @@ class RelayEngine(
     private val channelLogic: ChannelLogic,
     private val tokenLogic: TokenLogic,
     private val quotaLogic: QuotaLogic,
+    private val settlementLogic: SettlementLogic,
 ) {
+
+    /** 本次请求的资金占位（RelayEngine 每请求实例化，故可用字段持有）。 */
+    private var settlement: model.Settlement? = null
 
     suspend fun relay(ctx: HttpContext, userId: Long, tokenId: Long, inbound: ProtocolAdapter, path: String, rawBodyOverride: String? = null) {
         val startMs = now()
@@ -42,14 +46,6 @@ class RelayEngine(
 
         val token = tokenLogic.get(tokenId)
         if (token == null || token.status != 1) return respondError(ctx, inbound, 401, "invalid_token", "token not found or disabled")
-
-        // 预检：令牌预算 + 账户余额
-        token.quotaBudget?.let { budget ->
-            if (token.quotaUsed >= budget) return respondError(ctx, inbound, 429, "insufficient_quota", "token budget exhausted")
-        }
-        if (quotaLogic.account(userId).balance <= 0) {
-            return respondError(ctx, inbound, 429, "insufficient_quota", "account balance exhausted")
-        }
 
         val group = token.groupOverride?.takeIf { it.isNotBlank() } ?: "default"
         val requestModel = runCatching { RequestRewriter.rewrite(rawBody, DUMMY).requestModel }.getOrElse {
@@ -64,6 +60,42 @@ class RelayEngine(
 
         val candidates = RelayRouter.candidates(channelLogic.listEnabled(), requestModel, group, now())
         if (candidates.isEmpty()) return respondError(ctx, inbound, 503, "no_available_channel", "no channel available for model '$requestModel'")
+
+        // ── 资金占位（V004）：预留成功才允许调上游；无价/无输出上限一律拒绝，不免费放行 ──
+        val price = ModelPriceTable.oneWhere { ModelPrice::model eq requestModel }
+        val ratio = GatewayGroupTable.oneWhere { GatewayGroup::name eq group }?.ratio ?: "1.0"
+        val reserveAmount = when (val rc = ReserveCalc.compute(rawBody, price, ratio)) {
+            is ReserveCalc.Result.NoPrice ->
+                return respondError(ctx, inbound, 400, "model_not_priced", "model '$requestModel' has no pricing configured")
+            is ReserveCalc.Result.NoOutputCap ->
+                return respondError(ctx, inbound, 400, "output_cap_required", "max_tokens is required for model '$requestModel'")
+            is ReserveCalc.Result.Ok -> rc
+        }
+        // 客户端幂等键：先校验原始字节长度（不截断、不哈希超长值），再存定长 SHA-256
+        val idemRaw = ctx.request.header("Idempotency-Key")
+        if (idemRaw != null && idemRaw.encodeToByteArray().size !in 1..255) {
+            return respondError(ctx, inbound, 400, "invalid_idempotency_key", "Idempotency-Key must be 1..255 bytes")
+        }
+        val idem = idemRaw?.let { neton.security.digest.Sha256.hex(it) }
+        val reserved = settlementLogic.reserve(
+            userId = userId, tokenId = tokenId, requestModel = requestModel, endpoint = path,
+            reserveAmount = reserveAmount.amount,
+            pricingSnapshot = pricingSnapshot(price, ratio),
+            estimated = reserveAmount.estimated,
+            clientIdemKey = idem,
+            requestFingerprint = idem?.let { requestFingerprint(ctx, path, rawBody) },
+        )
+        settlement = when (reserved) {
+            is SettlementLogic.ReserveResult.Ok -> reserved.settlement
+            is SettlementLogic.ReserveResult.Duplicate ->
+                return respondError(ctx, inbound, 409, "idempotency_conflict", "this Idempotency-Key is already in use")
+            SettlementLogic.ReserveResult.InsufficientBalance ->
+                return respondError(ctx, inbound, 402, "insufficient_quota", "account balance insufficient for this request")
+            SettlementLogic.ReserveResult.InsufficientBudget ->
+                return respondError(ctx, inbound, 429, "insufficient_quota", "token budget exhausted")
+            SettlementLogic.ReserveResult.TokenUnavailable ->
+                return respondError(ctx, inbound, 401, "invalid_token", "token not found or disabled")
+        }
 
         val tried = mutableSetOf<Long>()
         var lastError: String? = null
@@ -80,6 +112,9 @@ class RelayEngine(
             val transform = buildTransform(inbound, upstream, rawBody, channel, path)
             val key = channelLogic.pickKey(channel.id)
             if (key == null) { lastError = "channel ${channel.id} has no available key"; return@repeat }
+
+            // T2：记录「已向上游发出」——崩溃后不可自动退款（可能已产生真实费用），由 worker TTL 转人工
+            settlement?.let { settlementLogic.markUpstreamStarted(it.settlementId, channel.id) }
 
             val rewritten = transform.rewritten
             val outcome: RelayOutcome? = try {
@@ -112,6 +147,13 @@ class RelayEngine(
                 if (outcome == RelayOutcome.SUCCESS) channelLogic.recordKeySuccess(key.id)
                 return  // 已终态（计费与日志已在 execute 内完成）
             }
+        }
+        // 全部候选在首字节前失败：我们**亲眼观察到**未产生 token 费用，释放预留是安全的
+        // （区别于崩溃——那种情况不知上游是否已计费，走 worker TTL → 人工，见 C2）
+        settlement?.let { s ->
+            val from = bySettlementStatus(s.settlementId)
+            settlementLogic.requestRelease(s.settlementId, from)
+            settlementLogic.release(s.settlementId)
         }
         respondError(ctx, inbound, 503, "no_available_channel", lastError ?: "all channels failed")
     }
@@ -367,37 +409,87 @@ class RelayEngine(
         ttfbMs: Long?,
         status: String = if (usage != null) "ok" else "partial",
     ) {
+        val s = settlement ?: run {
+            log.error("relay bill without reservation model=${rewritten.requestModel}（不应发生）")
+            return
+        }
         val price: ModelPrice? = ModelPriceTable.oneWhere { ModelPrice::model eq rewritten.requestModel }
         val ratio = GatewayGroupTable.oneWhere { GatewayGroup::name eq group }?.ratio ?: "1.0"
         val effectiveUsage = usage ?: Usage()
         val charged = if (price != null) PricingCalc.charge(effectiveUsage, price, ratio) else 0L
         val cost = if (price != null) PricingCalc.cost(effectiveUsage, price, channel.costDiscount) else 0L
-        if (price == null) log.warn("relay unpriced model=${rewritten.requestModel}（放行计零，请配置定价）")
 
-        // 账务全或无：usage_log + 余额扣减 + 台账 + token.quotaUsed 同一事务提交。
-        // 余额/quotaUsed 均用 SQL 自增（x = x + delta），行级锁串行化并发结算，无 version 竞争、无重试丢单。
-        neton.database.dbContext().transaction {
-            val logId = recordLog(token, channel, rewritten, effectiveUsage, group, startMs, status, null, ttfbMs, charged, cost)
-            if (charged > 0) {
-                quotaLogic.debitInTx(token.userId, -charged, "consume", "usage:$logId")
-                // token.quotaUsed 原子自增；deleted=0 守卫：请求中途被删（硬删/软删）时 0 行受影响。
-                val updated = neton.database.dbContext().execute(
-                    "UPDATE gateway_tokens SET quota_used = quota_used + :c WHERE id = :id AND deleted = 0",
-                    mapOf("c" to charged, "id" to token.id),
-                )
-                if (updated == 0L) {
-                    // token 请求中途被删：账户级三表照提交（收入不丢），quotaUsed 略过（per-token 计数已无意义）。
-                    // 不回滚（回滚=已服务请求不计费=收入泄漏）；不变量降级为账户级三项相等。
-                    log.warn("relay bill: token deleted mid-request; account settled, quotaUsed skipped tokenId=${token.id} userId=${token.userId} logId=$logId charged=$charged")
-                } else token.quotaBudget?.let { budget ->
-                    // 软预算告警：并发下预检（quotaUsed>=budget 拒）无法防超支——已服务请求照扣（后付费）。
-                    // 硬预算（reserve/finalize：请求前条件预留、完成后按实际结算释放差额）为独立设计，未落地。
-                    if (token.quotaUsed + charged > budget) {
-                        log.warn("gateway token over soft budget tokenId=${token.id} userId=${token.userId} budget=$budget used=${token.quotaUsed + charged}（硬预算待 reserve/finalize）")
-                    }
+        // T3：先把 usage payload 落库转入 durable 重试态。这一步失败且随后崩溃 = C3′（usage 永久丢失），
+        // 故用 NonCancellable + 有界重试把概率压到最低；仍失败则留在 UPSTREAM_STARTED，由 worker TTL 转人工。
+        val pending = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            var last: SettlementLogic.TransitionResult? = null
+            repeat(3) { attempt ->
+                last = runCatching {
+                    settlementLogic.markFinalizePending(
+                        settlementId = s.settlementId,
+                        usageJson = usageJson(effectiveUsage),
+                        charged = charged, cost = cost,
+                        outcome = status, terminalSeen = usage != null,
+                        channelId = channel.id,
+                        upstreamModel = rewritten.upstreamModel,
+                        ttfbMs = ttfbMs, latencyMs = now() - startMs,
+                        stream = rewritten.stream, usage = effectiveUsage,
+                    )
+                }.getOrElse { e ->
+                    log.warn("settlement T3 attempt=${attempt + 1} failed sid=${s.settlementId}: ${e.message}")
+                    null
                 }
+                if (last is SettlementLogic.TransitionResult.Applied ||
+                    last is SettlementLogic.TransitionResult.AlreadyDone) return@withContext last
+                kotlinx.coroutines.delay(50L * (attempt + 1))
             }
+            last
         }
+        if (pending !is SettlementLogic.TransitionResult.Applied &&
+            pending !is SettlementLogic.TransitionResult.AlreadyDone) {
+            log.error("settlement T3 exhausted sid=${s.settlementId}; reservation held for worker/manual (C3′)")
+            return
+        }
+
+        // usage_log 由 finalize 在扣款同事务内写出（维度已随 T3 落在 settlement 行），此处不再单独记，避免重复计账
+
+        // T4：释放预留 + 按实际扣款 + 台账（稳定幂等键 settlement:<sid>）+ quotaUsed，同一事务
+        when (val r = settlementLogic.finalize(s.settlementId)) {
+            is SettlementLogic.TransitionResult.Applied,
+            is SettlementLogic.TransitionResult.AlreadyDone -> Unit
+            else -> log.error("settlement finalize failed sid=${s.settlementId} r=$r; worker will retry")
+        }
+    }
+
+    /** 当前状态（RESERVED 或 UPSTREAM_STARTED）——释放时作为 CAS 的 from。 */
+    private suspend fun bySettlementStatus(sid: String): String =
+        settlementLogic.bySid(sid)?.status ?: model.Settlement.RESERVED
+
+    private fun usageJson(u: Usage): String =
+        """{"prompt":${u.promptTokens},"completion":${u.completionTokens},""" +
+            """"cacheRead":${u.cacheReadTokens},"cacheWrite":${u.cacheWriteTokens}}"""
+
+    /** reserve 时固化的定价快照：finalize 必须按它计价，中途改价不影响在途请求。 */
+    private fun pricingSnapshot(price: ModelPrice?, ratio: String): String =
+        if (price == null) "{}" else
+            """{"input":"${price.inputPrice}","output":"${price.outputPrice}",""" +
+                """"cacheRead":"${price.cacheReadPrice}","cacheWrite":"${price.cacheWritePrice}",""" +
+                """"perRequest":${price.perRequestPrice},"ratio":"$ratio"}"""
+
+    /**
+     * 请求指纹（V004 §3.2）：**长度前缀编码**后 SHA-256。
+     * 不用分隔符拼接——`a|b` 与 `a` + `|b` 会得到相同原文，导致不同请求碰撞同一指纹。
+     */
+    private fun requestFingerprint(ctx: HttpContext, path: String, rawBody: String): String {
+        fun lp(s: String) = "${s.encodeToByteArray().size}:$s"
+        val ct = ctx.request.header("Content-Type") ?: ""
+        // 影响响应的协议头，排除认证载体与逐跳头
+        val canonical = listOf("Accept", "Anthropic-Version", "Anthropic-Beta")
+            .mapNotNull { h -> ctx.request.header(h)?.let { "$h=$it" } }
+            .sorted().joinToString(",")
+        return neton.security.digest.Sha256.hex(
+            lp("POST") + lp(path) + lp(ct) + lp(canonical) + lp(rawBody)
+        )
     }
 
     /** 识别下游断连（IO/传输层）异常：类名/消息含 IO/Closed/Broken/pipe/reset/Channel。 */
@@ -429,7 +521,12 @@ class RelayEngine(
     }
 
     private suspend fun respondRaw(ctx: HttpContext, status: Int, body: String) {
-        ctx.response.status = HttpStatus.fromCode(status) ?: HttpStatus.BAD_GATEWAY
+        val mapped = HttpStatus.fromCode(status)
+        if (mapped == null) {
+            // 静默回落成 502 会把「余额不足(402)」这类语义错误伪装成上游故障——必须显式告警
+            log.error("relay respond: unmapped HTTP status $status; falling back to 502 (add it to HttpStatus)")
+        }
+        ctx.response.status = mapped ?: HttpStatus.BAD_GATEWAY
         ctx.response.json(body)
     }
 

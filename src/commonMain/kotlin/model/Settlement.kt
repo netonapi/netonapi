@@ -34,6 +34,15 @@ data class Settlement(
     val pricingSnapshot: String = "",
     /** T3 落库的 usage payload */
     val usageJson: String? = null,
+    // usage_log 维度：finalize（含 worker 重放）在同一事务内写出完整日志
+    val upstreamModel: String = "",
+    val ttfbMs: Long? = null,
+    val latencyMs: Long? = null,
+    val stream: Int = 0,
+    val promptTokens: Int = 0,
+    val completionTokens: Int = 0,
+    val cacheReadTokens: Int = 0,
+    val cacheWriteTokens: Int = 0,
     /** 1 = 输入 token 为保守估算（无 tokenizer） */
     val estimated: Int = 0,
     val terminalSeen: Int = 0,

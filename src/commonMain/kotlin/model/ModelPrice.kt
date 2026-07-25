@@ -15,6 +15,8 @@ data class ModelPrice(
     val cacheWritePrice: String = "0",
     /** 按次计价（μUSD/次）；非 null 时 token 价格无效 */
     val perRequestPrice: Long? = null,
+    /** reserve 输出上限：请求未传 max_tokens 时用此值预留；null 且请求未传 → 拒绝请求 */
+    val defaultMaxOutputTokens: Int? = null,
     /** 售价覆盖 JSON（空 = 官方价 × 全局加价率） */
     val saleOverride: String? = null,
     /** 价源：builtin/manual（litellm/openrouter M3 加入） */

@@ -93,7 +93,15 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
                     "WHERE user_id = :uid AND balance - reserved_balance >= :r",
                 mapOf("r" to reserveAmount, "uid" to userId),
             )
-            if (accAffected == 0L) throw ReserveRollback(ReserveResult.InsufficientBalance)
+            if (accAffected == 0L) {
+                // 余额不足：补偿撤销刚才的 token 预留（本事务持该行锁，减回精确等值），净效果为零后正常提交。
+                // 不用抛异常触发回滚——驱动可能吞掉/包装异常类型，导致归因丢失并回落成 500。
+                db.execute(
+                    "UPDATE gateway_tokens SET quota_reserved = GREATEST(quota_reserved - :r, 0) WHERE id = :tid",
+                    mapOf("r" to reserveAmount, "tid" to tokenId),
+                )
+                return@transaction ReserveResult.InsufficientBalance
+            }
 
             // ③ settlement
             val s = SettlementTable.insert(
@@ -112,14 +120,14 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
                 )
             )
             ReserveResult.Ok(s)
-        } } catch (e: ReserveRollback) {
-            // 条件不满足：事务已回滚（token 预留一并撤销），返回归因结果
-            e.result
+        } } catch (e: Throwable) {
+            // 唯一键冲突 = 并发同 idem key：重读既有记录当作重复请求处理，不回落成 500
+            if (clientIdemKey != null) {
+                findByIdemKey(userId, tokenId, endpoint, clientIdemKey)?.let { return ReserveResult.Duplicate(it) }
+            }
+            throw e
         }
     }
-
-    /** 用异常把「条件不满足」传出事务以触发回滚（DSL 无显式 rollback）。 */
-    private class ReserveRollback(val result: ReserveResult) : RuntimeException("reserve rollback")
 
     suspend fun findByIdemKey(userId: Long, tokenId: Long, endpoint: String, idemKey: String): Settlement? =
         SettlementTable.query {
@@ -158,21 +166,38 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
         outcome: String,
         terminalSeen: Boolean,
         channelId: Long? = null,
+        upstreamModel: String = "",
+        ttfbMs: Long? = null,
+        latencyMs: Long? = null,
+        stream: Boolean = false,
+        usage: Usage = Usage(),
     ): TransitionResult = cas(
         settlementId, from = Settlement.UPSTREAM_STARTED, to = Settlement.FINALIZE_PENDING,
-        extraSet = "usage_json = :u, charged = :c, cost = :co, outcome = :o, terminal_seen = :ts" +
+        extraSet = "usage_json = :u, charged = :c, cost = :co, outcome = :o, terminal_seen = :ts, " +
+            "upstream_model = :um, ttfb_ms = :ttfb, latency_ms = :lat, stream = :st, " +
+            "prompt_tokens = :pt, completion_tokens = :ct, cache_read_tokens = :crt, cache_write_tokens = :cwt" +
             (if (channelId != null) ", channel_id = :cid" else ""),
         extraParams = buildMap {
             put("u", usageJson); put("c", charged); put("co", cost)
             put("o", outcome); put("ts", if (terminalSeen) 1 else 0)
+            put("um", upstreamModel); put("ttfb", ttfbMs); put("lat", latencyMs)
+            put("st", if (stream) 1 else 0)
+            put("pt", usage.promptTokens); put("ct", usage.completionTokens)
+            put("crt", usage.cacheReadTokens); put("cwt", usage.cacheWriteTokens)
             if (channelId != null) put("cid", channelId)
         },
         downstream = setOf(Settlement.FINALIZE_PENDING, Settlement.FINALIZED),
     )
 
-    /** T5：首字节前失败/取消/TTL 到期 → 请求释放预留。 */
-    suspend fun requestRelease(settlementId: String): TransitionResult = cas(
-        settlementId, from = Settlement.RESERVED, to = Settlement.RELEASE_PENDING,
+    /**
+     * T5：请求释放预留。
+     *
+     * [from] 允许 RESERVED（未调上游）或 UPSTREAM_STARTED——后者**仅限调用方亲眼观察到**上游在首字节前
+     * 失败（连接错/超时/4xx/5xx），此时确知未产生 token 费用，退款安全。
+     * **崩溃场景不得走这里**（不知道上游是否已计费），必须由 worker TTL → T9 转人工（见 C2）。
+     */
+    suspend fun requestRelease(settlementId: String, from: String = Settlement.RESERVED): TransitionResult = cas(
+        settlementId, from = from, to = Settlement.RELEASE_PENDING,
         downstream = setOf(Settlement.RELEASE_PENDING, Settlement.RELEASED),
     )
 
@@ -259,12 +284,16 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
                 )
             }
 
-            // ② usage_log
+            // ② usage_log（完整维度，与扣款同事务；worker 重放时维度取自 settlement 行）
             val logId = UsageLogTable.insert(
                 UsageLog(
                     userId = s.userId, tokenId = s.tokenId, channelId = s.channelId ?: 0,
-                    requestModel = s.requestModel, upstreamModel = s.requestModel,
+                    requestModel = s.requestModel,
+                    upstreamModel = s.upstreamModel.ifEmpty { s.requestModel },
+                    promptTokens = s.promptTokens, completionTokens = s.completionTokens,
+                    cacheReadTokens = s.cacheReadTokens, cacheWriteTokens = s.cacheWriteTokens,
                     charged = charged, cost = s.cost,
+                    ttfbMs = s.ttfbMs, latencyMs = s.latencyMs, stream = s.stream,
                     status = s.outcome ?: Settlement.OUTCOME_OK,
                 )
             ).id

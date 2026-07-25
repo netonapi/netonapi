@@ -2,6 +2,7 @@ package controller.gateway
 
 import logic.ChannelLogic
 import logic.QuotaLogic
+import logic.SettlementLogic
 import logic.RelayEngine
 import logic.TokenLogic
 import neton.core.annotations.Controller
@@ -21,8 +22,9 @@ class RelayController(
     private val channelLogic: ChannelLogic,
     private val tokenLogic: TokenLogic,
     private val quotaLogic: QuotaLogic,
+    private val settlementLogic: SettlementLogic,
 ) {
-    private val engine by lazy { RelayEngine(log, channelLogic, tokenLogic, quotaLogic) }
+    private val engine by lazy { RelayEngine(log, channelLogic, tokenLogic, quotaLogic, settlementLogic) }
 
     @Post("/chat/completions")
     suspend fun chatCompletions(ctx: HttpContext, identity: Identity) =

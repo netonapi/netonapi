@@ -3,6 +3,7 @@ package controller.gateway
 import kotlinx.serialization.json.*
 import logic.ChannelLogic
 import logic.QuotaLogic
+import logic.SettlementLogic
 import logic.RelayEngine
 import logic.TokenLogic
 import logic.protocol.GeminiAdapter
@@ -24,8 +25,9 @@ class GeminiRelayController(
     private val channelLogic: ChannelLogic,
     private val tokenLogic: TokenLogic,
     private val quotaLogic: QuotaLogic,
+    private val settlementLogic: SettlementLogic,
 ) {
-    private val engine by lazy { RelayEngine(log, channelLogic, tokenLogic, quotaLogic) }
+    private val engine by lazy { RelayEngine(log, channelLogic, tokenLogic, quotaLogic, settlementLogic) }
     private val json = Json { }
 
     @Post("/{modelAction}")

@@ -52,3 +52,16 @@ CREATE INDEX idx_gateway_settlements_retry ON gateway_settlements(status, next_r
 CREATE INDEX idx_gateway_settlements_ttl ON gateway_settlements(status, created_at);
 -- 运营查询：按用户看账
 CREATE INDEX idx_gateway_settlements_user ON gateway_settlements(user_id, created_at);
+
+-- reserve 的输出上限来源：请求未传 max_tokens 时按模型目录的默认上限预留（缺失则拒绝请求，不免费放行）
+ALTER TABLE gateway_model_prices ADD COLUMN default_max_output_tokens INT;
+
+-- usage_log 维度随 settlement 持久化：finalize（含 worker 重放）需在同一事务内写出完整日志
+ALTER TABLE gateway_settlements ADD COLUMN upstream_model VARCHAR(128) NOT NULL DEFAULT '';
+ALTER TABLE gateway_settlements ADD COLUMN ttfb_ms   BIGINT;
+ALTER TABLE gateway_settlements ADD COLUMN latency_ms BIGINT;
+ALTER TABLE gateway_settlements ADD COLUMN stream    INT NOT NULL DEFAULT 0;
+ALTER TABLE gateway_settlements ADD COLUMN prompt_tokens     INT NOT NULL DEFAULT 0;
+ALTER TABLE gateway_settlements ADD COLUMN completion_tokens INT NOT NULL DEFAULT 0;
+ALTER TABLE gateway_settlements ADD COLUMN cache_read_tokens  INT NOT NULL DEFAULT 0;
+ALTER TABLE gateway_settlements ADD COLUMN cache_write_tokens INT NOT NULL DEFAULT 0;
