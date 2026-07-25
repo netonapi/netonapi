@@ -1,7 +1,9 @@
 # V004：durable settlement（reserve/finalize + 幂等 + 崩溃恢复）设计
 
-> **状态**：设计稿 rev2（含 Codex 评审 P0/P1 修订），迁移未创建。按硬约束「创建迁移前先写状态转换矩阵和
-> 崩溃点测试表」，本文是 V004 SQL 的前置门。**迁移一旦应用到保留的 PG/MySQL 数据库即冻结**，后续只能新增 V005。
+> **状态**：设计稿 rev3（PostgreSQL-only）。**MySQL 已退出范围**——交付走 Docker 固定 PostgreSQL，
+> 用户不需要选数据库。`sql/mysql/` 冻结在 V003，不再新增。
+>
+> 本文是 V004 SQL 的前置门（状态转换矩阵 + 崩溃点表）。**迁移一旦应用到保留数据库即冻结**，后续只能新增 V005。
 
 ## 1. 要解决的问题（当前 P0）
 
@@ -263,28 +265,25 @@ gateway 只提供 **`SettlementWorker.tick(): TickResult`**（一次扫描+推�
 
 ## 10. 测试矩阵（真实 S8）
 
-**PG 跑整机 E2E；MySQL 从第一个状态机测试起连接真实 MySQL 8.4 跑 gateway 隔离集成测试**
-（migration runner / CAS / 并发 finalize / SKIP LOCKED+lease / 1213·1205 / 四写点回滚 / reserved 归零）。
-**不接受纯状态机单测替代 MySQL SQL 行为验证。**
+**PostgreSQL 跑整机 E2E**（migration runner / CAS / 并发 finalize / SKIP LOCKED+lease / 40001·40P01 / 四写点回滚 / reserved 归零）。
 
-| # | 场景 | 断言 | PG | MySQL |
-|---|---|---|---|---|
-| A1 | 同 settlementId 串行 finalize ×2 | 只扣一次；第二次 AlreadyFinalized；四项一致 | ✅ | ✅ |
-| A2 | 同 settlementId **并发** finalize ×2 | 同上；无重复台账 | ✅ | ✅ |
-| A3 | finalize 第 1/2/3/4 写点分别注入失败 | 整事务回滚；留 FINALIZE_PENDING；worker 重放后四项一致 | ✅ | ✅ |
-| A4 | finalize 成功但响应丢失后重试 | AlreadyFinalized；金额不变 | ✅ | ✅ |
-| A5 | worker 与在线 finalize 竞争 | 恰好一方成功；无双扣；lease 生效 | ✅ | ✅ |
-| A6 | reserve 后未调上游（reserveTtl） | 自动 RELEASED；reserved 归零；balance 不变 | ✅ | ✅ |
-| A7 | UPSTREAM_STARTED 后崩溃（upstreamTtl） | **不自动退款**；T9 → MANUAL_REVIEW；**仍持有预留**；`retry_action` 已记录 | ✅ | ✅ |
-| A8 | 同 client key + 不同 body | `409`；不执行上游；无新 settlement | ✅ | — |
-| A9 | PG 死锁/序列化失败注入 | 按 40001/40P01 重试并最终成功 | ✅ | — |
-| A10 | MySQL 死锁/锁等待超时注入 | 按 1213/1205 重试并最终成功 | — | ✅ |
-| A11 | 全部终态 | reserved 归零；Σcharged==Σ台账==balanceΔ==quotaUsed | ✅ | ✅ |
-| A12 | 无价/无上限配置 | 拒绝请求；不调上游；无 settlement 残留 | ✅ | — |
-| A13 | reserve 余额不足 / 预算不足 | 分别返回**不同**错误码；无残留预留；无孤儿 settlement | ✅ | ✅ |
-| A14 | RELEASE_PENDING 失败重试 | T11 退避；超上限 → T10 MANUAL_REVIEW | ✅ | ✅ |
-| A15 | `Idempotency-Key` 0 / 256 bytes | 均 `400`；不建 settlement | ✅ | — |
-| A16 | fingerprint 歧义反例（字段边界移动） | 不同请求 → 不同 fingerprint（LP 编码） | ✅ | — |
+| # | 场景 | 断言 |
+|---|---|---|
+| A1 | 同 settlementId 串行 finalize ×2 | 只扣一次；第二次 AlreadyFinalized；四项一致 |
+| A2 | 同 settlementId **并发** finalize ×2 | 同上；无重复台账 |
+| A3 | finalize 第 1/2/3/4 写点分别注入失败 | 整事务回滚；留 FINALIZE_PENDING；worker 重放后四项一致 |
+| A4 | finalize 成功但响应丢失后重试 | AlreadyFinalized；金额不变 |
+| A5 | worker 与在线 finalize 竞争 | 恰好一方成功；无双扣；lease 生效 |
+| A6 | reserve 后未调上游（reserveTtl） | 自动 RELEASED；reserved 归零；balance 不变 |
+| A7 | UPSTREAM_STARTED 后崩溃（upstreamTtl） | **不自动退款**；T9 → MANUAL_REVIEW；**仍持有预留**；`retry_action` 已记录 |
+| A8 | 同 client key + 不同 body | `409`；不执行上游；无新 settlement |
+| A9 | PG 死锁/序列化失败注入 | 按 40001/40P01 重试并最终成功 |
+| A11 | 全部终态 | reserved 归零；Σcharged==Σ台账==balanceΔ==quotaUsed |
+| A12 | 无价/无上限配置 | 拒绝请求；不调上游；无 settlement 残留 |
+| A13 | reserve 余额不足 / 预算不足 | 分别返回**不同**错误码；无残留预留；无孤儿 settlement |
+| A14 | RELEASE_PENDING 失败重试 | T11 退避；超上限 → T10 MANUAL_REVIEW |
+| A15 | `Idempotency-Key` 0 / 256 bytes | 均 `400`；不建 settlement |
+| A16 | fingerprint 歧义反例（字段边界移动） | 不同请求 → 不同 fingerprint（LP 编码） |
 
 ## 11. 实施顺序
 
@@ -297,9 +296,7 @@ gateway 只提供 **`SettlementWorker.tick(): TickResult`**（一次扫描+推�
 
 **任何一项没有「实现 + PG 测试 + MySQL 测试 + 失败路径测试 + SPEC 更新」都不得标记完成。**
 
-## 12. MySQL 发布硬门禁（路线 b′）
+## 12. 数据库范围
 
-- 上游 **31 个 PostgreSQL-only 迁移**（infra 6 / member 11 / payment 12 / platform 2）移植前：
-  **不发布 MySQL 镜像或构建产物**；文档、README、控制台**不得**出现「NewGate 支持 MySQL」。
-- 正式开放 MySQL 的条件：31 个脚本移植完成 + 整机 fresh migration 成功 + 与 PostgreSQL 同套 E2E 全绿。
-- 目标服务器版本以 **MySQL 8.4.4** 为准（本地客户端 9.2.0 不代表服务端版本）。
+**PostgreSQL-only**。交付形态是 Docker（compose 内置 PostgreSQL），用户不选数据库，因此不承担
+多方言成本。`sql/mysql/` 冻结在 V003，不再新增；文档与控制台不出现 MySQL 支持字样。

@@ -15,6 +15,8 @@ data class GatewayToken(
     /** μUSD 预算；null = 不限（仍受账户余额约束） */
     val quotaBudget: Long? = null,
     val quotaUsed: Long = 0,
+    /** 已预留（在途请求占位）μUSD；可用预算 = quotaBudget - quotaUsed - quotaReserved */
+    val quotaReserved: Long = 0,
     val expiresAt: Long? = null,
     /** 允许模型，逗号分隔；空 = 不限 */
     val allowedModels: String = "",
