@@ -8,11 +8,11 @@ ALTER TABLE gateway_tokens         ADD COLUMN quota_reserved   BIGINT NOT NULL D
 CREATE TABLE gateway_settlements (
     id                  BIGSERIAL PRIMARY KEY,
     -- CSPRNG 128-bit hex：一次真实上游执行的账务主键
-    settlement_id       CHAR(32)     NOT NULL,
+    settlement_id       VARCHAR(32)  NOT NULL,
     -- SHA-256(客户端 Idempotency-Key)，仅作外部映射键；定长，不存原文
-    client_idem_key     CHAR(64),
+    client_idem_key     VARCHAR(64),
     -- SHA-256(长度前缀编码的请求摘要)，用于同 key 的一致性校验
-    request_fingerprint CHAR(64),
+    request_fingerprint VARCHAR(64),
     user_id             BIGINT       NOT NULL,
     token_id            BIGINT       NOT NULL,
     channel_id          BIGINT,
@@ -34,7 +34,7 @@ CREATE TABLE gateway_settlements (
     outcome             VARCHAR(16),
     attempts            INT          NOT NULL DEFAULT 0,
     next_retry_at       BIGINT       NOT NULL DEFAULT 0,
-    lease_owner         CHAR(32),
+    lease_owner         VARCHAR(32),
     lease_until         BIGINT       NOT NULL DEFAULT 0,
     last_error          VARCHAR(500),
     created_at          BIGINT,
