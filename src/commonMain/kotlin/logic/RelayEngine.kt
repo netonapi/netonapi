@@ -35,17 +35,52 @@ class RelayEngine(
     private val tokenLogic: TokenLogic,
     private val quotaLogic: QuotaLogic,
     private val settlementLogic: SettlementLogic,
+    private val rateLimiter: RateLimiter,
 ) {
 
     /** 本次请求的资金占位（RelayEngine 每请求实例化，故可用字段持有）。 */
     private var settlement: model.Settlement? = null
 
+    /** 已占用的并发额度（非 null 表示需要在收尾时释放，否则额度泄漏）。 */
+    private var concurrencyHeld: Int? = null
+    private var tokenIdForLimits: Long = 0
+
+    /**
+     * 中转入口。并发额度一旦占用就必须归还——用 finally 覆盖所有 return / 异常路径，
+     * 否则额度会随失败请求泄漏，最终把令牌永久卡死在「并发已满」。
+     */
     suspend fun relay(ctx: HttpContext, userId: Long, tokenId: Long, inbound: ProtocolAdapter, path: String, rawBodyOverride: String? = null) {
+        try {
+            relayInner(ctx, userId, tokenId, inbound, path, rawBodyOverride)
+        } finally {
+            concurrencyHeld?.let { rateLimiter.release(tokenIdForLimits, it) }
+            concurrencyHeld = null
+        }
+    }
+
+    private suspend fun relayInner(ctx: HttpContext, userId: Long, tokenId: Long, inbound: ProtocolAdapter, path: String, rawBodyOverride: String? = null) {
         val startMs = now()
         val rawBody = rawBodyOverride ?: ctx.request.text()
 
         val token = tokenLogic.get(tokenId)
         if (token == null || token.status != 1) return respondError(ctx, inbound, 401, "invalid_token", "token not found or disabled")
+
+        // 令牌 IP 白名单：此前只有字段没有校验（宣称有、实际不生效比没有更危险）
+        if (token.allowedIps.isNotBlank() && !NetGuard.ipAllowed(token.allowedIps, clientIp(ctx))) {
+            log.warn("relay rejected by token ip allowlist tokenId=${token.id} userId=$userId ip=${clientIp(ctx)}")
+            return respondError(ctx, inbound, 403, "ip_not_allowed", "client IP is not allowed for this token")
+        }
+
+        // 速率限制：无限流时单用户即可打爆上游配额与成本
+        when (rateLimiter.acquire(token.id, token.rpmLimit, token.tpmLimit, token.concurrencyLimit, now())) {
+            RateLimiter.Decision.RPM_EXCEEDED ->
+                return respondError(ctx, inbound, 429, "rate_limit_exceeded", "requests per minute limit reached")
+            RateLimiter.Decision.TPM_EXCEEDED ->
+                return respondError(ctx, inbound, 429, "rate_limit_exceeded", "tokens per minute limit reached")
+            RateLimiter.Decision.CONCURRENCY_EXCEEDED ->
+                return respondError(ctx, inbound, 429, "rate_limit_exceeded", "concurrent request limit reached")
+            RateLimiter.Decision.ALLOWED -> { concurrencyHeld = token.concurrencyLimit; tokenIdForLimits = token.id }
+        }
 
         val group = token.groupOverride?.takeIf { it.isNotBlank() } ?: "default"
         val requestModel = runCatching { RequestRewriter.rewrite(rawBody, DUMMY).requestModel }.getOrElse {
@@ -453,6 +488,9 @@ class RelayEngine(
 
         // usage_log 由 finalize 在扣款同事务内写出（维度已随 T3 落在 settlement 行），此处不再单独记，避免重复计账
 
+        // TPM 计入实际消耗（预检读的是上一分钟窗口的累计值）
+        rateLimiter.recordTokens(token.id, effectiveUsage.promptTokens + effectiveUsage.completionTokens, now())
+
         // T4：释放预留 + 按实际扣款 + 台账（稳定幂等键 settlement:<sid>）+ quotaUsed，同一事务
         when (val r = settlementLogic.finalize(s.settlementId)) {
             is SettlementLogic.TransitionResult.Applied,
@@ -460,6 +498,15 @@ class RelayEngine(
             else -> log.error("settlement finalize failed sid=${s.settlementId} r=$r; worker will retry")
         }
     }
+
+    /**
+     * 客户端 IP。反向代理后取 `X-Forwarded-For` 最左项，否则用连接地址。
+     * 注意：XFF 可被伪造，仅在网关前置了可信代理时才有意义——白名单应配合网络层限制使用。
+     */
+    private fun clientIp(ctx: HttpContext): String? =
+        ctx.request.header("X-Forwarded-For")?.split(',')?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: ctx.request.header("X-Real-IP")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: ctx.request.remoteAddress.substringBeforeLast(':').trim('[', ']').takeIf { it.isNotEmpty() }
 
     /** 当前状态（RESERVED 或 UPSTREAM_STARTED）——释放时作为 CAS 的 from。 */
     private suspend fun bySettlementStatus(sid: String): String =

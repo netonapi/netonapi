@@ -22,6 +22,12 @@ data class GatewayToken(
     val allowedModels: String = "",
     /** 允许 IP（CIDR/精确），逗号分隔；空 = 不限 */
     val allowedIps: String = "",
+    /** 每分钟请求数上限；null = 不限 */
+    val rpmLimit: Int? = null,
+    /** 每分钟 token 数上限；null = 不限 */
+    val tpmLimit: Int? = null,
+    /** 并发进行中请求数上限；null = 不限 */
+    val concurrencyLimit: Int? = null,
     /** 覆盖用户分组；空 = 用用户自身分组 */
     val groupOverride: String? = null,
     val status: Int = 1,

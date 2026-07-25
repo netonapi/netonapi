@@ -19,6 +19,7 @@ class ChannelController(private val channelLogic: ChannelLogic) {
     @Post("/create")
     @Permission("gateway:channel:create")
     suspend fun create(@Body request: CreateChannelRequest): Long {
+        requireSafeUrls(request.baseUrl, request.proxyUrl)
         val id = channelLogic.create(
             Channel(
                 name = request.name, type = request.type, baseUrl = request.baseUrl,
@@ -36,6 +37,7 @@ class ChannelController(private val channelLogic: ChannelLogic) {
     @Put("/update")
     @Permission("gateway:channel:update")
     suspend fun update(@Body request: UpdateChannelRequest) {
+        requireSafeUrls(request.baseUrl, request.proxyUrl)
         val current = channelLogic.get(request.id)
             ?: throw IllegalArgumentException("gateway channel id=${request.id} not found")
         channelLogic.update(current.copy(
@@ -68,7 +70,8 @@ class ChannelController(private val channelLogic: ChannelLogic) {
         channelLogic.listKeys(id).map {
             ChannelKeyVO(
                 id = it.id,
-                display = maskKey(it.apiKey),
+                // 先解密再掩码——直接掩码密文只会显示密文片段；只有掩码离开进程
+                display = maskKey(logic.GatewayCrypto.open(it.apiKey)),
                 status = it.status, failCount = it.failCount, lastError = it.lastError,
             )
         }
@@ -84,4 +87,21 @@ class ChannelController(private val channelLogic: ChannelLogic) {
 
     private fun maskKey(key: String): String =
         if (key.length <= 11) "****" else key.take(7) + "****" + key.takeLast(4)
+
+    /**
+     * 上游地址 SSRF 校验：拒绝指向回环/内网/链路本地（含云元数据 169.254.169.254）的地址，
+     * 否则网关会成为打内网的跳板。自托管需要连内网上游时，设 NEWGATE_ALLOW_PRIVATE_UPSTREAM=true 显式放行。
+     */
+    private fun requireSafeUrls(baseUrl: String, proxyUrl: String?) {
+        val allowPrivate = neton.core.config.getEnv("NEWGATE_ALLOW_PRIVATE_UPSTREAM")?.lowercase() == "true"
+        for ((field, url) in listOf("baseUrl" to baseUrl, "proxyUrl" to proxyUrl)) {
+            if (url.isNullOrBlank()) continue
+            val v = logic.NetGuard.checkUpstreamUrl(url, allowPrivate)
+            if (v is logic.NetGuard.UrlVerdict.Rejected) {
+                throw neton.core.http.ValidationException(
+                    listOf(neton.core.http.ValidationError(path = field, message = v.reason))
+                )
+            }
+        }
+    }
 }

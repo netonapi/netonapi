@@ -36,12 +36,15 @@ class ChannelLogic(private val log: Logger) {
     suspend fun listKeys(channelId: Long): List<ChannelKey> =
         ChannelKeyTable.query { where { ChannelKey::channelId eq channelId } }.list()
 
+    /** 入库前加密（配置了主密钥时）；明文不落库。 */
     suspend fun addKey(channelId: Long, apiKey: String): Long =
-        ChannelKeyTable.insert(ChannelKey(channelId = channelId, apiKey = apiKey)).id
+        ChannelKeyTable.insert(ChannelKey(channelId = channelId, apiKey = GatewayCrypto.seal(apiKey))).id
 
     suspend fun deleteKey(id: Long) { ChannelKeyTable.destroy(id) }
 
-    suspend fun pickKey(channelId: Long): ChannelKey? = pickAvailable(listKeys(channelId))
+    /** 选 Key 并解密——调用方拿到的是可直接用于上游认证的明文，DB 内仍是密文。 */
+    suspend fun pickKey(channelId: Long): ChannelKey? =
+        pickAvailable(listKeys(channelId))?.let { it.copy(apiKey = GatewayCrypto.open(it.apiKey)) }
 
     // ===== 容错：失败计数 / 自动禁用 / 渠道挂起（FailurePolicy 应用侧） =====
 

@@ -2,6 +2,7 @@ package controller.gateway
 
 import logic.ChannelLogic
 import logic.QuotaLogic
+import logic.RateLimiter
 import logic.SettlementLogic
 import logic.RelayEngine
 import logic.TokenLogic
@@ -23,8 +24,9 @@ class RelayController(
     private val tokenLogic: TokenLogic,
     private val quotaLogic: QuotaLogic,
     private val settlementLogic: SettlementLogic,
+    private val rateLimiter: RateLimiter,
 ) {
-    private val engine by lazy { RelayEngine(log, channelLogic, tokenLogic, quotaLogic, settlementLogic) }
+    private val engine by lazy { RelayEngine(log, channelLogic, tokenLogic, quotaLogic, settlementLogic, rateLimiter) }
 
     @Post("/chat/completions")
     suspend fun chatCompletions(ctx: HttpContext, identity: Identity) =
