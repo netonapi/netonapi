@@ -42,6 +42,12 @@ jobs:
           repository: neton-application/neton-application-module-platform
           path: neton-application-module-platform
 
+      - name: Checkout gateway module
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-gateway
+          path: neton-application-module-gateway
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -71,3 +77,98 @@ jobs:
       - name: Compile application
         working-directory: neton-application
         run: ./gradlew :application:compileKotlinMacosArm64
+
+      # 只编译不跑测试等于没有回归保护：账务/流式/限流的正确性全靠这些断言守住
+      - name: Unit tests
+        working-directory: neton-application
+        run: ./gradlew :module-gateway:macosArm64Test :module-system:macosArm64Test
+
+  # 可靠性 harness：真实 PostgreSQL + 假上游 + 真实网关，逐场景断言账务/流式/限流。
+  # 单元测试覆盖不到「钱是否算对」——这一层必须跑真库。
+  reliability-harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: newgate
+          POSTGRES_PASSWORD: newgate
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout NewGate
+        uses: actions/checkout@v4
+        with:
+          repository: zoujiaqing/NewGate
+          path: NewGate
+
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: NewGate/newgate
+
+      - name: Checkout framework
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/neton
+          path: neton
+
+      - name: Checkout member module
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-member
+          path: neton-application-module-member
+
+      - name: Checkout payment module
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-payment
+          path: neton-application-module-payment
+
+      - name: Checkout platform module
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-platform
+          path: neton-application-module-platform
+
+      - name: Checkout gateway module
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-gateway
+          path: neton-application-module-gateway
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Run reliability harness
+        working-directory: NewGate
+        env:
+          NEWGATE_TARGET: linuxX64
+          PGUSER: newgate
+          PGPASS: newgate
+          PGHOST: localhost
+        run: bash harness/run.sh
+
+      - name: Upload harness logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-logs
+          path: NewGate/harness/logs/**/*.log
+          retention-days: 7
