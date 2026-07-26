@@ -20,6 +20,9 @@ class TokenLogic(private val log: Logger) {
         allowedModels: String = "",
         allowedIps: String = "",
         groupOverride: String? = null,
+        rpmLimit: Int? = null,
+        tpmLimit: Int? = null,
+        concurrencyLimit: Int? = null,
     ): IssuedToken {
         val plaintext = generateKey()
         val record = GatewayTokenTable.insert(
@@ -29,6 +32,7 @@ class TokenLogic(private val log: Logger) {
                 quotaBudget = quotaBudget, expiresAt = expiresAt,
                 allowedModels = allowedModels, allowedIps = allowedIps,
                 groupOverride = groupOverride,
+                rpmLimit = rpmLimit, tpmLimit = tpmLimit, concurrencyLimit = concurrencyLimit,
             )
         )
         log.info("gateway token issued id=${record.id} user=$userId display=${record.keyDisplay}")

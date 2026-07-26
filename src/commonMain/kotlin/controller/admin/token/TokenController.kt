@@ -15,6 +15,10 @@ data class CreateTokenRequest(
     val allowedModels: String = "",
     val allowedIps: String = "",
     val groupOverride: String? = null,
+    /** 速率上限；null = 不限（不限意味着单令牌可打爆上游配额） */
+    val rpmLimit: Int? = null,
+    val tpmLimit: Int? = null,
+    val concurrencyLimit: Int? = null,
 )
 
 @Serializable
@@ -33,6 +37,9 @@ data class TokenVO(
     val allowedModels: String = "",
     val allowedIps: String = "",
     val groupOverride: String? = null,
+    val rpmLimit: Int? = null,
+    val tpmLimit: Int? = null,
+    val concurrencyLimit: Int? = null,
     val status: Int = 1,
     val createdAt: Long? = null,
 ) {
@@ -41,7 +48,9 @@ data class TokenVO(
             id = t.id, userId = t.userId, name = t.name, display = t.keyDisplay,
             quotaBudget = t.quotaBudget, quotaUsed = t.quotaUsed, expiresAt = t.expiresAt,
             allowedModels = t.allowedModels, allowedIps = t.allowedIps,
-            groupOverride = t.groupOverride, status = t.status, createdAt = t.createdAt,
+            groupOverride = t.groupOverride,
+            rpmLimit = t.rpmLimit, tpmLimit = t.tpmLimit, concurrencyLimit = t.concurrencyLimit,
+            status = t.status, createdAt = t.createdAt,
         )
     }
 }
@@ -57,6 +66,8 @@ class TokenController(private val tokenLogic: TokenLogic) {
             quotaBudget = request.quotaBudget, expiresAt = request.expiresAt,
             allowedModels = request.allowedModels, allowedIps = request.allowedIps,
             groupOverride = request.groupOverride,
+            rpmLimit = request.rpmLimit, tpmLimit = request.tpmLimit,
+            concurrencyLimit = request.concurrencyLimit,
         )
         // 明文仅在创建响应中出现一次
         return IssuedTokenVO(issued.record.id, issued.plaintext, issued.record.keyDisplay)
