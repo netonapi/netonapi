@@ -215,6 +215,47 @@
   证明全量迁移成功，但未严格证明"提交后同一物理池连接已干净"。应补 pool-size=1 的真实 PostgreSQL 集成测试：
   脚本 A 污染会话 → 脚本 B 用未限定 DDL → 迁移后复用同一连接，`SHOW search_path` 等于连接默认值且未限定查询成功。
 
+## 商业上线：A/B/C 三阶段进度
+
+### A 安全与账务（已完成）
+
+- **V004 durable settlement**：见上（预留先行 / 稳定幂等键 / 硬预算 / worker 恢复）。
+- **渠道 Key 加密（V005 前）**：`SecretBox`（AES-256-GCM，框架 neton-security）+ `NEWGATE_CHANNEL_KEY_ENC_KEY`。
+  未配置则明文直通（可先部署后启用）；配置后新写入加密、存量明文仍可读，无需停机迁移。管理台掩码前先解密。
+- **IP 白名单（此前只有字段无校验）**：`NetGuard.ipAllowed` 支持精确 IP 与 CIDR；取不到客户端 IP 即拒绝
+  （白名单必须是「明确允许」）；`X-Forwarded-For` 可伪造，需配合网络层限制可信代理。
+- **SSRF**：渠道 baseUrl/proxyUrl 写入时校验，拒绝回环/私网/链路本地/云元数据（169.254.169.254）与 userinfo 混淆；
+  自托管可用 `NEWGATE_ALLOW_PRIVATE_UPSTREAM=true` 放行。
+- **速率限制（V005）**：令牌级 RPM/TPM/并发。Redis 优先（多实例共享），无 Redis 退化为进程内（单实例仍有效）。
+  固定分钟窗（边界最多约 2 倍突发）；并发额度在 finally 释放，失败请求不会泄漏额度。
+- **配置卫生**：清除硬编码本地凭据与脚手架残留名，改由环境变量注入。
+
+### B 可运营（部分完成）
+
+- ✅ **管理台**：渠道/令牌/定价/日志四页已存在（`neton-application-front-gateway`），本轮补
+  **结算待处理页**（人工裁定仍持预留的记录 + 触发恢复）、令牌限流字段、定价默认输出上限。
+- ✅ **日志分页**：补 `/gateway/log/page`（此前前端调的端点不存在）。
+- ✅ **`/v1/models` 真数据**：按令牌可路由性 + 分组 + 白名单返回，路由判定复用 RelayRouter 防漂移。
+- ✅ **原生认证载体**：Bearer / `x-api-key`(Anthropic) / `x-goog-api-key` 与 `?key=`(Gemini)。
+- ✅ **未定价模型拒绝**：无定价或无法确定输出上限一律拒绝，不再免费放行。
+- ❌ **用户控制台**（newgate-client 的 gateway 业务）：未开始——用户仍无法自助建 Key / 查用量 / 充值。
+- ❌ **支付与兑换打通**：payment/member 的充值与 gateway 额度未接通，付款不会到账。
+
+### C 可交付（已完成）
+
+- **CI**：补 gateway 模块 checkout + 单元测试；新增 Linux job 用真实 PostgreSQL service 跑可靠性 harness，
+  失败上传日志（此前只编译，21 条断言从不在 CI 运行）。
+- **Docker**：`newgate/Dockerfile`（Kotlin/Native 静态二进制，运行阶段无 JVM，非 root，带健康检查）；
+  `docker-compose.yml` 内置 PostgreSQL + Redis，迁移作为一次性服务先跑通再起网关；
+  三个密钥无默认值，缺失即拒绝启动。`DEPLOY.md` 含上线检查清单与反代注意事项。
+
+### 可靠性 harness：21 断言 / 15 场景
+
+S1 并发四项不变量、S2 dead→live、S3 断连计费+producer 拆除、S4 401/403 禁用 & 429 不禁用、
+S5 revive 保留手动禁用、S6 token 中途删除、S7 首建账户并发、S8 结算幂等+终态预留归零、
+S9 midstream partial、S10 429 cooldown、S11 worker 重放+重复 tick 幂等、S12 TTL 释放/转人工、
+S13 RPM 限流、S14 IP 白名单、S15 /v1/models + 原生认证。
+
 ## 待办（Codex 评审确认的真实差距，未完成）
 
 - 原生认证载体：仅 Bearer sk-；Anthropic x-api-key / Gemini x-goog-api-key|?key= 未映射到 NewGate token
