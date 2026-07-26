@@ -11,12 +11,27 @@ repositories {
     mavenCentral()
 }
 
+// AES-GCM（渠道 Key 加密）在 Apple 上由 CryptoKit 提供，其实现是 Swift，链接需要
+// macOS SDK 里的 Swift 运行时存根。Kotlin/Native 不会传这个目录给 ld，Xcode 15 上会
+// 报 "Could not find or use auto-linked library 'swift_*'"。非 macOS 主机为 null，跳过。
+val appleSwiftLibDir: String? by lazy {
+    if (!org.gradle.internal.os.OperatingSystem.current().isMacOsX) return@lazy null
+    runCatching {
+        providers.exec {
+            commandLine("xcrun", "--sdk", "macosx", "--show-sdk-path")
+        }.standardOutput.asText.get().trim()
+    }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { "$it/usr/lib/swift" }
+}
+
 kotlin {
     listOf(macosArm64(), linuxX64(), linuxArm64(), mingwX64()).forEach { target ->
         val coreInterop = file("$projectDir/../neton/neton-core/build/nativeInterop/${target.name}").absolutePath
         target.binaries.forEach { binary ->
             binary.linkerOpts.add("-L$coreInterop")
             binary.linkerOpts.add("-lenv")
+            if (target.konanTarget.family.isAppleFamily) {
+                appleSwiftLibDir?.let { binary.linkerOpts.add("-L$it") }
+            }
         }
     }
 
