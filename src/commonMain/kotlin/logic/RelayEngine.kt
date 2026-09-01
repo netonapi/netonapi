@@ -105,9 +105,21 @@ class RelayEngine(
         if (candidates.isEmpty()) return respondError(ctx, inbound, 503, "no_available_channel", "no channel available for model '$requestModel'")
 
         // ── 资金占位（V004）：预留成功才允许调上游；无价/无输出上限一律拒绝，不免费放行 ──
-        val price = ModelPriceTable.oneWhere { ModelPrice::model eq requestModel }
+        // 双轨计价：官方价 = 成本轨，售价（saleOverride 或官方价 × 全局加价率）= 收入轨。
+        // 定价数据非法在入口 fail-fast 拒绝——坏价一旦进了 reserve，结算时就只能猜价或转人工。
+        val officialPrice = ModelPriceTable.oneWhere { ModelPrice::model eq requestModel }
         val ratio = GatewayGroupTable.oneWhere { GatewayGroup::name eq group }?.ratio ?: "1.0"
-        val reserveAmount = when (val rc = ReserveCalc.compute(rawBody, price, ratio)) {
+        val salePrice = officialPrice?.let { op ->
+            runCatching { SalePricing.resolve(op) }.getOrElse { e ->
+                log.error("CRITICAL model pricing invalid model=$requestModel: ${e.message}")
+                // 500 而非 400：请求本身没问题，是我们的定价数据坏了——归成客户端错误会掩盖运营事故
+                return respondError(
+                    ctx, inbound, 500, "model_pricing_invalid",
+                    "pricing config for model '$requestModel' is invalid",
+                )
+            }
+        }
+        val reserveAmount = when (val rc = ReserveCalc.compute(rawBody, salePrice, ratio)) {
             is ReserveCalc.Result.NoPrice ->
                 return respondError(ctx, inbound, 400, "model_not_priced", "model '$requestModel' has no pricing configured")
             is ReserveCalc.Result.NoOutputCap ->
@@ -123,7 +135,7 @@ class RelayEngine(
         val reserved = settlementLogic.reserve(
             userId = userId, tokenId = tokenId, requestModel = requestModel, endpoint = path,
             reserveAmount = reserveAmount.amount,
-            pricingSnapshot = pricingSnapshot(price, ratio),
+            pricingSnapshot = pricingSnapshot(salePrice, officialPrice, ratio),
             estimated = reserveAmount.estimated,
             clientIdemKey = idem,
             requestFingerprint = idem?.let { requestFingerprint(ctx, path, rawBody) },
@@ -156,8 +168,13 @@ class RelayEngine(
             val key = channelLogic.pickKey(channel.id)
             if (key == null) { lastError = "channel ${channel.id} has no available key"; return@repeat }
 
-            // T2：记录「已向上游发出」——崩溃后不可自动退款（可能已产生真实费用），由 worker TTL 转人工
-            settlement?.let { settlementLogic.markUpstreamStarted(it.settlementId, channel.id) }
+            // T2：记录「已向上游发出」——崩溃后不可自动退款（可能已产生真实费用），由 worker TTL 转人工。
+            // 渠道成本折扣此刻并入快照；重试换渠道则刷新为本次真正打的上游（否则成本记在没打过的那家头上）。
+            settlement?.let { st ->
+                val snap = pricingSnapshot(salePrice, officialPrice, ratio, channel.costDiscount)
+                settlementLogic.markUpstreamStarted(st.settlementId, channel.id, snap)
+                settlement = st.copy(pricingSnapshot = snap)
+            }
 
             val rewritten = transform.rewritten
             val outcome: RelayOutcome? = try {
@@ -474,11 +491,16 @@ class RelayEngine(
             ) log.error("settlement manual-review transition failed sid=${s.settlementId} r=$r; worker TTL will catch it")
             return
         }
-        val (price, ratio) = snapped
         val effectiveUsage = usage ?: Usage()
-        val charged = PricingCalc.charge(effectiveUsage, price, ratio)
-        // 成本：用请求入口选中的渠道对象（costDiscount 在候选选定时刻已固化），结算时不重查渠道表。
-        val cost = PricingCalc.cost(effectiveUsage, price, channel.costDiscount)
+        // 收入 = 售价轨 × 分组倍率；成本 = 官方价（成本轨）× 渠道折扣。四要素全部取自快照，
+        // 结算时不重查任何定价表——改价、改折扣、改倍率只影响后续请求，不影响在途与重放。
+        val charged = PricingCalc.charge(effectiveUsage, snapped.sale, snapped.ratio)
+        val cost = PricingCalc.cost(effectiveUsage, snapped.official, snapped.costDiscount)
+        // 毛利倒挂：发布闸门挡的是「配错价」，折扣 >1 的渠道与倍率 <1 的用户组仍可能压穿成本，必须可观测。
+        if (cost > charged) {
+            log.warn("margin inversion sid=${s.settlementId} model=${rewritten.requestModel} " +
+                "charged=$charged cost=$cost ratio=${snapped.ratio} costDiscount=${snapped.costDiscount}")
+        }
 
         // T3：先把 usage payload 落库转入 durable 重试态。这一步失败且随后崩溃 = C3′（usage 永久丢失），
         // 故用 NonCancellable + 有界重试把概率压到最低；仍失败则留在 UPSTREAM_STARTED，由 worker TTL 转人工。
@@ -542,37 +564,60 @@ class RelayEngine(
         """{"prompt":${u.promptTokens},"completion":${u.completionTokens},""" +
             """"cacheRead":${u.cacheReadTokens},"cacheWrite":${u.cacheWriteTokens}}"""
 
-    /** reserve 时固化的定价快照：finalize 必须按它计价，中途改价不影响在途请求。 */
-    private fun pricingSnapshot(price: ModelPrice?, ratio: String): String =
-        if (price == null) "{}" else
-            """{"input":"${price.inputPrice}","output":"${price.outputPrice}",""" +
-                """"cacheRead":"${price.cacheReadPrice}","cacheWrite":"${price.cacheWritePrice}",""" +
-                """"perRequest":${price.perRequestPrice},"ratio":"$ratio"}"""
+    /**
+     * 双轨定价快照（V004 §7.1）：`sale` = 售价轨（收入），`cost` = 官方价（成本轨），
+     * `ratio` = 分组倍率，`costDiscount` = 渠道折扣（选定/切换上游时并入，见 markUpstreamStarted）。
+     * finalize 严格按它计价，不重查任何定价表。
+     */
+    private fun pricingSnapshot(
+        sale: ModelPrice?, official: ModelPrice?, ratio: String, costDiscount: String? = null,
+    ): String {
+        if (sale == null || official == null) return "{}"
+        val tail = if (costDiscount != null) ",\"costDiscount\":\"$costDiscount\"" else ""
+        return """{"sale":${priceTrack(sale)},"ratio":"$ratio","cost":${priceTrack(official)}$tail}"""
+    }
+
+    private fun priceTrack(p: ModelPrice): String =
+        """{"input":"${p.inputPrice}","output":"${p.outputPrice}","cacheRead":"${p.cacheReadPrice}",""" +
+            """"cacheWrite":"${p.cacheWritePrice}","perRequest":${p.perRequestPrice}}"""
+
+    /** [snapshotPrice] 解析出的双轨快照四要素；缺一即视为快照损坏。 */
+    private data class SnapshotPricing(
+        val sale: ModelPrice, val ratio: String, val official: ModelPrice, val costDiscount: String,
+    )
 
     /**
-     * 解析结算行存的定价快照（[pricingSnapshot] 的镜像）。严格校验：JSON 非法、字段缺失、
-     * 数值越界一律返回 null——绝不用默认价（"0"/"1.0"）静默补齐，损坏快照宁可转人工也不按猜的价扣钱。
+     * 解析结算行存的定价快照（[pricingSnapshot] 的镜像，v2 双轨格式）。严格校验：JSON 非法、
+     * 任一轨字段缺失、数值越界一律返回 null——绝不用默认值静默补齐，损坏快照宁可转人工也不按猜的价扣钱。
      */
-    private fun snapshotPrice(json: String): Pair<ModelPrice, String>? = runCatching {
+    private fun snapshotPrice(json: String): SnapshotPricing? = runCatching {
         val o = Json.parseToJsonElement(json).jsonObject
-        fun priceField(key: String): String? = o[key]?.jsonPrimitive?.contentOrNull
-            ?.takeIf { runCatching { PricingCalc.requirePrice(it) }.isSuccess }
-        val input = priceField("input") ?: return@runCatching null
-        val output = priceField("output") ?: return@runCatching null
-        val cacheRead = priceField("cacheRead") ?: return@runCatching null
-        val cacheWrite = priceField("cacheWrite") ?: return@runCatching null
-        val ratio = o["ratio"]?.jsonPrimitive?.contentOrNull
-            ?.takeIf { runCatching { PricingCalc.requireRatio(it) }.isSuccess } ?: return@runCatching null
-        // perRequest：JSON null（非按次计价）或非负整数才合法；缺失/非法一律视为快照损坏
-        val prPrim = o["perRequest"]?.jsonPrimitive ?: return@runCatching null
-        val perRequest = if (prPrim is JsonNull) null
-            else prPrim.longOrNull?.takeIf { it >= 0 } ?: return@runCatching null
-        ModelPrice(
-            model = "",
-            inputPrice = input, outputPrice = output,
-            cacheReadPrice = cacheRead, cacheWritePrice = cacheWrite,
-            perRequestPrice = perRequest,
-        ) to ratio
+        fun track(key: String): ModelPrice? {
+            val t = o[key]?.jsonObject ?: return null
+            fun field(k: String): String? = t[k]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { runCatching { PricingCalc.requirePrice(it) }.isSuccess }
+            val input = field("input") ?: return null
+            val output = field("output") ?: return null
+            val cacheRead = field("cacheRead") ?: return null
+            val cacheWrite = field("cacheWrite") ?: return null
+            // perRequest：JSON null（非按次计价）或非负整数才合法；缺失/非法一律视为快照损坏
+            val prPrim = t["perRequest"]?.jsonPrimitive ?: return null
+            val perRequest = if (prPrim is JsonNull) null
+                else prPrim.longOrNull?.takeIf { it >= 0 } ?: return null
+            return ModelPrice(
+                model = "",
+                inputPrice = input, outputPrice = output,
+                cacheReadPrice = cacheRead, cacheWritePrice = cacheWrite,
+                perRequestPrice = perRequest,
+            )
+        }
+        fun ratioField(key: String): String? = o[key]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { runCatching { PricingCalc.requireRatio(it) }.isSuccess }
+        val sale = track("sale") ?: return@runCatching null
+        val cost = track("cost") ?: return@runCatching null
+        val ratio = ratioField("ratio") ?: return@runCatching null
+        val costDiscount = ratioField("costDiscount") ?: return@runCatching null
+        SnapshotPricing(sale, ratio, cost, costDiscount)
     }.getOrNull()
 
     /**

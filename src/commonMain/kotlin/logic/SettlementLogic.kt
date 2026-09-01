@@ -146,13 +146,31 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
 
     // ===== T2 / T3 / T5: 状态推进（纯 CAS，不动钱） =====
 
-    /** T2：首次向上游发请求前。 */
-    suspend fun markUpstreamStarted(settlementId: String, channelId: Long): TransitionResult =
-        cas(
+    /**
+     * T2：首次向上游发请求前。[pricingSnapshot] 非 null 时把「渠道成本快照」一并固化。
+     * 重试换渠道时状态不回退（CAS 返回 AlreadyDone），但渠道与快照必须刷新为本次真正打的上游——
+     * finalize 的成本要按它算，否则记的是没打过的那家的价。
+     */
+    suspend fun markUpstreamStarted(
+        settlementId: String, channelId: Long, pricingSnapshot: String? = null,
+    ): TransitionResult {
+        val r = cas(
             settlementId, from = Settlement.RESERVED, to = Settlement.UPSTREAM_STARTED,
             extraSet = "channel_id = :cid", extraParams = mapOf("cid" to channelId),
             downstream = setOf(Settlement.UPSTREAM_STARTED, Settlement.FINALIZE_PENDING, Settlement.FINALIZED),
         )
+        if (pricingSnapshot != null) {
+            neton.database.dbContext().execute(
+                "UPDATE gateway_settlements SET channel_id = :cid, pricing_snapshot = :snap " +
+                    "WHERE settlement_id = :sid AND status = :st",
+                mapOf(
+                    "cid" to channelId, "snap" to pricingSnapshot,
+                    "sid" to settlementId, "st" to Settlement.UPSTREAM_STARTED,
+                ),
+            )
+        }
+        return r
+    }
 
     /**
      * T3：上游结束，落 usage payload 并转入 durable 重试态。

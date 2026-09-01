@@ -171,18 +171,52 @@ RESERVED ──T2──► UPSTREAM_STARTED ──T3──► FINALIZE_PENDING �
 
 ## 7. reserve 金额与原子条件（P0 修订）
 
-### 7.1 金额计算
+### 7.1 金额计算（双轨）
+
+计价分两条轨道，混用即无法核算毛利：
+
+| 轨道 | 公式 | 用途 |
+|---|---|---|
+| **售价轨**（收入） | `sale_override` 逐字段覆盖；缺省字段 = 官方价 × 全局加价率 `NEWGATE_SALE_MARKUP` | reserve 金额、`charged`（再 × 分组倍率） |
+| **成本轨** | 官方价 × 渠道折扣 `cost_discount` | `cost`（只用于毛利核算，不进用户账务） |
+
+`gateway_model_prices` 存的一律是**官方价**（成本轨基准）；售价由 `sale_override` 或全局加价率推导。
 
 | 计价模式 | 预留额 |
 |---|---|
-| 按次（`per_request_price`） | `perRequestPrice × groupRatio`（× saleOverride） |
-| 按 token | `输入上界 × inputPrice + 输出上限 × outputPrice`，含 cache 项、groupRatio、saleOverride |
+| 按次（`per_request_price`） | `售价 perRequest × groupRatio` |
+| 按 token | `输入上界 × 售价 inputPrice + 输出上限 × 售价 outputPrice`（含 cache 项）`× groupRatio` |
 
 - **输出上限**：请求的 `max_tokens` / `max_output_tokens`；未传时用**模型目录的 `default_max_output_tokens`**。
 - **输入上界**：有 tokenizer 用 tokenizer；无则以请求 **UTF-8 字节数**作保守上界，并置 `estimated=1`。
 - **拒绝而非免费放行**：无价格 / 无法计算安全上限 / 缺 `default_max_output_tokens` → 拒绝请求。
+- **坏价 fail-fast**：官方价、`sale_override`、加价率任一非法 → 入口直接 `500 model_pricing_invalid`，
+  **不建 settlement、不预留、不调上游**。用 500 而非 400：请求本身没问题，是运营侧定价数据坏了，
+  归成客户端错误会掩盖事故。
+- **发布闸门（毛利底线）**：admin 写价时 `SalePricing.requireMargin` 校验售价每一维
+  ≥ 官方成本 × `NEWGATE_MIN_MARGIN`（默认 `1`，即不得低于官方成本），违者 400 拒绝发布。
 
-`pricing_snapshot` 在 reserve 时固化，finalize **必须用快照计价**（中途改价不影响在途请求）。
+#### 7.1.1 `pricing_snapshot`（v2 双轨）
+
+reserve 时固化售价轨与官方轨；选定/切换上游渠道时并入渠道折扣（见 `markUpstreamStarted`，
+重试换渠道必须刷新——否则成本记在没打过的那家头上）：
+
+```json
+{"sale":{"input":"5","output":"20","cacheRead":"0","cacheWrite":"0","perRequest":null},
+ "ratio":"1",
+ "cost":{"input":"2.5","output":"10","cacheRead":"0","cacheWrite":"0","perRequest":null},
+ "costDiscount":"0.8"}
+```
+
+- finalize **必须且只能**用快照计价：`charged = sale × ratio`、`cost = cost × costDiscount`。
+  中途改价、改折扣、改倍率只影响后续请求（worker 重放同样按快照，不按当前价）。
+- **严格校验、无回退**：JSON 非法、任一轨字段缺失、数值越界、`ratio`/`costDiscount` 不在 `(0,100]`
+  → 一律视为快照损坏：**保留预留资金**、转 `MANUAL_REVIEW`、打 CRITICAL 告警。
+  绝不回退实时价（那会重新制造「旧价预留、新价扣款」），也绝不用 `"0"`/`"1.0"` 默认值静默补齐。
+- **毛利倒挂**（`cost > charged`）：折扣 >1 的渠道或倍率 <1 的用户组仍可能压穿成本，
+  记 `margin inversion` 告警（发布闸门挡的是配错价，不是经营策略）。
+- **升级兼容**：v1 单轨快照（`{"input":...}`）不被 v2 解析器接受 → 升级时在途老记录会转人工。
+  发布前排空在途请求即可避免。
 
 ### 7.2 原子预留条件（必须由数据库条件更新保证，不得应用层先读后写）
 

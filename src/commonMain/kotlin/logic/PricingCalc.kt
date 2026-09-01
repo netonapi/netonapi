@@ -69,6 +69,21 @@ object PricingCalc {
     /** "3.5" → 3_500_000（μUSD/1M tokens，即小数 ×1e6，截断到 6 位小数）。 */
     fun parseMicro(decimal: String): Long = parseScaled(decimal, 6)
 
+    /** μUSD/1M（6 位小数）→ 规范化价格串：2875000 → "2.875"。 */
+    fun microToDecimal(micro: Long): String {
+        require(micro >= 0) { "negative micro price: $micro" }
+        val frac = (micro % 1_000_000).toString().padStart(6, '0').trimEnd('0')
+        return if (frac.isEmpty()) (micro / 1_000_000).toString() else "${micro / 1_000_000}.$frac"
+    }
+
+    /** 价格串 × 万分位倍率（全局加价/毛利下限换算）→ μUSD 精度截断后规范化回价格串。 */
+    fun scalePrice(decimal: String, ratio: String): String {
+        val micro = parseMicro(requirePrice(decimal))
+        val r = parseRatio(requireRatio(ratio)).toLong()
+        val prod = mulExact(micro, r)
+        return microToDecimal(prod / 10_000)
+    }
+
     /** "0.8" → 8000（万分位）。 */
     fun parseRatio(decimal: String): Int = parseScaled(decimal, 4).toInt()
 

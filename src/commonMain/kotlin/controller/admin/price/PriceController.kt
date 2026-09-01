@@ -36,32 +36,36 @@ class PriceController {
 
     @Post("/create")
     @Permission("gateway:price:create")
-    suspend fun create(@Body request: SavePriceRequest): Long =
-        ModelPriceTable.insert(
-            ModelPrice(
-                model = request.model,
-                inputPrice = logic.PricingCalc.requirePrice(request.inputPrice, "inputPrice"),
-                outputPrice = logic.PricingCalc.requirePrice(request.outputPrice, "outputPrice"),
-                cacheReadPrice = logic.PricingCalc.requirePrice(request.cacheReadPrice, "cacheReadPrice"),
-                cacheWritePrice = logic.PricingCalc.requirePrice(request.cacheWritePrice, "cacheWritePrice"),
-                perRequestPrice = request.perRequestPrice, saleOverride = request.saleOverride,
-            )
-        ).id
+    suspend fun create(@Body request: SavePriceRequest): Long {
+        val price = toModelPrice(request)
+        logic.SalePricing.requireMargin(price)
+        return ModelPriceTable.insert(price).id
+    }
 
     @Put("/update")
     @Permission("gateway:price:update")
     suspend fun update(@Body request: SavePriceRequest) {
         val current = ModelPriceTable.get(request.id)
             ?: throw IllegalArgumentException("gateway price id=${request.id} not found")
+        val price = toModelPrice(request)
+        logic.SalePricing.requireMargin(price)
         ModelPriceTable.update(current.copy(
-            model = request.model,
-            inputPrice = logic.PricingCalc.requirePrice(request.inputPrice, "inputPrice"),
-            outputPrice = logic.PricingCalc.requirePrice(request.outputPrice, "outputPrice"),
-            cacheReadPrice = logic.PricingCalc.requirePrice(request.cacheReadPrice, "cacheReadPrice"),
-            cacheWritePrice = logic.PricingCalc.requirePrice(request.cacheWritePrice, "cacheWritePrice"),
-            perRequestPrice = request.perRequestPrice, saleOverride = request.saleOverride,
+            model = price.model,
+            inputPrice = price.inputPrice, outputPrice = price.outputPrice,
+            cacheReadPrice = price.cacheReadPrice, cacheWritePrice = price.cacheWritePrice,
+            perRequestPrice = price.perRequestPrice, saleOverride = price.saleOverride,
         ))
     }
+
+    /** 官方价（成本轨）+ 售价覆盖；售价低于毛利底线由 [logic.SalePricing.requireMargin] 拒绝。 */
+    private fun toModelPrice(request: SavePriceRequest): ModelPrice = ModelPrice(
+        model = request.model,
+        inputPrice = logic.PricingCalc.requirePrice(request.inputPrice, "inputPrice"),
+        outputPrice = logic.PricingCalc.requirePrice(request.outputPrice, "outputPrice"),
+        cacheReadPrice = logic.PricingCalc.requirePrice(request.cacheReadPrice, "cacheReadPrice"),
+        cacheWritePrice = logic.PricingCalc.requirePrice(request.cacheWritePrice, "cacheWritePrice"),
+        perRequestPrice = request.perRequestPrice, saleOverride = request.saleOverride,
+    )
 
     @Delete("/delete/{id}")
     @Permission("gateway:price:delete")
