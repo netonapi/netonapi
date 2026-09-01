@@ -1,5 +1,7 @@
 package logic
 
+import neton.core.http.HttpHeaders
+
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.sync.Mutex
@@ -280,7 +282,7 @@ class RelayEngine(
         val request = NetonHttpRequest(
             method = NetonHttpMethod.Post,
             url = channel.baseUrl.trimEnd('/') + transform.upstreamPath,
-            headers = upstream.upstreamHeaders(apiKey),
+            headers = HttpHeaders.from(upstream.upstreamHeaders(apiKey)),
             body = NetonHttpBody.Json(rewritten.body),
         )
 
