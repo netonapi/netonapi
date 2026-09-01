@@ -15,6 +15,12 @@ data class Channel(
     val groups: String = "default",
     /** 支持的模型清单，逗号分隔 */
     val models: String = "",
+    /**
+     * 该渠道真正能服务的端点能力（逗号分隔，如 "chat,embeddings"）。
+     * 只声明模型不够：embeddings 打到只会 chat 的上游必然 404，而钱已预留、日志已脏、重试还撞同一堵墙。
+     * 默认 "chat"——新能力必须显式声明，不按渠道类型猜（猜错的方向是静默把请求送进不支持的上游）。
+     */
+    val capabilities: String = "chat",
     /** 模型映射 JSON：{"请求名":"上游名"} */
     val modelMapping: String? = null,
     /** 请求参数覆盖 JSON */

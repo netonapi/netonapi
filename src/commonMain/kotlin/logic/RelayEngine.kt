@@ -101,8 +101,23 @@ class RelayEngine(
             !token.allowedModels.split(',').map { it.trim() }.contains(requestModel)
         ) return respondError(ctx, inbound, 403, "model_not_allowed", "model '$requestModel' not allowed for this token")
 
-        val candidates = RelayRouter.candidates(channelLogic.listEnabled(), requestModel, group, now())
-        if (candidates.isEmpty()) return respondError(ctx, inbound, 503, "no_available_channel", "no channel available for model '$requestModel'")
+        // 端点能力路由：/v1/embeddings 之类只能落到声明了该能力的渠道（否则上游必然 404，钱已预留、日志已脏）
+        val capability = RelayRouter.capabilityFor(path)
+        val enabledChannels = channelLogic.listEnabled()
+        val candidates = RelayRouter.candidates(enabledChannels, requestModel, group, now(), capability)
+        if (candidates.isEmpty()) {
+            val reason = RelayRouter.noCandidateReason(enabledChannels, requestModel, group, now(), capability)
+            log.warn("relay no candidate model=$requestModel capability=$capability group=$group reason=$reason")
+            return if (reason.retryable) {
+                respondError(ctx, inbound, 503, "no_available_channel", "no channel available for model '$requestModel'")
+            } else {
+                // 配置不变就永远不会可用（模型没配 / 能力没声明 / 分组不通）→ 404：回 503 客户端会一直重试撞墙
+                respondError(
+                    ctx, inbound, 404, "model_not_found",
+                    "model '$requestModel' is not available on this endpoint",
+                )
+            }
+        }
 
         // ── 资金占位（V004）：预留成功才允许调上游；无价/无输出上限一律拒绝，不免费放行 ──
         // 双轨计价：官方价 = 成本轨，售价（saleOverride 或官方价 × 全局加价率）= 收入轨。

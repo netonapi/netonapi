@@ -6,7 +6,7 @@
 
 | 表 | 语义 |
 |----|------|
-| `gateway_channels` | 上游渠道（type: openai_compatible/anthropic/gemini/azure_openai；priority 分层 + weight 加权；cost_discount 渠道成本折扣） |
+| `gateway_channels` | 上游渠道（type: openai_compatible/anthropic/gemini/azure_openai；priority 分层 + weight 加权；cost_discount 渠道成本折扣；capabilities 端点能力 chat/embeddings） |
 | `gateway_channel_keys` | 渠道多 Key，逐 Key 禁用（status 0 手动 / 2 自动），LRU 轮转选择 |
 | `gateway_tokens` | 用户 sk- 令牌：key_hash=SHA-256、key_display 前7+后4、明文仅创建响应一次；预算/过期/模型白名单/IP 白名单/分组覆盖 |
 | `gateway_model_prices` | 模型定价：官方价（USD/1M，DECIMAL 字符串）+ sale_override 售价覆盖 + per_request_price 按次 |
@@ -166,7 +166,7 @@
   EOF 截断 2·3-byte、期望缺失 candidate 反例、Anthropic message_stop(LF/CRLF/逐字符/缺失)、Gemini candidateCount=2、四 codec CRLF 接线。
   **框架待办（不阻塞 V004）**：Neton 自带 `Flow<HttpClientStreamChunk>.parseSseEvents()` 仍逐 byte chunk decodeToString（同类 UTF-8 bug）；
   gateway 当前不走它，后续应把共享 framer/decoder 上提框架，避免两套 SSE 实现漂移。
-- **V004 durable settlement（已闭环，harness 17/17）**：设计见 `docs/V004-durable-settlement-design.md`。
+- **V004 durable settlement（已闭环，harness 32 断言全绿）**：设计见 `docs/V004-durable-settlement-design.md`。
   - **资金占位先行**：请求前按定价快照算保守上界（输出取 max_tokens / 模型 `default_max_output_tokens`，输入以 UTF-8
     字节数为上界并标 estimated），在**同一事务**内写 settlement + 账户 `reserved_balance` + 令牌 `quota_reserved`；
     条件更新保证 `balance-reserved_balance >= r` 与 `quota_used+quota_reserved+r <= quota_budget`，
@@ -199,8 +199,8 @@
 - **分类统一（Codex #4）**：非流式 401/403 也计 Key 失败（此前只在流式/throw 路径计）；E2E：非流式 3×403 → failCount=3。
 - **Key 轮转（Codex #5）**：recordKeyFailure 也更新 lastUsedAt → LRU 轮转到其他 Key 不死磕坏 Key。
 - 删死代码 consume()（无调用方且非事务化）。token 中途删除：账户级三表照提交+warn（不回滚，避免已服务请求不计费=收入泄漏，此处推回 Codex #3）。
-- **可靠性 harness（已落地，本机 17/17 绿）**：`harness/run.sh`（NewGate 仓）一条命令——隔离测试数据库 +
-  假上游（`fakes.py`，含 `/inflight` 在途计数、midabort 模式）+ 真实网关，10 场景 13 断言。⚠️ S8 只测 DB 唯一索引（未走真实
+- **可靠性 harness（已落地，本机 23 场景 / 32 断言全绿）**：`harness/run.sh`（NanoGate 仓）一条命令——隔离测试数据库 +
+  假上游（`fakes.py`，含 `/inflight` 在途计数、midabort/embok 模式）+ 真实网关。⚠️ S8 只测 DB 唯一索引（未走真实
   bill 重放路径）、S9 只验证收块+服务存活（未断言 partial/账务/Key 状态/无伪造终止）——见上"未闭环 P0"，需以稳定 settlementId
   经测试 seam 真实重放、并断言 midstream 的 partial 语义。场景：S1 20 并发四项不变量、
   S2 dead→live 流式重试、S3 断连四项一致 + producer 拆除（在途归零）、S4 401/403 禁用 & 429 不禁用、S5 revive 保留手动禁用、
@@ -208,7 +208,7 @@
   迁移根因修复：payment/V001 的 `set_config('search_path','',false)` 污染 pooled 连接 → MigrationEngine 每个 PG 迁移事务
   开头 `SET search_path TO DEFAULT` 复位（会话级、提交后持久修复连接、不硬编码 public；不改任何已应用 V001 checksum）。
 - **harness/CI 仍待办**（Codex 评审，紧接下一提交）：改用 PostgreSQL service/container + 动态分配应用/fake 端口（当前固定
-  5432/8080/9900–9991，仅"隔离库"非"隔离实例"）；入 CI + 全局 watchdog（构建/迁移/DB 命令超时）；四个写入点分别注入异常
+  5432/7080/9880–9991，仅"隔离库"非"隔离实例"）；入 CI + 全局 watchdog（构建/迁移/DB 命令超时）；四个写入点分别注入异常
   验证整事务 rollback（需 DbContext 注入 seam）；DB 死锁/连接中断重试分类 + 结算失败 outbox（后台重放，需接调度器）；
   预付费 reserve/finalize。
 - **迁移 search_path 复位的严格证明（待补）**：现有 contract test 仅证明复位 SQL 在脚本 DDL 前发送；fresh-DB harness
@@ -236,6 +236,10 @@
   **结算待处理页**（人工裁定仍持预留的记录 + 触发恢复）、令牌限流字段、定价默认输出上限。
 - ✅ **日志分页**：补 `/gateway/log/page`（此前前端调的端点不存在）。
 - ✅ **`/v1/models` 真数据**：按令牌可路由性 + 分组 + 白名单返回，路由判定复用 RelayRouter 防漂移。
+- ✅ **端点能力路由（V007）**：渠道 `capabilities`（chat/embeddings）显式声明，`/v1/embeddings` 与 Gemini
+  `:embedContent` 只落到声明了 embeddings 的渠道；无候选时区分「暂时不可用」(503) 与「配置不变永不
+  可用」(404 model_not_found)，并把卡在哪一环（无启用/冷却/模型/分组/能力）写进日志。
+  升级默认 `chat`——确实提供向量的渠道必须补声明，宁可明确报无渠道，也不把向量请求送进 chat 上游。
 - ✅ **原生认证载体**：Bearer / `x-api-key`(Anthropic) / `x-goog-api-key` 与 `?key=`(Gemini)。
 - ✅ **未定价模型拒绝**：无定价或无法确定输出上限一律拒绝，不再免费放行。
 - ❌ **用户控制台**（newgate-client 的 gateway 业务）：未开始——用户仍无法自助建 Key / 查用量 / 充值。
@@ -249,22 +253,26 @@
   `docker-compose.yml` 内置 PostgreSQL + Redis，迁移作为一次性服务先跑通再起网关；
   三个密钥无默认值，缺失即拒绝启动。`DEPLOY.md` 含上线检查清单与反代注意事项。
 
-### 可靠性 harness：21 断言 / 15 场景
+### 可靠性 harness：32 断言 / 23 场景（以 `harness/run.sh` 末行输出为准）
 
 S1 并发四项不变量、S2 dead→live、S3 断连计费+producer 拆除、S4 401/403 禁用 & 429 不禁用、
 S5 revive 保留手动禁用、S6 token 中途删除、S7 首建账户并发、S8 结算幂等+终态预留归零、
 S9 midstream partial、S10 429 cooldown、S11 worker 重放+重复 tick 幂等、S12 TTL 释放/转人工、
-S13 RPM 限流、S14 IP 白名单、S15 /v1/models + 原生认证。
+S13 RPM 限流、S14 IP 白名单、S15 /v1/models + 原生认证、S16 用户端 app API（广场匿名可读 / 未定价不展示）、
+S17 在途改价按快照计价、S18 快照损坏转人工+预留保留、S19 坏价入口 fail-fast、
+S20 双轨计价（售价/成本分离）、S21 毛利闸门（发布期）、S22 全局加价率 / 毛利下限、
+S23 端点能力路由（embeddings 只落声明渠道，无能力 404 且零预留）。
 
-## 待办（Codex 评审确认的真实差距，未完成）
+## 待办（逐条核实仍未完成的真实差距）
 
-- 原生认证载体：仅 Bearer sk-；Anthropic x-api-key / Gemini x-goog-api-key|?key= 未映射到 NewGate token
+> 已落地项不再留在这里充数：原生认证载体（S15）、IP 白名单校验（S14）、RPM/TPM/并发（S13）、
+> ttfb/idle 超时接线、渠道 Key 加密、base/proxy URL SSRF 校验、未定价模型拒绝、`sale_override`
+> 参与计费（双轨，S20–S22）、`/v1/models` 真数据（S15）、日志分页端点、fork 配置卫生（privchat 残留已清）。
+
 - Azure OpenAI 未实现（api-key 头/deployment URL/api-version），当前 azure_openai 走 OpenAiAdapter
-- IP 白名单仅字段无校验；RPM/TPM/并发流上限未实现；ttfbTimeoutMs 未接超时
-- 渠道 Key 明文存储（设计要求加密）；base/proxy URL 无 SSRF 校验
-- 未定价模型/无 usage 请求免费放行（收入泄漏）；saleOverride 未参与计费；反向模型映射未执行
+- 反向模型映射未执行：响应体 `model` 仍是上游名，会把上游模型身份透给客户端
 - codec 有损：thinking/cache_control/多模态/多 candidate/结构化输出等未覆盖；跨协议上游 4xx 未按入站协议重序列化
-- /v1/models 返回空；扩展端点（Responses/Images/Audio/Rerank）未实现
-- 管理台契约错位：日志页调 /gateway/log/page（后端只有 list-by-*）；多 Key/测速/健康 UI 缺；令牌页字段不全
-- 3×3 = 文本聊天核心子集 baseline E2E，非完整协议兼容；E2E 脚本未入库/未入 CI
-- fork 卫生：application.conf/database.conf 仍留 privchat 名/库地址/默认 JWT 占位
+- 扩展端点（Responses/Images/Audio/Rerank）未实现；能力枚举也只有 chat/embeddings 两值
+- 管理台 UI 缺口：多 Key 管理 / 测速 / 健康视图缺；渠道能力目前只有一个逗号分隔文本框（无逐能力勾选）
+- 3×3 = 文本聊天核心子集 baseline E2E，非完整协议兼容
+- CI 未真跑：harness 与单测都不在任何远端流水线里（三个 fork 仍是 local-path origin）

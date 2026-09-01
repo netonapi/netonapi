@@ -25,7 +25,7 @@ class ModelsController(
     suspend fun list(response: HttpResponse, identity: Identity) {
         val created = nowMillis() / 1000
         val data = availableModels(identity).joinToString(",") { m ->
-            """{"id":${quote(m)},"object":"model","created":$created,"owned_by":"newgate"}"""
+            """{"id":${quote(m)},"object":"model","created":$created,"owned_by":"nanogate"}"""
         }
         response.json("""{"object":"list","data":[$data]}""")
     }
@@ -42,7 +42,8 @@ class ModelsController(
             .asSequence()
             .flatMap { ch -> ch.models.split(',').map { it.trim() }.filter { it.isNotEmpty() }.asSequence() }
             .distinct()
-            // 逐个复核可路由性：分组交集、冷却、状态一律交给 RelayRouter 判定，避免与实际路由漂移
+            // 逐个复核可路由性：分组交集、冷却、状态、能力一律交给 RelayRouter 判定，避免与实际路由漂移。
+            // 默认 chat 能力：客户端拿这张表去发对话请求，只声明 embeddings 的模型列进来会被当成 chat 调。
             .filter { model -> RelayRouter.candidates(enabled, model, group, now).isNotEmpty() }
             .filter { allowed.isEmpty() || it in allowed }
             .sorted()

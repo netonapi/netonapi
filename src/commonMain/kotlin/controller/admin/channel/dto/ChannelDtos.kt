@@ -9,6 +9,8 @@ data class CreateChannelRequest(
     val baseUrl: String,
     val groups: String = "default",
     val models: String = "",
+    /** 端点能力（CSV，chat/embeddings）：不声明的能力不会收到对应端点的请求 */
+    val capabilities: String = "chat",
     val modelMapping: String? = null,
     val paramOverride: String? = null,
     val priority: Int = 0,
@@ -28,6 +30,8 @@ data class UpdateChannelRequest(
     val baseUrl: String,
     val groups: String,
     val models: String,
+    /** 端点能力（CSV，chat/embeddings）：不声明的能力不会收到对应端点的请求 */
+    val capabilities: String = "chat",
     val modelMapping: String? = null,
     val paramOverride: String? = null,
     val priority: Int = 0,

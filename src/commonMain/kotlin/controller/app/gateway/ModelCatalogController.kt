@@ -18,6 +18,8 @@ data class PublicModelVO(
     val perRequestPrice: Long? = null,
     /** 请求未传 max_tokens 时按此值预留；为空则该模型要求请求自带 max_tokens */
     val defaultMaxOutputTokens: Int? = null,
+    /** 可调用该模型的端点能力（chat / embeddings）：只给模型名，用户会把向量模型当 chat 调 */
+    val capabilities: List<String> = emptyList(),
 )
 
 /**
@@ -32,10 +34,16 @@ class ModelCatalogController(private val channelLogic: ChannelLogic) {
 
     @Get("/list")
     suspend fun list(): List<PublicModelVO> {
-        // 只列「有启用渠道承载」且「已配定价」的模型——未定价模型会被网关拒绝，列出来是误导
-        val servable = channelLogic.listEnabled()
-            .flatMap { ch -> ch.models.split(',').map { it.trim() }.filter { it.isNotEmpty() } }
-            .toSet()
+        // 只列「有启用渠道承载」且「已配定价」的模型——未定价模型会被网关拒绝，列出来是误导。
+        // 能力取承载渠道的并集：能力路由生效后，模型能被哪个端点调也是用户要知道的事实。
+        val capsByModel = mutableMapOf<String, MutableSet<String>>()
+        channelLogic.listEnabled().forEach { ch ->
+            val caps = ch.capabilities.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            ch.models.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { m ->
+                capsByModel.getOrPut(m) { mutableSetOf() }.addAll(caps)
+            }
+        }
+        val servable = capsByModel.keys
         if (servable.isEmpty()) return emptyList()
         return ModelPriceTable.query { orderBy(ModelPrice::model.asc()) }.list()
             .filter { it.model in servable }
@@ -50,6 +58,7 @@ class ModelCatalogController(private val channelLogic: ChannelLogic) {
                     cacheReadPrice = sale.cacheReadPrice,
                     perRequestPrice = sale.perRequestPrice,
                     defaultMaxOutputTokens = it.defaultMaxOutputTokens,
+                    capabilities = capsByModel[it.model]?.sorted() ?: emptyList(),
                 )
             }
     }
