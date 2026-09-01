@@ -46,7 +46,7 @@
 
 - 入站：`POST /v1/chat/completions`、`POST /v1/embeddings`（gateway 组，TokenGuard 后）
 - 管线：预检（令牌预算/余额）→ RequestRewriter（JsonObject 保真：只动 model/param_override/include_usage）→
-  RelayRouter（priority 分层 + weight 加权随机 + 重试排除）→ NetonHttpClient（渠道 client 按配置键缓存）→
+  RelayRouter（priority 分层 + weight 加权随机 + 重试排除）→ HttpClient（渠道 client 按配置键缓存）→
   非流式透传 / SSE 直通（旁路 SseUsageAccumulator）→ PricingCalc（μUSD）→ QuotaLogic.consume + UsageLog
 - 重试：仅首字节前（连接错/超时/429/5xx），上限 min(3, 候选数)，同序列不重复渠道；开流后中断按 partial 计费收尾
 - 错误：OpenAI error 格式；429 insufficient_quota（对齐 OpenAI 语义，HttpStatus 无 402）/ 503 no_available_channel /
@@ -164,7 +164,7 @@
   终止判定按**请求期望的 candidate 数**（OpenAI `n` / Gemini `candidateCount`，默认 1）：0..n-1 全 finish（或 OpenAI `[DONE]` 绝对终止）——
   仅"已观察都 finish"无法发现 n=2 但 index 1 从未出现的截断。单测：CRLF/任意分片/空 chunk pendingCr、逐字节 UTF-8、非法 lead/孤立 continuation/
   EOF 截断 2·3-byte、期望缺失 candidate 反例、Anthropic message_stop(LF/CRLF/逐字符/缺失)、Gemini candidateCount=2、四 codec CRLF 接线。
-  **框架待办（不阻塞 V004）**：Neton 自带 `Flow<NetonHttpStreamChunk>.parseSseEvents()` 仍逐 byte chunk decodeToString（同类 UTF-8 bug）；
+  **框架待办（不阻塞 V004）**：Neton 自带 `Flow<HttpClientStreamChunk>.parseSseEvents()` 仍逐 byte chunk decodeToString（同类 UTF-8 bug）；
   gateway 当前不走它，后续应把共享 framer/decoder 上提框架，避免两套 SSE 实现漂移。
 - **V004 durable settlement（已闭环，harness 17/17）**：设计见 `docs/V004-durable-settlement-design.md`。
   - **资金占位先行**：请求前按定价快照算保守上界（输出取 max_tokens / 模型 `default_max_output_tokens`，输入以 UTF-8

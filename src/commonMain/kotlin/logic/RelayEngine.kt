@@ -161,14 +161,14 @@ class RelayEngine(
             val rewritten = transform.rewritten
             val outcome: RelayOutcome? = try {
                 execute(ctx, channel, key.id, key.apiKey, transform, path, token, group, startMs)
-            } catch (e: NetonHttpException) {
+            } catch (e: HttpClientException) {
                 val err = e.error
                 val retryable = when (err) {
-                    is NetonHttpError.Http -> err.statusCode == 429 || err.statusCode >= 500
-                    is NetonHttpError.Network, is NetonHttpError.Timeout -> true
+                    is HttpClientError.Http -> err.statusCode == 429 || err.statusCode >= 500
+                    is HttpClientError.Network, is HttpClientError.Timeout -> true
                     else -> false
                 }
-                if (!retryable && err is NetonHttpError.Http) {
+                if (!retryable && err is HttpClientError.Http) {
                     // 上游认证错（401/403）归咎于 Key；其它 4xx 是客户端问题，不计 Key 失败
                     if (err.statusCode == 401 || err.statusCode == 403) channelLogic.recordKeyFailure(key.id, "upstream_${err.statusCode}")
                     recordLog(token, channel, rewritten, Usage(), group, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
@@ -178,7 +178,7 @@ class RelayEngine(
                 lastError = err.toString().replace("\n", " ").take(160)
                 // 429（限流）是暂时性的，不计入永久禁用；仅 5xx/网络/超时计 Key 失败（Codex 评审 #3）。
                 // 429 改为给渠道加冷却退避（cooldown_until），冷却期内不再选它，避免立即重试撞同一限流上游。
-                val is429 = (err as? NetonHttpError.Http)?.statusCode == 429
+                val is429 = (err as? HttpClientError.Http)?.statusCode == 429
                 if (is429) channelLogic.recordChannelCooldown(channel.id)
                 else channelLogic.recordKeyFailure(key.id, lastError)
                 log.warn("relay retry channel=${channel.id} err=$lastError")
@@ -269,7 +269,7 @@ class RelayEngine(
         }
     }
 
-    /** 返回 SUCCESS/PARTIAL（已终态）；可重试失败抛 NetonHttpException（downstream 未提交）。 */
+    /** 返回 SUCCESS/PARTIAL（已终态）；可重试失败抛 HttpClientException（downstream 未提交）。 */
     private suspend fun execute(
         ctx: HttpContext,
         channel: Channel,
@@ -284,17 +284,17 @@ class RelayEngine(
         val rewritten = transform.rewritten
         val upstream = transform.upstream
         val client = clientFor(channel)
-        val request = NetonHttpRequest(
-            method = NetonHttpMethod.Post,
+        val request = HttpClientRequest(
+            method = HttpClientMethod.Post,
             url = channel.baseUrl.trimEnd('/') + transform.upstreamPath,
             headers = HttpHeaders.from(upstream.upstreamHeaders(apiKey)),
-            body = NetonHttpBody.Json(rewritten.body),
+            body = HttpClientBody.Json(rewritten.body),
         )
 
         if (!rewritten.stream) {
             val res = client.request(request)
             if (res.statusCode == 429 || res.statusCode >= 500) {
-                throw NetonHttpException(NetonHttpError.Http(res.statusCode, "HTTP ${res.statusCode}", res.body))
+                throw HttpClientException(HttpClientError.Http(res.statusCode, "HTTP ${res.statusCode}", res.body))
             }
             if (res.statusCode !in 200..299) {
                 // 401/403 = 凭证级失败，计 Key 失败（与流式/外层分类统一）；其它 4xx 是客户端问题
@@ -319,7 +319,7 @@ class RelayEngine(
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private suspend fun streamWithPreflight(
-        ctx: HttpContext, client: NetonHttpClient, request: NetonHttpRequest,
+        ctx: HttpContext, client: HttpClient, request: HttpClientRequest,
         accumulator: logic.protocol.StreamUsageAccumulator, streamTransformer: StreamTransformer?,
         token: GatewayToken, channel: Channel, keyId: Long, rewritten: Rewritten, group: String, startMs: Long,
     ): RelayOutcome = kotlinx.coroutines.coroutineScope {
@@ -331,9 +331,9 @@ class RelayEngine(
             try {
                 client.stream(request).collect { chunk ->
                     when (chunk) {
-                        is NetonHttpStreamChunk.Bytes -> { val s = utf8.decode(chunk.bytes); if (s.isNotEmpty()) send(s) }
-                        is NetonHttpStreamChunk.Text -> send(chunk.text)
-                        is NetonHttpStreamChunk.End -> {}
+                        is HttpClientStreamChunk.Bytes -> { val s = utf8.decode(chunk.bytes); if (s.isNotEmpty()) send(s) }
+                        is HttpClientStreamChunk.Text -> send(chunk.text)
+                        is HttpClientStreamChunk.End -> {}
                     }
                 }
                 val tail = utf8.flush(); if (tail.isNotEmpty()) send(tail)
@@ -347,8 +347,8 @@ class RelayEngine(
         val firstResult = chunks.receiveCatching()
         if (firstResult.isClosed) {
             openError?.let { cause ->
-                if (cause is NetonHttpException) throw cause
-                throw NetonHttpException(NetonHttpError.Network(cause.message ?: "stream open failed", cause as? Throwable))
+                if (cause is HttpClientException) throw cause
+                throw HttpClientException(HttpClientError.Network(cause.message ?: "stream open failed", cause as? Throwable))
             }
             // 空流（无块无错）：视为成功空响应
         }
@@ -618,14 +618,14 @@ class RelayEngine(
         private val DUMMY = Channel(id = 0, name = "", type = "", baseUrl = "")
 
         private val clientMutex = Mutex()
-        private val clients = mutableMapOf<String, NetonHttpClient>()
+        private val clients = mutableMapOf<String, HttpClient>()
 
         /** 渠道 client 缓存：key 含影响连接行为的字段；渠道配置变更后 key 变化自然重建。 */
-        suspend fun clientFor(channel: Channel): NetonHttpClient {
+        suspend fun clientFor(channel: Channel): HttpClient {
             val key = "${channel.id}|${channel.proxyUrl ?: ""}|${channel.ttfbTimeoutMs}|${channel.idleTimeoutMs}"
             clientMutex.withLock {
                 return clients.getOrPut(key) {
-                    NetonHttpClient.create {
+                    HttpClient.create {
                         connectMillis = 5_000
                         requestMillis = 600_000               // 长流总上限 10 分钟
                         socketMillis = channel.idleTimeoutMs  // 块间空闲超时
