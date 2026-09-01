@@ -7,6 +7,7 @@ import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -456,23 +457,28 @@ class RelayEngine(
             return
         }
         // V004 §7.1：必须按 reserve 时固化的定价快照计价——中途改价/改倍率不影响在途请求。
-        // 若在此重查定价表，会出现「旧价预留、新价扣款」（收入或用户资金漂移）。
+        // 快照无效（损坏/字段缺失/数值非法）= 数据事故：账务不允许猜价。禁止回退实时价——那会
+        // 重新制造「旧价预留、新价扣款」；保留预留资金转人工复核，并打高优先级告警。
         val snapped = snapshotPrice(s.pricingSnapshot)
-        val price: ModelPrice?
-        val ratio: String
-        if (snapped != null) {
-            price = snapped.first
-            ratio = snapped.second
-        } else {
-            // 快照缺失/不可解析（不应发生）：退化为查当前价保住可用性，但丢失快照隔离语义，必须排查。
-            log.error("settlement pricing snapshot unusable sid=${s.settlementId} model=${rewritten.requestModel}; falling back to live pricing")
-            price = ModelPriceTable.oneWhere { ModelPrice::model eq rewritten.requestModel }
-            ratio = GatewayGroupTable.oneWhere { GatewayGroup::name eq group }?.ratio ?: "1.0"
+        if (snapped == null) {
+            log.error("CRITICAL settlement pricing snapshot invalid sid=${s.settlementId} " +
+                "model=${rewritten.requestModel} snapshot=${s.pricingSnapshot.take(200)}; " +
+                "holding reservation, routing to MANUAL_REVIEW (no live-price fallback)")
+            val r = settlementLogic.markManualReview(
+                settlementId = s.settlementId, from = bySettlementStatus(s.settlementId),
+                action = model.Settlement.ACTION_FINALIZE,
+                error = "pricing snapshot invalid: ${s.pricingSnapshot.take(200)}",
+            )
+            if (r !is SettlementLogic.TransitionResult.Applied &&
+                r !is SettlementLogic.TransitionResult.AlreadyDone
+            ) log.error("settlement manual-review transition failed sid=${s.settlementId} r=$r; worker TTL will catch it")
+            return
         }
+        val (price, ratio) = snapped
         val effectiveUsage = usage ?: Usage()
-        val charged = if (price != null) PricingCalc.charge(effectiveUsage, price, ratio) else 0L
+        val charged = PricingCalc.charge(effectiveUsage, price, ratio)
         // 成本：用请求入口选中的渠道对象（costDiscount 在候选选定时刻已固化），结算时不重查渠道表。
-        val cost = if (price != null) PricingCalc.cost(effectiveUsage, price, channel.costDiscount) else 0L
+        val cost = PricingCalc.cost(effectiveUsage, price, channel.costDiscount)
 
         // T3：先把 usage payload 落库转入 durable 重试态。这一步失败且随后崩溃 = C3′（usage 永久丢失），
         // 故用 NonCancellable + 有界重试把概率压到最低；仍失败则留在 UPSTREAM_STARTED，由 worker TTL 转人工。
@@ -543,18 +549,30 @@ class RelayEngine(
                 """"cacheRead":"${price.cacheReadPrice}","cacheWrite":"${price.cacheWritePrice}",""" +
                 """"perRequest":${price.perRequestPrice},"ratio":"$ratio"}"""
 
-    /** 解析结算行存的定价快照（[pricingSnapshot] 的镜像）；缺失或不可解析返回 null。 */
+    /**
+     * 解析结算行存的定价快照（[pricingSnapshot] 的镜像）。严格校验：JSON 非法、字段缺失、
+     * 数值越界一律返回 null——绝不用默认价（"0"/"1.0"）静默补齐，损坏快照宁可转人工也不按猜的价扣钱。
+     */
     private fun snapshotPrice(json: String): Pair<ModelPrice, String>? = runCatching {
         val o = Json.parseToJsonElement(json).jsonObject
-        if (o.isEmpty()) return@runCatching null
+        fun priceField(key: String): String? = o[key]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { runCatching { PricingCalc.requirePrice(it) }.isSuccess }
+        val input = priceField("input") ?: return@runCatching null
+        val output = priceField("output") ?: return@runCatching null
+        val cacheRead = priceField("cacheRead") ?: return@runCatching null
+        val cacheWrite = priceField("cacheWrite") ?: return@runCatching null
+        val ratio = o["ratio"]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { runCatching { PricingCalc.requireRatio(it) }.isSuccess } ?: return@runCatching null
+        // perRequest：JSON null（非按次计价）或非负整数才合法；缺失/非法一律视为快照损坏
+        val prPrim = o["perRequest"]?.jsonPrimitive ?: return@runCatching null
+        val perRequest = if (prPrim is JsonNull) null
+            else prPrim.longOrNull?.takeIf { it >= 0 } ?: return@runCatching null
         ModelPrice(
             model = "",
-            inputPrice = o["input"]?.jsonPrimitive?.contentOrNull ?: "0",
-            outputPrice = o["output"]?.jsonPrimitive?.contentOrNull ?: "0",
-            cacheReadPrice = o["cacheRead"]?.jsonPrimitive?.contentOrNull ?: "0",
-            cacheWritePrice = o["cacheWrite"]?.jsonPrimitive?.contentOrNull ?: "0",
-            perRequestPrice = o["perRequest"]?.jsonPrimitive?.longOrNull,
-        ) to (o["ratio"]?.jsonPrimitive?.contentOrNull ?: "1.0")
+            inputPrice = input, outputPrice = output,
+            cacheReadPrice = cacheRead, cacheWritePrice = cacheWrite,
+            perRequestPrice = perRequest,
+        ) to ratio
     }.getOrNull()
 
     /**
