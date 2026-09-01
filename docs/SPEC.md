@@ -167,7 +167,7 @@ name = "neton-application"
 debug = false
 
 [server]
-port = 8080
+port = 7080
 host = "0.0.0.0"
 
 [database]
@@ -323,12 +323,12 @@ cd neton-application/application
 ./build/bin/macosArm64/debugExecutable/application.kexe
 ```
 
-默认监听 **http://0.0.0.0:8080**。生产可指定环境：`./application.kexe --env=prod`。
+默认监听 **http://0.0.0.0:7080**。生产可指定环境：`./application.kexe --env=prod`。
 
 ### 7.4 验证
 
 ```bash
-curl http://localhost:8080/
+curl http://localhost:7080/
 # {"status":"ok","service":"neton-application","version":"1.0.0"}
 ```
 
@@ -345,8 +345,8 @@ curl http://localhost:8080/
 
 前端开发时通过 Vite 代理将 `/admin` 转到后端 `/admin`，避免跨域并统一前缀：
 
-- 前端请求：`/admin/system/auth/login` → 代理到 `http://127.0.0.1:8080/admin/system/auth/login`
-- 配置见 neton-application-admin 的 `apps/web-antd/vite.config.mts`（proxy `/admin` → target 8080，rewrite 为 `/admin`）。
+- 前端请求：`/admin/system/auth/login` → 代理到 `http://127.0.0.1:7080/admin/system/auth/login`
+- 配置见 neton-application-admin 的 `apps/web-antd/vite.config.mts`（proxy `/admin` → target 7080，rewrite 为 `/admin`）。
 
 ### 8.3 联调顺序
 

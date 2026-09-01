@@ -32,13 +32,13 @@ COPY --from=build /src/newgate/application/build/bin/linuxX64/releaseExecutable/
 COPY --from=build /src/newgate/application/config /app/config
 
 USER newgate
-EXPOSE 8080
+EXPOSE 7080
 
 # 配置一律用环境变量覆盖（镜像内的默认值只适用于本地起步）：
 #   NETON_DATABASE__DEFAULT__URI       PostgreSQL 连接串
 #   NETON_SECURITY__JWT__SECRETKEY     管理台 JWT 签名密钥（必须改）
 #   NEWGATE_CHANNEL_KEY_ENC_KEY        渠道 Key 加密主密钥（base64 32 字节，强烈建议配置）
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/ >/dev/null || exit 1
+    CMD curl -fsS http://127.0.0.1:7080/ >/dev/null || exit 1
 
 ENTRYPOINT ["/app/newgate"]

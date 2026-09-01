@@ -317,16 +317,16 @@ Kotlin/Native Runtime
 
 Adapter     : Ktor CIO
 Environment : dev
-Port        : 8080
+Port        : 7080
 Cold Start  : 154 ms
 
-Ready → http://localhost:8080
+Ready → http://localhost:7080
 ```
 
 ### 6. Verify
 
 ```bash
-curl http://localhost:8080/
+curl http://localhost:7080/
 # {"status":"ok","service":"neton-application","version":"1.0.0"}
 ```
 
@@ -340,7 +340,7 @@ name = "neton-application"
 debug = false
 
 [server]
-port = 8080
+port = 7080
 host = "0.0.0.0"
 
 [database]
@@ -433,14 +433,14 @@ For release builds: replace `linkDebugExecutable` with `linkReleaseExecutable`.
 FROM scratch
 COPY build/bin/linuxX64/releaseExecutable/application.kexe /app
 COPY application/config/ /config/
-EXPOSE 8080
+EXPOSE 7080
 ENTRYPOINT ["/app", "--env=prod"]
 ```
 
 ```bash
 # Build image (~10MB)
 docker build -t neton-application .
-docker run -p 8080:8080 neton-application
+docker run -p 7080:7080 neton-application
 ```
 
 ## Development Guide
