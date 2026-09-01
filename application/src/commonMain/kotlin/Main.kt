@@ -7,6 +7,7 @@ import neton.core.generated.GeneratedNetonConfigRegistry
 import neton.database.database
 import neton.jobs.jobs
 import neton.http.http
+import neton.http.ktor.KtorHttpAdapter
 import neton.redis.redis
 import neton.routing.routing
 import neton.security.security
@@ -50,7 +51,7 @@ fun main(args: Array<String>) {
         //
         // **生产部署必须收紧**到正式域名白名单 —— 改这里之前先确认 prod 配置不是
         // 这条路径（理论上 prod 走另一份配置 / 反向代理拦下）。
-        http {
+        http(::KtorHttpAdapter) {
             cors {
                 allowedOrigins = listOf("*")
                 allowedMethods = listOf("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
