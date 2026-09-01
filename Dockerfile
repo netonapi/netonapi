@@ -1,4 +1,4 @@
-# NewGate 运行镜像。
+# NanoGate 运行镜像。
 # Kotlin/Native 产出静态可执行文件，故运行阶段不需要 JVM——构建阶段用 JDK 跑 Gradle，
 # 运行阶段只带一个二进制与配置。
 #

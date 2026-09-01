@@ -108,7 +108,7 @@ jobs:
       - name: Checkout NewGate
         uses: actions/checkout@v4
         with:
-          repository: zoujiaqing/NewGate
+          repository: zoujiaqing/nanogate
           path: NewGate
 
       - name: Checkout application
