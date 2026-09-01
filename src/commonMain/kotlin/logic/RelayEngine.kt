@@ -6,6 +6,11 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import model.Channel
 import model.GatewayGroup
 import model.GatewayToken
@@ -450,10 +455,23 @@ class RelayEngine(
             log.error("relay bill without reservation model=${rewritten.requestModel}（不应发生）")
             return
         }
-        val price: ModelPrice? = ModelPriceTable.oneWhere { ModelPrice::model eq rewritten.requestModel }
-        val ratio = GatewayGroupTable.oneWhere { GatewayGroup::name eq group }?.ratio ?: "1.0"
+        // V004 §7.1：必须按 reserve 时固化的定价快照计价——中途改价/改倍率不影响在途请求。
+        // 若在此重查定价表，会出现「旧价预留、新价扣款」（收入或用户资金漂移）。
+        val snapped = snapshotPrice(s.pricingSnapshot)
+        val price: ModelPrice?
+        val ratio: String
+        if (snapped != null) {
+            price = snapped.first
+            ratio = snapped.second
+        } else {
+            // 快照缺失/不可解析（不应发生）：退化为查当前价保住可用性，但丢失快照隔离语义，必须排查。
+            log.error("settlement pricing snapshot unusable sid=${s.settlementId} model=${rewritten.requestModel}; falling back to live pricing")
+            price = ModelPriceTable.oneWhere { ModelPrice::model eq rewritten.requestModel }
+            ratio = GatewayGroupTable.oneWhere { GatewayGroup::name eq group }?.ratio ?: "1.0"
+        }
         val effectiveUsage = usage ?: Usage()
         val charged = if (price != null) PricingCalc.charge(effectiveUsage, price, ratio) else 0L
+        // 成本：用请求入口选中的渠道对象（costDiscount 在候选选定时刻已固化），结算时不重查渠道表。
         val cost = if (price != null) PricingCalc.cost(effectiveUsage, price, channel.costDiscount) else 0L
 
         // T3：先把 usage payload 落库转入 durable 重试态。这一步失败且随后崩溃 = C3′（usage 永久丢失），
@@ -524,6 +542,20 @@ class RelayEngine(
             """{"input":"${price.inputPrice}","output":"${price.outputPrice}",""" +
                 """"cacheRead":"${price.cacheReadPrice}","cacheWrite":"${price.cacheWritePrice}",""" +
                 """"perRequest":${price.perRequestPrice},"ratio":"$ratio"}"""
+
+    /** 解析结算行存的定价快照（[pricingSnapshot] 的镜像）；缺失或不可解析返回 null。 */
+    private fun snapshotPrice(json: String): Pair<ModelPrice, String>? = runCatching {
+        val o = Json.parseToJsonElement(json).jsonObject
+        if (o.isEmpty()) return@runCatching null
+        ModelPrice(
+            model = "",
+            inputPrice = o["input"]?.jsonPrimitive?.contentOrNull ?: "0",
+            outputPrice = o["output"]?.jsonPrimitive?.contentOrNull ?: "0",
+            cacheReadPrice = o["cacheRead"]?.jsonPrimitive?.contentOrNull ?: "0",
+            cacheWritePrice = o["cacheWrite"]?.jsonPrimitive?.contentOrNull ?: "0",
+            perRequestPrice = o["perRequest"]?.jsonPrimitive?.longOrNull,
+        ) to (o["ratio"]?.jsonPrimitive?.contentOrNull ?: "1.0")
+    }.getOrNull()
 
     /**
      * 请求指纹（V004 §3.2）：**长度前缀编码**后 SHA-256。
