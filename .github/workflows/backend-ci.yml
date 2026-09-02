@@ -3,50 +3,101 @@ name: Backend CI
 on:
   pull_request:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+# Kotlin/Native 一轮几十分钟：同分支的新推送直接取消旧运行，不排队。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 跨仓 checkout 私有 canonical 仓需要 PAT —— GITHUB_TOKEN 只对「跑这个 workflow 的仓」有效。
+  # 在 repo secrets 里配 NETON_CI_TOKEN（fine-grained PAT，对 netonframework / neton-application
+  # 两个 org 只读即可）；若这些仓全部公开，不配也能跑（自动回落到 GITHUB_TOKEN）。
+  NETON_CI_TOKEN: ${{ secrets.NETON_CI_TOKEN || secrets.GITHUB_TOKEN }}
+
+# ── checkout 布局是硬约束，不是风格问题 ──────────────────────────────────────────
+# 本仓 settings.gradle.kts 用相对路径装配 canonical 源码：
+#   includeBuild("../../Neton/neton")
+#   project(":module-gateway").projectDir = file("../../Neton/neton-application-module-gateway")
+# 即「本仓必须在 workspace 下两层，canonical 仓必须在 workspace 的 Neton/ 下」，差一层就解析不到：
+#   dist/newgate    ← 本仓（compile job）
+#   NewGate/newgate ← 本仓（harness job；外层 NewGate = zoujiaqing/nanogate，harness 住在那儿）
+#   Neton/*         ← 框架 + 六个模块 + geolite4k
+# 少 checkout 任何一个模块都会在 Gradle **配置期**直接失败（include 指向的目录不存在）。
+# 六个模块都是 include(...) 子项目而非 composite build，KSP 随正常任务图生成，
+# 因此不需要（也不该有）额外的 KSP 预生成步骤。
 
 jobs:
-  application-build:
+  compile-and-test:
+    name: Compile + unit tests (macOS arm64)
     runs-on: macos-14
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
-      - name: Checkout application
+      - name: Checkout this repository
         uses: actions/checkout@v4
         with:
-          path: neton-application
+          path: dist/newgate
 
       - name: Checkout framework
         uses: actions/checkout@v4
         with:
           repository: netonframework/neton
-          path: neton
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton
 
-      - name: Checkout member module
+      - name: Checkout geolite4k
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/geolite4k
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/geolite4k
+
+      - name: Checkout module-system
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-system
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-system
+
+      - name: Checkout module-infra
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-infra
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-infra
+
+      - name: Checkout module-member
         uses: actions/checkout@v4
         with:
           repository: neton-application/neton-application-module-member
-          path: neton-application-module-member
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-member
 
-      - name: Checkout payment module
+      - name: Checkout module-payment
         uses: actions/checkout@v4
         with:
           repository: neton-application/neton-application-module-payment
-          path: neton-application-module-payment
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-payment
 
-      - name: Checkout platform module
+      - name: Checkout module-platform
         uses: actions/checkout@v4
         with:
           repository: neton-application/neton-application-module-platform
-          path: neton-application-module-platform
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-platform
 
-      - name: Checkout gateway module
+      - name: Checkout module-gateway
         uses: actions/checkout@v4
         with:
           repository: neton-application/neton-application-module-gateway
-          path: neton-application-module-gateway
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-gateway
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -55,39 +106,44 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v3
+      # Kotlin/Native 首次跑会往 ~/.konan 拉 ~1GB 的 LLVM 与平台依赖；不缓存则每轮 CI 重下。
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
         with:
-          build-root-directory: neton-application
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('dist/newgate/gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
 
-      - name: Generate KSP outputs for composite modules
-        working-directory: neton-application
-        run: |
-          rm -rf ../neton-application-module-member/build/generated ../neton-application-module-member/build/classes ../neton-application-module-member/build/kotlin
-          rm -rf ../neton-application-module-payment/build/generated ../neton-application-module-payment/build/classes ../neton-application-module-payment/build/kotlin
-          rm -rf ../neton-application-module-platform/build/generated ../neton-application-module-platform/build/classes ../neton-application-module-platform/build/kotlin
-          rm -rf module-system/build/generated module-system/build/classes module-system/build/kotlin
-          rm -rf module-infra/build/generated module-infra/build/classes module-infra/build/kotlin
-          ./gradlew :module-system:kspKotlinMacosArm64 --rerun-tasks
-          ./gradlew :module-infra:kspKotlinMacosArm64 --rerun-tasks
-          (cd ../neton-application-module-member && ./gradlew kspKotlinMacosArm64 --rerun-tasks)
-          (cd ../neton-application-module-payment && ./gradlew kspKotlinMacosArm64 --rerun-tasks)
-          (cd ../neton-application-module-platform && ./gradlew kspKotlinMacosArm64 --rerun-tasks)
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+        with:
+          build-root-directory: dist/newgate
 
       - name: Compile application
-        working-directory: neton-application
+        working-directory: dist/newgate
         run: ./gradlew :application:compileKotlinMacosArm64
 
-      # 只编译不跑测试等于没有回归保护：账务/流式/限流的正确性全靠这些断言守住
+      # 只编译不跑测试等于没有回归保护：账务、流式、限流、IP 信任边界、SSRF 全靠这些断言守住。
       - name: Unit tests
-        working-directory: neton-application
+        working-directory: dist/newgate
         run: ./gradlew :module-gateway:macosArm64Test :module-system:macosArm64Test
 
-  # 可靠性 harness：真实 PostgreSQL + 假上游 + 真实网关，逐场景断言账务/流式/限流。
-  # 单元测试覆盖不到「钱是否算对」——这一层必须跑真库。
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: Neton/neton-application-module-*/build/test-results/**/*.xml
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # 可靠性 harness：真实 PostgreSQL + 隔离 Redis + 假上游 + 真实网关，逐场景断言账务/流式/限流。
+  # 单元测试覆盖不到「钱是否算对」与「多进程并发下计数是否精确」——这一层必须跑真库真 Redis。
+  # 顺带证明 linuxX64 目标能链接、能跑（macOS job 证明不了这件事）。
   reliability-harness:
+    name: Reliability harness (Linux, real PostgreSQL + Redis)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     services:
       postgres:
@@ -105,13 +161,14 @@ jobs:
           --health-retries 10
 
     steps:
-      - name: Checkout NewGate
+      - name: Checkout NanoGate distribution repository
         uses: actions/checkout@v4
         with:
           repository: zoujiaqing/nanogate
+          token: ${{ env.NETON_CI_TOKEN }}
           path: NewGate
 
-      - name: Checkout application
+      - name: Checkout this repository
         uses: actions/checkout@v4
         with:
           path: NewGate/newgate
@@ -120,31 +177,57 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: netonframework/neton
-          path: neton
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton
 
-      - name: Checkout member module
+      - name: Checkout geolite4k
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/geolite4k
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/geolite4k
+
+      - name: Checkout module-system
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-system
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-system
+
+      - name: Checkout module-infra
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-infra
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-infra
+
+      - name: Checkout module-member
         uses: actions/checkout@v4
         with:
           repository: neton-application/neton-application-module-member
-          path: neton-application-module-member
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-member
 
-      - name: Checkout payment module
+      - name: Checkout module-payment
         uses: actions/checkout@v4
         with:
           repository: neton-application/neton-application-module-payment
-          path: neton-application-module-payment
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-payment
 
-      - name: Checkout platform module
+      - name: Checkout module-platform
         uses: actions/checkout@v4
         with:
           repository: neton-application/neton-application-module-platform
-          path: neton-application-module-platform
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-platform
 
-      - name: Checkout gateway module
+      - name: Checkout module-gateway
         uses: actions/checkout@v4
         with:
           repository: neton-application/neton-application-module-gateway
-          path: neton-application-module-gateway
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-gateway
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -153,8 +236,21 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      # 同上：linuxX64 的 Kotlin/Native 工具链不缓存就是每轮重下 ~1GB。
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('NewGate/newgate/gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+
       - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      # harness 自己拉起一个隔离 redis-server（独立端口/db/keyPrefix，关持久化），
+      # 不用 service 容器：S24 要断言的是键名与 TTL，端口必须确定。
+      - name: Ensure redis-server is available
+        run: command -v redis-server >/dev/null 2>&1 || sudo apt-get install -y redis-server
 
       - name: Run reliability harness
         working-directory: NewGate
@@ -172,3 +268,4 @@ jobs:
           name: harness-logs
           path: NewGate/harness/logs/**/*.log
           retention-days: 7
+          if-no-files-found: ignore
