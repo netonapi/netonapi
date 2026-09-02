@@ -74,9 +74,12 @@ class RelayEngine(
         if (token == null || token.status != 1) return respondError(ctx, inbound, 401, "invalid_token", "token not found or disabled")
 
         // 令牌 IP 白名单：此前只有字段没有校验（宣称有、实际不生效比没有更危险）
-        if (token.allowedIps.isNotBlank() && !NetGuard.ipAllowed(token.allowedIps, clientIp(ctx))) {
-            log.warn("relay rejected by token ip allowlist tokenId=${token.id} userId=$userId ip=${clientIp(ctx)}")
-            return respondError(ctx, inbound, 403, "ip_not_allowed", "client IP is not allowed for this token")
+        if (token.allowedIps.isNotBlank()) {
+            val ip = clientIp(ctx)
+            if (!NetGuard.ipAllowed(token.allowedIps, ip)) {
+                log.warn("relay rejected by token ip allowlist tokenId=${token.id} userId=$userId ip=$ip")
+                return respondError(ctx, inbound, 403, "ip_not_allowed", "client IP is not allowed for this token")
+            }
         }
 
         // 速率限制：无限流时单用户即可打爆上游配额与成本
@@ -563,13 +566,23 @@ class RelayEngine(
     }
 
     /**
-     * 客户端 IP。反向代理后取 `X-Forwarded-For` 最左项，否则用连接地址。
-     * 注意：XFF 可被伪造，仅在网关前置了可信代理时才有意义——白名单应配合网络层限制使用。
+     * 客户端 IP（用于令牌 IP 白名单）。
+     *
+     * 以**传输层对端** [neton.core.http.HttpRequest.peerAddress] 为起点，只有对端在
+     * `NEWGATE_TRUSTED_PROXIES` 名单内才采信 `X-Forwarded-For`；否则一个请求头就能伪造出
+     * 白名单里的 IP（`remoteAddress` 本身也会被 XFF 覆盖，不能当对端用）。剥链规则见
+     * [NetGuard.clientIp]。
      */
-    private fun clientIp(ctx: HttpContext): String? =
-        ctx.request.header("X-Forwarded-For")?.split(',')?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-            ?: ctx.request.header("X-Real-IP")?.trim()?.takeIf { it.isNotEmpty() }
-            ?: ctx.request.remoteAddress.substringBeforeLast(':').trim('[', ']').takeIf { it.isNotEmpty() }
+    private fun clientIp(ctx: HttpContext): String? = NetGuard.clientIp(
+        xff = ctx.request.header("X-Forwarded-For"),
+        realIp = ctx.request.header("X-Real-IP"),
+        peerAddress = ctx.request.peerAddress,
+        trustedProxies = trustedProxies(),
+    )
+
+    /** 可信代理名单（逗号分隔 IP / IPv4 CIDR）；未配置 = 不信任任何转发头。 */
+    private fun trustedProxies(): String =
+        neton.core.config.getEnv(NetGuard.ENV_TRUSTED_PROXIES)?.trim().orEmpty()
 
     /** 当前状态（RESERVED 或 UPSTREAM_STARTED）——释放时作为 CAS 的 from。 */
     private suspend fun bySettlementStatus(sid: String): String =

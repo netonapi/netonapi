@@ -4,9 +4,13 @@ import controller.admin.channel.dto.*
 import logic.ChannelLogic
 import model.Channel
 import neton.core.annotations.*
+import neton.logging.Logger
 
 @Controller("/gateway/channel")
-class ChannelController(private val channelLogic: ChannelLogic) {
+class ChannelController(
+    private val log: Logger,
+    private val channelLogic: ChannelLogic,
+) {
 
     @Get("/list")
     @Permission("gateway:channel:list")
@@ -92,13 +96,19 @@ class ChannelController(private val channelLogic: ChannelLogic) {
 
     /**
      * 上游地址 SSRF 校验：拒绝指向回环/内网/链路本地（含云元数据 169.254.169.254）的地址，
-     * 否则网关会成为打内网的跳板。自托管需要连内网上游时，设 NEWGATE_ALLOW_PRIVATE_UPSTREAM=true 显式放行。
+     * 否则网关会成为打内网的跳板。域名还要解析一次复查——字面量看不出 `http://upstream.example`
+     * 指向哪里。自托管需要连内网上游时，设 NEWGATE_ALLOW_PRIVATE_UPSTREAM=true 显式放行。
      */
     private fun requireSafeUrls(baseUrl: String, proxyUrl: String?) {
         val allowPrivate = neton.core.config.getEnv("NEWGATE_ALLOW_PRIVATE_UPSTREAM")?.lowercase() == "true"
+        val resolver = logic.platformHostResolver()
+        if (resolver == null) {
+            // 本平台没有 DNS 解析器：只剩字面量校验。明确说出来，别让人以为域名也被查过了。
+            log.warn("channel SSRF check: DNS re-check unavailable on this platform, only literal hosts are validated")
+        }
         for ((field, url) in listOf("baseUrl" to baseUrl, "proxyUrl" to proxyUrl)) {
             if (url.isNullOrBlank()) continue
-            val v = logic.NetGuard.checkUpstreamUrl(url, allowPrivate)
+            val v = logic.NetGuard.checkUpstreamUrl(url, allowPrivate, resolver)
             if (v is logic.NetGuard.UrlVerdict.Rejected) {
                 throw neton.core.http.ValidationException(
                     listOf(neton.core.http.ValidationError(path = field, message = v.reason))

@@ -36,6 +36,15 @@ kotlin {
     }
 
     sourceSets {
+        // 平台 DNS 解析（SSRF 要看得懂域名指向哪里）：posix 一份 actual（getaddrinfo），
+        // mingw 一份 actual（显式降级为 null）。本模块没有套用 Kotlin 默认层级模板
+        // （nativeMain/appleMain 都不存在），所以只新建一层 posixMain 并挂到三个 posix 目标；
+        // mingwX64Main 由 target 声明自带，直接放 src/mingwX64Main/kotlin 即可。
+        val posixMain by creating { dependsOn(commonMain.get()) }
+        val macosArm64Main by getting { dependsOn(posixMain) }
+        val linuxX64Main by getting { dependsOn(posixMain) }
+        val linuxArm64Main by getting { dependsOn(posixMain) }
+
         commonMain {
             dependencies {
                 implementation("com.netonstream.app:module-system")

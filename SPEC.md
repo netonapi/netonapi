@@ -199,7 +199,7 @@
 - **分类统一（Codex #4）**：非流式 401/403 也计 Key 失败（此前只在流式/throw 路径计）；E2E：非流式 3×403 → failCount=3。
 - **Key 轮转（Codex #5）**：recordKeyFailure 也更新 lastUsedAt → LRU 轮转到其他 Key 不死磕坏 Key。
 - 删死代码 consume()（无调用方且非事务化）。token 中途删除：账户级三表照提交+warn（不回滚，避免已服务请求不计费=收入泄漏，此处推回 Codex #3）。
-- **可靠性 harness（已落地，本机 23 场景 / 32 断言全绿）**：`harness/run.sh`（NanoGate 仓）一条命令——隔离测试数据库 +
+- **可靠性 harness（已落地，本机 25 场景 / 37 断言全绿）**：`harness/run.sh`（NanoGate 仓）一条命令——隔离测试数据库 + 隔离 Redis 实例 +
   假上游（`fakes.py`，含 `/inflight` 在途计数、midabort/embok 模式）+ 真实网关。⚠️ S8 只测 DB 唯一索引（未走真实
   bill 重放路径）、S9 只验证收块+服务存活（未断言 partial/账务/Key 状态/无伪造终止）——见上"未闭环 P0"，需以稳定 settlementId
   经测试 seam 真实重放、并断言 midstream 的 partial 语义。场景：S1 20 并发四项不变量、
@@ -223,11 +223,35 @@
 - **渠道 Key 加密（V005 前）**：`SecretBox`（AES-256-GCM，框架 neton-security）+ `NEWGATE_CHANNEL_KEY_ENC_KEY`。
   未配置则明文直通（可先部署后启用）；配置后新写入加密、存量明文仍可读，无需停机迁移。管理台掩码前先解密。
 - **IP 白名单（此前只有字段无校验）**：`NetGuard.ipAllowed` 支持精确 IP 与 CIDR；取不到客户端 IP 即拒绝
-  （白名单必须是「明确允许」）；`X-Forwarded-For` 可伪造，需配合网络层限制可信代理。
+  （白名单必须是「明确允许」）。
+- **客户端 IP 信任边界**：`X-Forwarded-For` / `X-Real-IP` 是客户端可控头，而框架的 `HttpRequest.remoteAddress`
+  本身就取 XFF 最左值——直接拿它做安全判定等于把白名单交给攻击者。为此框架新增 `HttpRequest.peerAddress`
+  （真实 TCP 对端，默认等于 remoteAddress，由 `BufferedHttpRequestView` 覆写），`NetGuard.clientIp` 只从
+  peerAddress 出发：peer 不在 `NEWGATE_TRUSTED_PROXIES`（逗号分隔 IP/CIDR）→ **完全忽略**转发头，用 peer；
+  peer 可信 → XFF **从右往左**剥掉可信跳数，第一个不可信地址即客户端；全可信/无 XFF → 退回 `X-Real-IP` → peer。
+  ⚠️ **空列表 = 谁都不信**，与 `ipAllowed` 的「空 = 不限制」语义相反（一个是取值、一个是准入，故意不同）。
+  S14 两阶段断言：未配可信代理时伪造 XFF 无效；配了之后真客户端能剥出，而把名单内 IP 塞在链首（反代追加
+  真实客户端后的形状）仍拒。
 - **SSRF**：渠道 baseUrl/proxyUrl 写入时校验，拒绝回环/私网/链路本地/云元数据（169.254.169.254）与 userinfo 混淆；
   自托管可用 `NEWGATE_ALLOW_PRIVATE_UPSTREAM=true` 放行。
-- **速率限制（V005）**：令牌级 RPM/TPM/并发。Redis 优先（多实例共享），无 Redis 退化为进程内（单实例仍有效）。
-  固定分钟窗（边界最多约 2 倍突发）；并发额度在 finally 释放，失败请求不会泄漏额度。
+  **DNS 解析型校验**：只看主机名字面量挡不住 `http://attacker.com`（A 记录指向 127.0.0.1）。`NetGuard` 接受
+  注入的 `HostResolver`（保持自身纯净可单测），对非 IP 字面量且未放行私网的主机先解析：解析抛异常/空结果 →
+  **fail-closed 拒绝**；任一解析结果落在内网 → 拒绝。posix（macOS/Linux）actual 走 `getaddrinfo`/`getnameinfo`；
+  **mingw actual 显式返回 null（不解析）**——WSAStartup 时机不可控且无法在本机验证，宁可让 Windows 只受字面量
+  校验，也不 fail-closed 到「建不了任何域名渠道」。
+  ⚠️ **只在写入时校验，挡不住 DNS rebinding**（写入时解析成公网、发请求时改指内网）；那一层只能靠部署侧出网
+  过滤兜底（DEPLOY.md「上游地址与 SSRF」）。S25 断言：元数据地址与 `[::1]` 被拒、公网字面量放行、域名经真
+  DNS 复查后放行。
+- **速率限制（V005）**：令牌级 RPM/TPM/并发。Redis 优先（多实例共享），无 Redis 退化为**进程内**计数（单实例
+  仍有效）并 warn。固定分钟窗（边界最多约 2 倍突发）；并发额度在 finally 释放，失败请求不会泄漏额度。
+  **原子化**：此前是「读-改-写」（GET → 比较 → SET），并发下丢增量 = 限流被绕过；改为服务端 Lua 一次执行
+  `INCRBY` + 条件 `EXPIRE`，两种 TTL 语义（`TTL_IF_MISSING` 固定分钟窗永不续期 / `TTL_ALWAYS_REFRESH` 并发键
+  自愈），`DECRBY` 带下限（≤0 → DEL 并返回 0：既不因不配对释放把计数打成负数=白送额度，也不留下 TTL=-1 的
+  永不过期键）；EVALSHA 命中 sha 缓存、NOSCRIPT 回落 EVAL。
+  ⚠️ **`redis` 构造参数带默认值 → KSP 的 @Logic 装配会跳过它**（`LogicProcessor` 把带默认值的参数视为「自
+  provision」），必须由 `init.GatewayRuntimeBootstrap` 重绑一次 RateLimiter 才真拿到 RedisClient。少了这步
+  **不报错**，只是限流永远跑在进程内计数上（多实例部署下等于没限）。S24 断言：20 并发 RPM 精确 20、TPM ==
+  账本 token 总数、窗口键 TTL 在 1..120；12 并发下并发键用完即删（无泄漏、无负数）。
 - **配置卫生**：清除硬编码本地凭据与脚手架残留名，改由环境变量注入。
 
 ### B 可运营（部分完成）
@@ -253,15 +277,17 @@
   `docker-compose.yml` 内置 PostgreSQL + Redis，迁移作为一次性服务先跑通再起网关；
   三个密钥无默认值，缺失即拒绝启动。`DEPLOY.md` 含上线检查清单与反代注意事项。
 
-### 可靠性 harness：32 断言 / 23 场景（以 `harness/run.sh` 末行输出为准）
+### 可靠性 harness：37 断言 / 25 场景（以 `harness/run.sh` 末行输出为准）
 
 S1 并发四项不变量、S2 dead→live、S3 断连计费+producer 拆除、S4 401/403 禁用 & 429 不禁用、
 S5 revive 保留手动禁用、S6 token 中途删除、S7 首建账户并发、S8 结算幂等+终态预留归零、
 S9 midstream partial、S10 429 cooldown、S11 worker 重放+重复 tick 幂等、S12 TTL 释放/转人工、
-S13 RPM 限流、S14 IP 白名单、S15 /v1/models + 原生认证、S16 用户端 app API（广场匿名可读 / 未定价不展示）、
+S13 RPM 限流、S14 IP 白名单 + XFF 信任边界、S15 /v1/models + 原生认证、S16 用户端 app API（广场匿名可读 / 未定价不展示）、
 S17 在途改价按快照计价、S18 快照损坏转人工+预留保留、S19 坏价入口 fail-fast、
 S20 双轨计价（售价/成本分离）、S21 毛利闸门（发布期）、S22 全局加价率 / 毛利下限、
-S23 端点能力路由（embeddings 只落声明渠道，无能力 404 且零预留）。
+S23 端点能力路由（embeddings 只落声明渠道，无能力 404 且零预留）、
+S24 Redis 原子限流计数（RPM/TPM 精确、窗口键 TTL、并发键无泄漏无负数）、
+S25 渠道 SSRF 校验（admin API：元数据/回环被拒，公网字面量与域名经 DNS 复查后放行）。
 
 ## 待办（逐条核实仍未完成的真实差距）
 
@@ -276,3 +302,6 @@ S23 端点能力路由（embeddings 只落声明渠道，无能力 404 且零预
 - 管理台 UI 缺口：多 Key 管理 / 测速 / 健康视图缺；渠道能力目前只有一个逗号分隔文本框（无逐能力勾选）
 - 3×3 = 文本聊天核心子集 baseline E2E，非完整协议兼容
 - CI 未真跑：harness 与单测都不在任何远端流水线里（三个 fork 仍是 local-path origin）
+- SSRF 只在写入时校验：DNS rebinding（写入时公网、发请求时改指内网）代码层未覆盖，只能靠部署侧出网过滤
+- KSP @Logic 跳过带默认值的构造参数（gateway 的 RateLimiter.redis 已用 RuntimeBootstrap 绕过）：
+  `module-system` 的 `MessageSendLogic.redis` 同样中招，影响面未核实

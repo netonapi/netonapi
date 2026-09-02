@@ -15,14 +15,36 @@ object NetGuard {
     }
 
     /**
+     * 主机名 → IP 字面量列表；空 = 解析不出来。
+     *
+     * 由调用方注入（生产 = 平台 getaddrinfo，单测 = 假解析器），NetGuard 因此保持纯函数、
+     * 能在 commonTest 里穷举边界。实现通常是**阻塞**的：只用于管理员写入渠道这类低频路径，
+     * 绝不可进中转热路径（每请求解析一次 = 把 DNS 变成延迟与故障源）。
+     */
+    fun interface HostResolver {
+        fun resolve(host: String): List<String>
+    }
+
+    /**
      * 校验管理员配置的上游地址。
      *
      * 拒绝：非 http(s)、缺主机、以及指向**回环/内网/链路本地/元数据服务**的主机——
      * 否则网关会变成打内网的跳板（如 `169.254.169.254` 可取云厂商实例凭据）。
      *
      * [allowPrivate] 供自托管/内网部署显式放行（默认关闭）。
+     *
+     * [resolver] 非空时对**域名**再做一次解析复查：字面量看不出 `http://upstream.example`
+     * 指向哪里，而它完全可以指向 169.254.169.254。多条 A 记录里混一个内网地址同样拒绝
+     * （攻击者正是靠「多数时候返回公网地址」躲过一次性检查）；解析失败一律 fail-closed——
+     * 把「DNS 挂了」当成「地址安全」是这类校验最典型的失效方式。
+     * 注意这是**写入时**检查，挡不住之后改 DNS 记录的重绑定；那一层要靠部署侧出网过滤
+     * （见 DEPLOY.md「SSRF」）。
      */
-    fun checkUpstreamUrl(url: String, allowPrivate: Boolean = false): UrlVerdict {
+    fun checkUpstreamUrl(
+        url: String,
+        allowPrivate: Boolean = false,
+        resolver: HostResolver? = null,
+    ): UrlVerdict {
         val u = url.trim()
         if (u.isEmpty()) return UrlVerdict.Rejected("url is empty")
         val scheme = u.substringBefore("://", "").lowercase()
@@ -33,8 +55,19 @@ object NetGuard {
         if (host.isEmpty()) return UrlVerdict.Rejected("host is empty")
         if (allowPrivate) return UrlVerdict.Ok
         if (isPrivateHost(host)) return UrlVerdict.Rejected("host '$host' resolves to a private or link-local address")
+        if (resolver != null && !isIpLiteral(host)) {
+            val addresses = runCatching { resolver.resolve(host) }.getOrDefault(emptyList())
+            if (addresses.isEmpty()) return UrlVerdict.Rejected("host '$host' could not be resolved")
+            val internal = addresses.mapNotNull { normalizeIp(it) }.firstOrNull { isPrivateHost(it) }
+            if (internal != null) {
+                return UrlVerdict.Rejected("host '$host' resolves to a private or link-local address ($internal)")
+            }
+        }
         return UrlVerdict.Ok
     }
+
+    /** host 是否已是 IP 字面量（含 IPv6）——是则无需 DNS 就能判定。 */
+    fun isIpLiteral(host: String): Boolean = host.contains(':') || ipv4ToLong(host) != null
 
     /** 主机是否属于内网/回环/链路本地（含云元数据地址）。仅字面量判断，不做 DNS 解析。 */
     fun isPrivateHost(host: String): Boolean {
@@ -61,6 +94,59 @@ object NetGuard {
             b[0] == 100 && b[1] in 64..127 -> true                // CGNAT 100.64/10
             else -> false
         }
+    }
+
+    // ===== 客户端 IP：X-Forwarded-For 信任边界 =====
+
+    const val ENV_TRUSTED_PROXIES = "NEWGATE_TRUSTED_PROXIES"
+
+    /**
+     * 取「可用于安全决策」的客户端 IP。
+     *
+     * 无条件采信 XFF 最左项 = 任何人都能用一个请求头把自己伪装成白名单里的 IP，
+     * 令牌 IP 白名单形同虚设（比没有更糟：它给运营者虚假的安全感）。
+     *
+     * 正确顺序是「先判对端，再决定要不要采信转发头」：
+     *  - [peerAddress]（TCP 对端，不受 XFF 影响）不在 [trustedProxies] 内 → 只用对端地址，
+     *    XFF / X-Real-IP 一律忽略（默认行为：不配可信代理就不信任何转发头）；
+     *  - 对端可信 → 从 XFF **最右**项往左剥，跳过每一跳可信代理，第一个不可信地址即客户端
+     *    （最右项由最近一跳代理写入，越往左越可能是客户端自己塞进来的）；
+     *  - 整条链都可信、或压根没有 XFF → 退到 X-Real-IP，再退到对端地址。
+     *
+     * [trustedProxies] 为逗号分隔的精确 IP 或 IPv4 CIDR（如 `10.0.0.0/8, 127.0.0.1`）。
+     * **空 = 不信任任何代理**，与 [ipAllowed] 的「空 = 不限」相反：白名单空是放开限制，
+     * 代理名单空是收紧信任。IPv6 只能写精确地址（CIDR 匹配目前只实现 IPv4）。
+     */
+    fun clientIp(xff: String?, realIp: String?, peerAddress: String, trustedProxies: String): String? {
+        val peer = normalizeIp(peerAddress)
+        if (!isTrustedProxy(trustedProxies, peer)) return peer
+        val hops = xff.orEmpty().split(',').mapNotNull { normalizeIp(it) }
+        for (i in hops.indices.reversed()) {
+            val hop = hops[i]
+            if (!isTrustedProxy(trustedProxies, hop)) return hop
+        }
+        return normalizeIp(realIp.orEmpty()) ?: peer
+    }
+
+    /** 地址是否属于可信代理。名单为空即「谁都不信」——默认必须是否定的。 */
+    fun isTrustedProxy(trustedProxies: String, ip: String?): Boolean {
+        if (ip.isNullOrEmpty()) return false
+        val rules = trustedProxies.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        return rules.isNotEmpty() && rules.any { matches(it, ip) }
+    }
+
+    /** 归一化地址字面量：`1.2.3.4:7080` → `1.2.3.4`，`[::1]:7080` → `::1`，裸 IPv6 原样保留。 */
+    fun normalizeIp(raw: String): String? {
+        val s = raw.trim()
+        if (s.isEmpty()) return null
+        if (s.startsWith("[")) {
+            val end = s.indexOf(']')
+            if (end < 0) return null
+            return s.substring(1, end).trim().takeIf { it.isNotEmpty() }
+        }
+        // 恰好一个冒号才可能是 host:port；IPv6 字面量含多个冒号，截断会毁掉地址
+        if (s.count { it == ':' } == 1) return s.substringBefore(':').trim().takeIf { it.isNotEmpty() }
+        return s
     }
 
     // ===== 令牌 IP 白名单 =====

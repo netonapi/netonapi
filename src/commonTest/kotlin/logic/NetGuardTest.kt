@@ -3,6 +3,7 @@ package logic
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class NetGuardTest {
@@ -92,5 +93,142 @@ class NetGuardTest {
         assertFalse(NetGuard.ipAllowed("not-an-ip/8", "1.2.3.4"))
         assertFalse(NetGuard.ipAllowed("10.0.0.0/99", "10.0.0.1"))
         assertFalse(NetGuard.ipAllowed("1.2.3.256", "1.2.3.256"))
+    }
+
+    // ===== XFF 信任边界 =====
+
+    @Test fun forwarding_headers_are_ignored_without_trusted_proxies() {
+        // 默认（未配可信代理）：XFF / X-Real-IP 一律忽略，只认 TCP 对端
+        assertEquals("203.0.113.9", NetGuard.clientIp("1.2.3.4", "5.6.7.8", "203.0.113.9:52111", ""))
+        assertEquals("203.0.113.9", NetGuard.clientIp("1.2.3.4", null, "203.0.113.9", "   "))
+    }
+
+    @Test fun spoofed_xff_cannot_pass_the_token_allowlist() {
+        // 攻击者直连网关（对端是公网 IP），伪造 XFF 命中白名单 → 必须仍按对端判定
+        val ip = NetGuard.clientIp("203.0.113.7", null, "198.51.100.9:40000", "10.0.0.0/8,127.0.0.1")
+        assertEquals("198.51.100.9", ip)
+        assertFalse(NetGuard.ipAllowed("203.0.113.7", ip), "伪造的 XFF 不得让白名单放行")
+    }
+
+    @Test fun trusted_proxy_chain_is_peeled_right_to_left() {
+        // client → nginx(10.0.0.5) → lb(10.0.0.1) → 网关；每跳追加，最右项由最近一跳写入
+        val trusted = "10.0.0.0/8"
+        assertEquals(
+            "203.0.113.7",
+            NetGuard.clientIp("203.0.113.7, 10.0.0.5", null, "10.0.0.1:5000", trusted),
+        )
+        // 客户端自己塞的伪造项在更左边：剥到第一个不可信地址即停，不再往左采信
+        assertEquals(
+            "203.0.113.7",
+            NetGuard.clientIp("1.1.1.1, 2.2.2.2, 203.0.113.7, 10.0.0.5", null, "10.0.0.1", trusted),
+        )
+    }
+
+    @Test fun fully_trusted_chain_falls_back_to_real_ip_then_peer() {
+        val trusted = "10.0.0.0/8,127.0.0.1"
+        assertEquals("203.0.113.7", NetGuard.clientIp("10.0.0.5", "203.0.113.7", "127.0.0.1:1", trusted))
+        assertEquals("127.0.0.1", NetGuard.clientIp("10.0.0.5", null, "127.0.0.1:1", trusted))
+        assertEquals("127.0.0.1", NetGuard.clientIp(null, null, "127.0.0.1:1", trusted))
+    }
+
+    @Test fun normalize_ip_strips_port_and_brackets_without_mangling_ipv6() {
+        assertEquals("127.0.0.1", NetGuard.normalizeIp("127.0.0.1:7080"))
+        assertEquals("::1", NetGuard.normalizeIp("[::1]:7080"))
+        assertEquals("2001:db8::1", NetGuard.normalizeIp("2001:db8::1"))
+        assertNull(NetGuard.normalizeIp("   "))
+        assertNull(NetGuard.normalizeIp("[::1"))
+    }
+
+    // ===== SSRF：域名解析复查 =====
+
+    /** 假解析器：记录被查过的主机，按表返回地址（表里没有 = 解析失败）。 */
+    private class FakeResolver(private val table: Map<String, List<String>>) : NetGuard.HostResolver {
+        val queried = mutableListOf<String>()
+        override fun resolve(host: String): List<String> {
+            queried += host
+            return table[host] ?: emptyList()
+        }
+    }
+
+    private fun rejectReason(v: NetGuard.UrlVerdict): String =
+        (v as? NetGuard.UrlVerdict.Rejected)?.reason ?: error("应被拒绝，实际 $v")
+
+    @Test fun rejects_domain_that_resolves_to_an_internal_address() {
+        // 多条 A 记录里混一个元数据地址也必须拒绝：攻击者靠「多数时候返回公网地址」躲过一次性检查
+        val r = FakeResolver(mapOf("upstream.example" to listOf("93.184.216.34", "169.254.169.254")))
+        val v = NetGuard.checkUpstreamUrl("https://upstream.example/v1", resolver = r)
+        assertTrue(v is NetGuard.UrlVerdict.Rejected, "应拒绝：$v")
+        assertTrue(rejectReason(v).contains("169.254.169.254"), "拒绝原因要点名内网地址：${rejectReason(v)}")
+        assertEquals(listOf("upstream.example"), r.queried)
+    }
+
+    @Test fun rejects_domains_pointing_at_loopback_private_or_ipv6_local() {
+        for ((host, ip) in listOf(
+            "a.example" to "127.0.0.1", "b.example" to "10.0.0.5",
+            "c.example" to "192.168.1.1", "d.example" to "::1", "e.example" to "fd00::1",
+        )) {
+            val v = NetGuard.checkUpstreamUrl("http://$host", resolver = FakeResolver(mapOf(host to listOf(ip))))
+            assertTrue(v is NetGuard.UrlVerdict.Rejected, "$host → $ip 应被拒绝：$v")
+        }
+    }
+
+    @Test fun accepts_domain_that_resolves_to_public_addresses() {
+        val r = FakeResolver(mapOf("api.example" to listOf("93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946")))
+        assertTrue(NetGuard.checkUpstreamUrl("https://api.example/v1", resolver = r) is NetGuard.UrlVerdict.Ok)
+    }
+
+    @Test fun unresolvable_host_is_rejected_not_waved_through() {
+        // fail-closed：把「DNS 挂了」当成「地址安全」是这类校验最典型的失效方式
+        val v = NetGuard.checkUpstreamUrl("https://no-such-host.example", resolver = FakeResolver(emptyMap()))
+        assertTrue(rejectReason(v).contains("could not be resolved"), rejectReason(v))
+    }
+
+    @Test fun resolver_exception_is_rejected_not_waved_through() {
+        val boom = NetGuard.HostResolver { throw RuntimeException("dns boom") }
+        assertTrue(NetGuard.checkUpstreamUrl("https://api.example", resolver = boom) is NetGuard.UrlVerdict.Rejected)
+    }
+
+    @Test fun resolver_is_not_consulted_for_literals_or_when_private_is_allowed() {
+        val r = FakeResolver(mapOf("10.0.0.1" to listOf("8.8.8.8")))
+        assertTrue(NetGuard.checkUpstreamUrl("http://10.0.0.1", resolver = r) is NetGuard.UrlVerdict.Rejected)
+        assertTrue(r.queried.isEmpty(), "IP 字面量不该走 DNS")
+        val r2 = FakeResolver(emptyMap())
+        assertTrue(NetGuard.checkUpstreamUrl("http://10.0.0.1", allowPrivate = true, resolver = r2) is NetGuard.UrlVerdict.Ok)
+        assertTrue(r2.queried.isEmpty(), "显式放行内网时不该被 DNS 复查拦下")
+        assertTrue(NetGuard.isIpLiteral("[::1]"))
+        assertFalse(NetGuard.isIpLiteral("upstream.example"))
+    }
+
+    @Test fun addresses_from_the_resolver_are_normalized_before_the_check() {
+        // getaddrinfo 可能给出带方括号的形式，归一化之后才判得出私网
+        val r = FakeResolver(mapOf("v6.example" to listOf("[fd00::1]")))
+        assertTrue(NetGuard.checkUpstreamUrl("http://v6.example", resolver = r) is NetGuard.UrlVerdict.Rejected)
+    }
+
+    @Test fun platform_resolver_returns_numeric_literals_that_read_as_internal() {
+        // 真解析器（posix = getaddrinfo；没有实现的平台返回 null，此处直接跳过）。
+        // 这条用例的价值在于覆盖 cinterop 本身：getaddrinfo → getnameinfo(NI_NUMERICHOST) 必须
+        // 吐出我们能解析的数字字面量，且 localhost 的每个地址都被判为内网/回环。
+        //
+        // 故意不断言「NXDOMAIN → fail-closed」：解析器行为依赖宿主机 DNS，不可复现——例如
+        // fake-IP 模式的本地代理会对 .invalid 也返回 198.18.0.0/15 这种保留但非内网的地址。
+        // 解析不出来时的 fail-closed 由假解析器用例 unresolvable_host_is_rejected_not_waved_through 覆盖。
+        val resolver = platformHostResolver() ?: return
+        val ips = resolver.resolve("localhost")
+        assertTrue(ips.isNotEmpty(), "localhost 应能解析（/etc/hosts）")
+        for (raw in ips) {
+            val ip = NetGuard.normalizeIp(raw) ?: raw
+            assertTrue(NetGuard.isIpLiteral(ip), "解析结果必须是数字字面量：$raw")
+            assertTrue(NetGuard.isPrivateHost(ip), "localhost 的地址必须判为内网/回环：$raw")
+        }
+    }
+
+    @Test fun trusted_proxy_list_defaults_to_trust_nobody() {
+        // 与 ipAllowed 的「空 = 不限」相反：代理名单为空必须谁都不信
+        assertFalse(NetGuard.isTrustedProxy("", "127.0.0.1"))
+        assertFalse(NetGuard.isTrustedProxy("   ", "127.0.0.1"))
+        assertFalse(NetGuard.isTrustedProxy("127.0.0.1", null))
+        assertTrue(NetGuard.isTrustedProxy("127.0.0.1", "127.0.0.1"))
+        assertTrue(NetGuard.isTrustedProxy("10.0.0.0/8", "10.9.8.7"))
     }
 }
