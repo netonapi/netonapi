@@ -2,21 +2,28 @@
 # Kotlin/Native 产出静态可执行文件，故运行阶段不需要 JVM——构建阶段用 JDK 跑 Gradle，
 # 运行阶段只带一个二进制与配置。
 #
-# 构建（在包含 neton 框架与各模块的父目录下执行，构建上下文必须能看到同级仓库）：
-#   docker build -f newgate/Dockerfile -t newgate:latest .
+# 构建上下文必须是**同时含 `Neton/` 与 `NewGate/` 的那一层**（docker-compose 里写的是
+# `context: ..`），且这两个外层目录名是构建契约的一部分：
+#   docker build -f NewGate/newgate/Dockerfile -t nanogate:latest .
 
 FROM eclipse-temurin:17-jdk AS build
 WORKDIR /src
 
-# 依赖仓库与应用一起进入构建上下文（Gradle composite build 需要同级路径）
-COPY neton                              /src/neton
-COPY neton-application-module-member    /src/neton-application-module-member
-COPY neton-application-module-payment   /src/neton-application-module-payment
-COPY neton-application-module-platform  /src/neton-application-module-platform
-COPY neton-application-module-gateway   /src/neton-application-module-gateway
-COPY newgate                            /src/newgate
+# 镜像内必须复刻宿主布局：settings.gradle.kts 用 `../../Neton/<repo>` 引框架与 canonical
+# 模块，所以应用要落在两层深处（/src/NewGate/newgate），依赖落在同层的 /src/Neton/ 下。
+# 下面八个仓一个都不能少——少任何一个，Gradle 在 configuration 阶段就因找不到
+# included build / projectDir 而失败（module-system、module-infra、geolite4k 曾被漏掉）。
+COPY Neton/neton                             /src/Neton/neton
+COPY Neton/geolite4k                         /src/Neton/geolite4k
+COPY Neton/neton-application-module-system   /src/Neton/neton-application-module-system
+COPY Neton/neton-application-module-infra    /src/Neton/neton-application-module-infra
+COPY Neton/neton-application-module-member   /src/Neton/neton-application-module-member
+COPY Neton/neton-application-module-payment  /src/Neton/neton-application-module-payment
+COPY Neton/neton-application-module-platform /src/Neton/neton-application-module-platform
+COPY Neton/neton-application-module-gateway  /src/Neton/neton-application-module-gateway
+COPY NewGate/newgate                         /src/NewGate/newgate
 
-WORKDIR /src/newgate
+WORKDIR /src/NewGate/newgate
 RUN ./gradlew :application:linkReleaseExecutableLinuxX64 --no-daemon
 
 FROM debian:bookworm-slim AS runtime
@@ -28,8 +35,8 @@ RUN apt-get update \
 RUN useradd --system --create-home --uid 10001 newgate
 WORKDIR /app
 
-COPY --from=build /src/newgate/application/build/bin/linuxX64/releaseExecutable/application.kexe /app/newgate
-COPY --from=build /src/newgate/application/config /app/config
+COPY --from=build /src/NewGate/newgate/application/build/bin/linuxX64/releaseExecutable/application.kexe /app/newgate
+COPY --from=build /src/NewGate/newgate/application/config /app/config
 
 USER newgate
 EXPOSE 7080
@@ -38,7 +45,11 @@ EXPOSE 7080
 #   NETON_DATABASE__DEFAULT__URI       PostgreSQL 连接串
 #   NETON_SECURITY__JWT__SECRETKEY     管理台 JWT 签名密钥（必须改）
 #   NEWGATE_CHANNEL_KEY_ENC_KEY        渠道 Key 加密主密钥（base64 32 字节，强烈建议配置）
+# 不用 -f：`/` 上没注册任何路由（gateway 组挂在 `/` 且 requireAuth = true），带 -f 会把
+# 「进程活着、但这个路由不存在」误判成不健康，容器永远 unhealthy。这里要探的是 HTTP
+# 服务是否在应答（任何状态码都算活），与 harness/run.sh 的就绪探针同一语义。
+# TODO：真正的健康端点（含 DB/Redis 依赖探测）还没做，做了就换成它。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:7080/ >/dev/null || exit 1
+    CMD curl -sS --max-time 3 -o /dev/null http://127.0.0.1:7080/ || exit 1
 
 ENTRYPOINT ["/app/newgate"]

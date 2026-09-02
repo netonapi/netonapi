@@ -1,0 +1,18 @@
+# BuildKit 的「按 Dockerfile 命名」忽略文件（`<dockerfile>.dockerignore`）。
+#
+# 构建上下文是 NewGate 的**父目录**（docker-compose 里写的是 `context: ..`），所以这里的
+# 模式一律相对那一层写。上下文里躺着八个仓的工作副本，不排除干净就会把 .git 与宿主机的
+# build/ 一起塞进镜像——后者尤其致命：宿主的 .klib 与 neton-core/build/nativeInterop 是
+# macOS 产物，混进 Linux 链接会让 linkReleaseExecutableLinuxX64 报很难定位的错。
+#
+# 仅 BuildKit（Docker 23+ 默认）认这个文件；老 builder 会忽略它，后果只是上下文变大。
+# 已确认排除 .git 是安全的：neton 的版本号不来自 git（build.gradle.kts 里只有 POM 元数据）。
+
+**/.git
+**/.github
+**/.gradle
+**/.kotlin
+**/.konan
+**/build
+**/node_modules
+**/*.log
