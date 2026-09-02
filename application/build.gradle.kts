@@ -29,9 +29,8 @@ kotlin {
                 implementation(project(":module-system"))
                 implementation(project(":module-infra"))
 
-                // 通用 base distribution 默认模块。R5-B: game/assistant(产品模块)
-                // 与 com.netonstream.privchat:main(可选 IM 模块)移出 base,由
-                // privchat-application 产品发行版 fork 加回。
+                // 通用 base distribution 默认模块。产品专属模块（IM / game / assistant 等）不在
+                // base 里，由具体产品发行版 fork 自行加回。
                 implementation(project(":module-member"))
                 implementation(project(":module-gateway"))
                 implementation(project(":module-payment"))

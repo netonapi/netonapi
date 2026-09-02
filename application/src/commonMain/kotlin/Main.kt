@@ -45,12 +45,12 @@ fun main(args: Array<String>) {
         // 里写 [cors] allowedOrigins = [...] 会被吞掉（详见 HttpComponent.kt:36），
         // 走 DSL 绕开 TOML。
         //
-        // **dev 默认放开所有 origin**（admin 5666 / privchat-app 7456-7460 /
-        // privchat-web 5173 / cocos 7458 等多前端端口频繁变动，逐一维护 allowlist
-        // 持续踩 CORS）。allowCredentials=false 时 `*` 合法。
+        // **origin 一律放开为 `*`**：NanoGate 的两个前端（管理台、用户控制台）在开发期
+        // 端口频繁变动，逐一维护 allowlist 会持续踩 CORS。allowCredentials=false 时 `*` 合法
+        // （浏览器不发 cookie），跨站因此读不到需要登录态的响应。
         //
-        // **生产部署必须收紧**到正式域名白名单 —— 改这里之前先确认 prod 配置不是
-        // 这条路径（理论上 prod 走另一份配置 / 反向代理拦下）。
+        // ⚠️ 这是**硬编码**、不是配置项：想给生产收紧白名单，只能改这段重新编译，
+        // 或让反向代理只放行受信 origin。别指望换一份 conf 能改掉它。
         http(::KtorHttpAdapter) {
             cors {
                 allowedOrigins = listOf("*")

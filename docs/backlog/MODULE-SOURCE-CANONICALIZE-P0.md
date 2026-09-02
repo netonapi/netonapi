@@ -23,7 +23,7 @@ project(":module-order").projectDir = file("../neton-application-module-order")
 ## Verification
 
 - `neton-application :application:compileKotlinMacosArm64` passes
-- `privchat-application :application:compileKotlinMacosArm64` passes
+- `newgate :application:compileKotlinMacosArm64` passes
 - canonical module repositories remain independently buildable
 - product assembly no longer relies on cyclic `includeBuild` wiring
 - no local Maven publication is required

@@ -16,12 +16,15 @@ import security.CoreAuthenticatorBridge
  *
  * 本 configurer 是 **通用 shell**，只认识框架类型：legacy HS256 [JwtAuthenticator] +
  * [DispatchingJwtAuthenticator] + 可选的 [UnifiedTokenAuthenticator]。
- * **不 import PrivchatServiceClient、不 hardcode privchat-server**。
+ * **不 import 任何产品模块的类型、不 hardcode 具体产品的 token 服务地址**。
  *
- * RS256/JWKS unified verifier 由 `module-privchat` 的 `PrivchatSecurityConfig`
- * （`order = -10`，先于本 configurer）构造并 bind 到 ctx；本 configurer 只 `getOrNull`
- * 取出框架类型 [UnifiedTokenAuthenticator] 组进 dispatcher。privchat 不加载 / 未 enable
- * 时 unified=null，dispatcher 退化为纯 legacy。
+ * RS256/JWKS unified verifier 由**产品模块**自带的 configurer（`order = -10`，先于本
+ * configurer 执行）构造并 bind 到 ctx；本 configurer 只 `getOrNull` 取出框架类型
+ * [UnifiedTokenAuthenticator] 组进 dispatcher。没有这样的模块、或它未 enable 时
+ * unified=null，dispatcher 退化为纯 legacy。
+ *
+ * ⚠️ NanoGate 当前装配的六个模块**没有任何一个** bind [UnifiedTokenAuthenticator]，
+ * 所以 `security.unified_token.enabled` 必须保持 false；要启用得先自己加一个提供它的模块。
  *
  * # 默认行为
  *
@@ -40,14 +43,15 @@ class SecurityConfig : NetonConfigurer<SecurityBuilder> {
             tokenPrefix = jwtConfig.tokenPrefix,
         )
 
-        // 2) Unified verifier —— 由 module-privchat PrivchatSecurityConfig (order=-10) 构造并 bind。
-        //    shell 只取框架类型，不认识它来自 privchat。
+        // 2) Unified verifier —— 由产品模块的 configurer (order=-10) 构造并 bind。
+        //    shell 只取框架类型，不关心它来自哪个模块。
         val unified: UnifiedTokenAuthenticator? = ctx.getOrNull(UnifiedTokenAuthenticator::class)
         if (unifiedConfig.enabled && unified == null) {
             error(
                 "security.unified_token.enabled=true 但 UnifiedTokenAuthenticator 未绑定到 NetonContext。" +
-                    "应由 module-privchat 的 PrivchatSecurityConfig 在 SecurityComponent.start (order=-10) " +
-                    "构造并 bind；检查 privchat 模块是否在 neton.modules 中、configurer order 是否正确。",
+                    "本发行版没有任何模块提供它（NanoGate 装配的六个模块都不 bind），" +
+                    "请把 security.unified_token.enabled 设回 false；若确实要启用，需自行加一个在 " +
+                    "SecurityComponent.start (order=-10) 之前构造并 bind 该类型的模块 configurer。",
             )
         }
 

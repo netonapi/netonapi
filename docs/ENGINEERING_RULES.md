@@ -126,11 +126,10 @@
 一次 `AppFileLogic → FileUploadLogic` 的改名只扫了 `neton-application/` 子树，漏掉了通过 `includeBuild` 引入的 canonical `neton-application-module-member`，导致 member 编译断裂（`Unresolved reference 'AppFileLogic'`）——member 的 `MemberProfileLogic` 消费了 module-infra 的这个类。
 
 改 public symbol 前，至少 grep 这些仓：
-- `neton-application`（当前仓）
-- `privchat-application`（fork）
-- `neton-application-module-member` / `-payment` / `-platform`（canonical 通用模块）
-- `neton-application-module-privchat`（可选 IM 模块）
-- `privchat-application-module-game` / `-assistant`（产品模块）
+- `newgate`（当前发行版仓，本地目录名沿用 fork 时的命名）
+- `neton-application-module-{system,infra,member,payment,platform,gateway}`（canonical 通用模块，本发行版六个全装配）
+- `neton` / `geolite4k`（框架与 included build）
+- 同一 base 的其它下游发行版 fork（若有）
 
 命中的仓各自独立提交跟进（fork 同步规则不变）。
 

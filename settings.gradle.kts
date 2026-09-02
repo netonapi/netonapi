@@ -8,7 +8,7 @@ pluginManagement {
 
 rootProject.name = "newgate"
 
-// 框架依赖（composite build）—— canonical 仓位于 ../../Neton/（同 privchat fork 约定）
+// 框架依赖（composite build）—— canonical 仓位于 ../../Neton/，所有下游 fork 共用这个布局约定
 includeBuild("../../Neton/neton")
 includeBuild("../../Neton/geolite4k")
 
