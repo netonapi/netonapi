@@ -1,519 +1,161 @@
-# Neton Application
+# NanoGate Backend
 
-An enterprise-grade admin system built on the [Neton](../neton) framework, compiled to native binaries via Kotlin/Native — fast startup, low memory footprint, single-file deployment.
+**English** | [简体中文](./README.zh-Hans.md)
 
-> Engineering rules: see [ENGINEERING_RULES.md](./ENGINEERING_RULES.md)
->
-> Module template spec: see [docs/module-template-spec.md](./docs/module-template-spec.md)
+NanoGate is a self-hosted LLM API gateway. One set of issued keys serves three upstream
+protocol families — OpenAI, Anthropic, Gemini — relayed in any direction, with durable
+billing, quota enforcement and channel failover. It is a rewrite of the Go-based
+[`new-api`](https://github.com/QuantumNous/new-api) on the
+[Neton](https://github.com/netonframework/neton) framework, compiled with Kotlin/Native to
+a single static executable: no JVM at runtime, no sidecar SQL files.
 
-## Tech Stack
+This repository is the **backend distribution**. It assembles the framework and the six
+canonical modules into one binary and owns the gateway-specific configuration. Product
+logic lives in the module repositories, not here.
 
-| Component | Choice |
-|-----------|--------|
-| Language | Kotlin 2.3 (Multiplatform) |
-| Framework | Neton 1.0.0-beta1 |
-| Compilation | Kotlin/Native → Native Binary |
-| Database | MySQL / PostgreSQL / SQLite |
-| Authentication | JWT |
-| Build | Gradle 8.14 + KSP |
-| Logging | Structured JSON, async writes |
+| | |
+|---|---|
+| Language | Kotlin 2.4.0 (Multiplatform) |
+| Build | Gradle 8.14.4 + KSP 2.3.10 |
+| Runtime | Kotlin/Native static executable (`application.kexe`), no JVM |
+| Datastores | PostgreSQL (billing, ledger, channels) · Redis (optional: shared rate limits) |
+| Default port | `7080` |
+| License | [Apache-2.0](./LICENSE) |
 
-**Runtime Metrics:**
+Companion repositories: **nanogate-admin** (operator console) and **nanogate-client**
+(self-service console). Deployment, secrets, reverse-proxy and SSRF notes:
+[`DEPLOY.md`](https://github.com/zoujiaqing/nanogate/blob/main/DEPLOY.md) in the `nanogate`
+repository, which also carries the end-to-end test harness.
 
-- Cold start ~150ms (debug) / ~3ms (release)
-- Memory usage ~20MB
-- Single-file deployment, no JVM dependency
+## Repository layout
 
-## Repository Structure
-
-Uses a **multi-repo + Gradle Composite Build** architecture with the main repository and extension modules separated:
-
-| Repository | Contents | Inclusion Method |
-|------------|----------|-----------------|
-| `neton` | Framework | `includeBuild("../neton")` |
-| `neton-application` | Main app (module-system + module-infra + application entry) | Root project |
-| `neton-application-module-member` | Member module | `includeBuild` |
-| `neton-application-module-payment` | Payment module | `includeBuild` |
-| `neton-application-module-platform` | Open platform module | `includeBuild` |
-| `neton-application-admin` | Admin frontend (Vue3 + Ant Design Vue) | Standalone repo |
-
-Directory layout:
+This repo is **not self-contained**. `settings.gradle.kts` hardcodes `../../Neton/<repo>`,
+so it must sit exactly two levels below the directory that holds `Neton/`:
 
 ```
 projects/
-├── neton/                              # Framework
-├── neton-application/                  # Main repo (this project)
-│   ├── application/                    # Application entry
-│   │   ├── src/commonMain/kotlin/
-│   │   │   ├── Main.kt                # Startup entry
-│   │   │   ├── config/                # SecurityConfig, etc.
-│   │   │   └── controller/            # HomeController (health check)
-│   │   └── config/                    # TOML config files
-│   │       ├── application.conf       # Server & logging config
-│   │       ├── database.conf          # Database connection
-│   │       └── routing.conf           # Route group definitions
-│   ├── module-system/                  # System management (core)
-│   ├── module-infra/                   # Infrastructure
-│   ├── sql/                            # Main DB migration scripts
-│   │   ├── mysql/
-│   │   ├── postgresql/
-│   │   └── sqlite/
-│   ├── build.gradle.kts
-│   ├── settings.gradle.kts
-│   └── gradle.properties
-├── neton-application-module-member/    # Member module (standalone repo)
-├── neton-application-module-payment/   # Payment module (standalone repo)
-├── neton-application-module-platform/  # Open platform module (standalone repo)
-└── neton-application-admin/            # Admin frontend
+├── Neton/
+│   ├── neton/                              # framework (includeBuild)
+│   ├── geolite4k/                          # GeoIP (includeBuild)
+│   ├── neton-application-module-system/
+│   ├── neton-application-module-infra/
+│   ├── neton-application-module-member/
+│   ├── neton-application-module-payment/
+│   ├── neton-application-module-platform/
+│   └── neton-application-module-gateway/   # the NanoGate core
+└── <workspace>/                            # any name for Gradle…
+    └── newgate/                            # ← this repository
 ```
 
-## Architecture
+The framework and the modules are pulled in as **source subprojects** (`include(...)` +
+`projectDir`), not as `includeBuild` — each of them keeps its own `settings.gradle.kts` and
+stays independently buildable. Only `neton` and `geolite4k` are composite builds.
 
-### Layered Architecture
+> ⚠️ **You cannot build this repo from a clean clone yet.** `neton-application-module-infra`
+> and `neton-application-module-gateway` — the module that actually implements the gateway —
+> are private at the moment. Until they are public (or the modules ship as Maven artifacts),
+> publishing this repo means "the source is readable", not "anyone can build it".
+> The Docker build additionally pins the outer directory names (`Neton/`, `NewGate/`) because
+> its `COPY` sources are literal.
 
-```
-Controller  ──  HTTP routing, parameter binding, permission annotations
-     │
-   Logic    ──  Business logic, state machines, transaction orchestration
-     │
-   Table    ──  Data access (KSP auto-generated CRUD)
-     │
-   DB       ──  MySQL / PostgreSQL / SQLite
-```
-
-### Route Groups
-
-| Group | Mount Path | Purpose | requireAuth |
-|-------|-----------|---------|-------------|
-| `admin` | `/admin` | Admin panel API | true |
-| `app` | `/app` | Consumer / mobile API | true |
-| `open` | `/platform` | Open platform API | As needed |
-
-### Module Dependencies
-
-```
-application
-├── module-system        ← Core, depended upon by all modules
-├── module-infra         ← Depends on system
-├── module-member        ← Depends on system (standalone repo)
-├── module-payment       ← Depends on system (standalone repo)
-└── module-platform      ← Depends on system (standalone repo)
-```
-
-## Feature Modules
-
-### module-system — System Management
-
-RBAC permission system, authentication, organizational structure.
-
-| Feature | Description |
-|---------|-------------|
-| Authentication | Username/password login, SMS login, social login (Google / Telegram), token refresh |
-| User Management | CRUD, enable/disable, password reset, user profile |
-| Role Management | CRUD, role assignment, menu permission assignment |
-| Menu Management | Tree-structured CRUD |
-| Permission Management | Fine-grained permission query and assignment |
-| Department Management | Tree-structured org hierarchy CRUD |
-| Post Management | Post CRUD and listing |
-| Dictionary Management | Dictionary type + dictionary data CRUD |
-| Logging | Login logs, operation audit logs |
-| Notices | System announcement CRUD |
-| Messaging | Message channels, message templates, send records, SMS/email/notification templates |
-| Social Users | Third-party social account binding management |
-
-### module-infra — Infrastructure
-
-| Feature | Description |
-|---------|-------------|
-| Dynamic Config | Key-value configuration management |
-| File Management | File upload, S3 pre-signed URLs, multi-storage backends |
-| Storage Config | Storage backend CRUD, connectivity testing, default storage switching |
-| Scheduled Jobs | Job CRUD, execution logs, cron scheduling |
-| API Logs | Access logs + error logs, request/response tracing |
-| Redis Monitoring | Redis health check and statistics |
-
-### module-member — Membership System
-
-| Feature | Description |
-|---------|-------------|
-| Member Auth | Consumer registration/login/logout, SMS verification, social registration |
-| Member Management | Member CRUD, groups, tags |
-| Level System | Level definition, experience points, auto-upgrade |
-| Points System | Points issuance, points history, redemption |
-| Check-in System | Daily check-in rewards, check-in records, streak tracking |
-| Shipping Addresses | Address CRUD |
-
-### module-payment — Payment System
-
-| Feature | Description |
-|---------|-------------|
-| Payment Apps | Multi-app management, key generation |
-| Payment Channels | Multi-gateway integration, channel configuration |
-| Payment Orders | Order creation, state machine transitions, order query |
-| Refunds | Refund application and processing |
-| Wallet | Account wallet, balance transactions |
-| Top-up | Top-up packages, top-up records |
-| Transfers | Account-to-account transfers |
-| Async Notifications | Payment callback query (webhook endpoint TBD) |
-
-### module-platform — Open Platform
-
-| Feature | Description |
-|---------|-------------|
-| Client Management | Third-party client registration, AppID/Secret generation |
-| API Catalog | API definitions, authorization policies, pricing configuration |
-| Signature Verification | HMAC request signing and verification |
-| Billing & Statistics | API call billing, usage statistics, billing records |
-
-## Quick Start
-
-### Prerequisites
-
-- **JDK 17+** (required for Gradle build, not needed at runtime)
-- **Git**
-- **MySQL** (or PostgreSQL / SQLite)
-
-### 1. Clone the Project
+## Build
 
 ```bash
-git clone <repository-url>
-cd neton-application
+./gradlew :application:linkDebugExecutableMacosArm64      # Apple silicon dev build
+./gradlew :application:linkReleaseExecutableLinuxX64      # the release artifact the image ships
+./gradlew :module-gateway:macosArm64Test :module-system:macosArm64Test
 ```
 
-Ensure the Neton framework and extension modules are in sibling directories:
+Output: `application/build/bin/<target>/<debug|release>Executable/application.kexe`.
+Kotlin/Native test tasks only run on a matching host architecture — a `linuxX64Test` task
+cannot execute on an Apple silicon Mac — so CI splits the work: the macOS job compiles
+`macosArm64` and runs the module unit tests, the Linux job builds `linuxX64` natively and
+runs the reliability harness against that binary.
 
-```
-projects/
-├── neton/                              # Framework
-├── neton-application/                  # This project
-├── neton-application-module-member/    # Member module
-├── neton-application-module-payment/   # Payment module
-└── neton-application-module-platform/  # Open platform module
-```
+Declared targets: `macosArm64`, `linuxX64`, `linuxArm64`, `mingwX64`. Verified in practice:
 
-### 2. Initialize the Database
+| Target | Status |
+|---|---|
+| `macosArm64` | compiles, links, unit tests run (dev machine + the CI macOS job) |
+| `linuxX64` | compiles, links and passes the harness on the CI Linux job; also cross-linked from macOS to a working ELF as a local check |
+| `linuxArm64` | declared, **not verified** |
+| `mingwX64` | declared, **not verified**; ships without a DNS resolver, so the SSRF re-check degrades to literal-only validation (see `DEPLOY.md`) |
 
-Each repository contains its own `sql/` directory. Execute them sequentially against the **same database**.
-
-#### MySQL
+## Run
 
 ```bash
-# Main DB (system + infra)
-mysql -u root -p neton-application < sql/mysql/V001__create_tables.sql
-mysql -u root -p neton-application < sql/mysql/V002__init_data.sql
-
-# Member module
-mysql -u root -p neton-application < ../neton-application-module-member/sql/mysql/V001__create_tables.sql
-mysql -u root -p neton-application < ../neton-application-module-member/sql/mysql/V002__init_data.sql
-
-# Payment module
-mysql -u root -p neton-application < ../neton-application-module-payment/sql/mysql/V001__create_tables.sql
-mysql -u root -p neton-application < ../neton-application-module-payment/sql/mysql/V002__init_data.sql
-
-# Open platform module
-mysql -u root -p neton-application < ../neton-application-module-platform/sql/mysql/V001__create_tables.sql
-mysql -u root -p neton-application < ../neton-application-module-platform/sql/mysql/V002__init_data.sql
+./application.kexe migrate up     # apply migrations; also accepts `status` / `verify`
+./application.kexe                # serve on :7080
 ```
 
-#### PostgreSQL
+Serving **never auto-migrates**: startup runs a precheck and aborts (exit 1) if migrations
+are pending, failed, or mismatched. Migrations are embedded into the binary at compile time,
+so there are no SQL files to ship and no working-directory assumptions.
+
+Configuration lives in `application/config/*.conf` (`application.conf`, `database.conf`,
+`routing.conf`, `storage.conf`, `geolite.conf`) and every value can be overridden by
+environment variables — `NETON_` prefix, `__` for a dot, path lowercased
+(`NETON_REDIS__HOST` → `redis.host`), plus `NEWGATE_*` for product knobs such as
+`NEWGATE_CHANNEL_KEY_ENC_KEY`, `NEWGATE_TRUSTED_PROXIES`, `NEWGATE_SALE_MARKUP` and
+`NEWGATE_MIN_MARGIN`. Only PostgreSQL is supported.
+
+Route groups (see `application/config/routing.conf`):
+
+| Mount | Auth | Purpose |
+|---|---|---|
+| `/` | gateway `sk-` token | LLM relay: `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`, Gemini `:generateContent` / `:embedContent` |
+| `/admin` | operator JWT | operator console API |
+| `/app` | member JWT (HttpOnly cookie) | self-service console API |
+| `/platform` | open | open-platform endpoints |
+
+## Assembled modules
+
+The module list has exactly one source of truth — `ksp { arg("neton.modules", ...) }` in
+`application/build.gradle.kts`. KSP generates `GeneratedApplicationModules`, which the
+`migrate` subcommand, the startup precheck and `serve` all consume, so adding or dropping a
+module is a two-line change (a dependency plus an id) and cannot drift out of sync.
+
+`system` · `infra` · `member` · `payment` · `platform` · `gateway`
+
+## Tests
+
+The behavioural test suite is the harness in the
+[`nanogate` repository](https://github.com/zoujiaqing/nanogate) (`harness/run.sh`): it starts
+the real gateway on `:7080` against a throwaway PostgreSQL database and an isolated
+`redis-server`, drives 25 scenarios with Python fake upstreams, and asserts 37 properties —
+billing snapshots, dual-track pricing, margin gates, capability routing, channel failover and
+cool-down, atomic rate limits, and the XFF trust boundary. It never touches a Redis instance
+it did not start.
 
 ```bash
-# Main DB (system + infra)
-psql -U postgres -d neton-application -f sql/postgresql/V001__create_tables.sql
-psql -U postgres -d neton-application -f sql/postgresql/V002__init_data.sql
-
-# Member module
-psql -U postgres -d neton-application -f ../neton-application-module-member/sql/postgresql/V001__create_tables.sql
-psql -U postgres -d neton-application -f ../neton-application-module-member/sql/postgresql/V002__init_data.sql
-
-# Payment module
-psql -U postgres -d neton-application -f ../neton-application-module-payment/sql/postgresql/V001__create_tables.sql
-psql -U postgres -d neton-application -f ../neton-application-module-payment/sql/postgresql/V002__init_data.sql
-
-# Open platform module
-psql -U postgres -d neton-application -f ../neton-application-module-platform/sql/postgresql/V001__create_tables.sql
-psql -U postgres -d neton-application -f ../neton-application-module-platform/sql/postgresql/V002__init_data.sql
+cd ..          # the workspace root that holds harness/
+bash harness/run.sh                          # macOS: builds macosArm64 by default
+NEWGATE_TARGET=linuxX64 bash harness/run.sh  # Linux
 ```
 
-#### SQLite
-
-```bash
-mkdir -p application/data application/logs
-
-# Main DB (system + infra)
-sqlite3 application/data/backend.db < sql/sqlite/V001__create_tables.sql
-sqlite3 application/data/backend.db < sql/sqlite/V002__init_data.sql
-
-# Member module
-sqlite3 application/data/backend.db < ../neton-application-module-member/sql/sqlite/V001__create_tables.sql
-sqlite3 application/data/backend.db < ../neton-application-module-member/sql/sqlite/V002__init_data.sql
-
-# Payment module
-sqlite3 application/data/backend.db < ../neton-application-module-payment/sql/sqlite/V001__create_tables.sql
-sqlite3 application/data/backend.db < ../neton-application-module-payment/sql/sqlite/V002__init_data.sql
-
-# Open platform module
-sqlite3 application/data/backend.db < ../neton-application-module-platform/sql/sqlite/V001__create_tables.sql
-sqlite3 application/data/backend.db < ../neton-application-module-platform/sql/sqlite/V002__init_data.sql
-```
-
-### 3. Configure Database Connection
-
-Edit `application/config/database.conf` for your database:
-
-```toml
-# MySQL
-[default]
-driver = "MYSQL"
-uri = "mysql://root:123456@localhost:3306/neton-application"
-
-# PostgreSQL
-# [default]
-# driver = "POSTGRESQL"
-# uri = "postgresql://postgres:123456@localhost:5432/neton-application"
-
-# SQLite
-# [default]
-# driver = "SQLITE"
-# uri = "sqlite://data/backend.db"
-```
-
-### 4. Build
-
-```bash
-# macOS ARM64 (Apple Silicon)
-./gradlew :application:linkDebugExecutableMacosArm64
-
-# macOS x64
-./gradlew :application:linkDebugExecutableMacosX64
-
-# Linux x64
-./gradlew :application:linkDebugExecutableLinuxX64
-
-# Linux ARM64
-./gradlew :application:linkDebugExecutableLinuxArm64
-```
-
-> The first build downloads the Kotlin/Native toolchain, which takes longer. Subsequent incremental builds are faster.
-
-### 5. Run
-
-**Must be launched from the `application` directory** to correctly load configuration:
-
-```bash
-cd application
-./build/bin/macosArm64/debugExecutable/application.kexe
-```
-
-Output:
-
-```
-░█▀█░█▀▀░▀█▀░█▀█░█▀█
-░█░█░█▀▀░░█░░█░█░█░█
-░▀░▀░▀▀▀░░▀░░▀▀▀░▀░▀░
-
-Neton 1.0.0-beta1
-Kotlin/Native Runtime
-
-Adapter     : Ktor CIO
-Environment : dev
-Port        : 7080
-Cold Start  : 154 ms
-
-Ready → http://localhost:7080
-```
-
-### 6. Verify
-
-```bash
-curl http://localhost:7080/
-# {"status":"ok","service":"neton-application","version":"1.0.0"}
-```
-
-## Configuration
-
-### application.conf
-
-```toml
-[application]
-name = "neton-application"
-debug = false
-
-[server]
-port = 7080
-host = "0.0.0.0"
-
-[database]
-driver = "MYSQL"
-uri = "mysql://root:123456@localhost:3306/neton-application"
-
-[logging]
-level = "INFO"
-
-[logging.async]
-enabled = true
-queueSize = 8192
-flushEveryMs = 200
-flushBatchSize = 64
-shutdownFlushTimeoutMs = 2000
-
-[[logging.sinks]]
-name = "access"
-file = "logs/access.log"
-levels = "INFO"
-route = "http.access"
-
-[[logging.sinks]]
-name = "error"
-file = "logs/error.log"
-levels = "ERROR,WARN"
-
-[[logging.sinks]]
-name = "all"
-file = "logs/all.log"
-levels = "ALL"
-```
-
-### database.conf
-
-```toml
-[default]
-driver = "MYSQL"
-uri = "mysql://root:123456@localhost:3306/neton-application"
-debug = false
-```
-
-### routing.conf
-
-```toml
-[[groups]]
-group = "admin"
-mount = "/admin"
-requireAuth = true
-
-[[groups]]
-group = "app"
-mount = "/app"
-requireAuth = true
-
-[[groups]]
-group = "open"
-mount = "/platform"
-```
-
-### Environment Overrides
-
-Supports loading environment-specific configuration:
-
-```bash
-# Development (default)
-./application.kexe
-
-# Production → loads application.prod.conf as override
-./application.kexe --env=prod
-```
-
-Configuration priority: CLI args > Environment variables > Environment config file > Base config file > Framework defaults
-
-## Build Targets
-
-| Platform | Target | Output Path |
-|----------|--------|-------------|
-| macOS ARM64 | `macosArm64` | `application/build/bin/macosArm64/debugExecutable/` |
-| macOS x64 | `macosX64` | `application/build/bin/macosX64/debugExecutable/` |
-| Linux x64 | `linuxX64` | `application/build/bin/linuxX64/debugExecutable/` |
-| Linux ARM64 | `linuxArm64` | `application/build/bin/linuxArm64/debugExecutable/` |
-| Windows x64 | `mingwX64` | `application/build/bin/mingwX64/debugExecutable/` |
-
-For release builds: replace `linkDebugExecutable` with `linkReleaseExecutable`.
-
-## Container Deployment
-
-```dockerfile
-FROM scratch
-COPY build/bin/linuxX64/releaseExecutable/application.kexe /app
-COPY application/config/ /config/
-EXPOSE 7080
-ENTRYPOINT ["/app", "--env=prod"]
-```
-
-```bash
-# Build image (~10MB)
-docker build -t neton-application .
-docker run -p 7080:7080 neton-application
-```
-
-## Development Guide
-
-### Adding a New Controller
-
-```kotlin
-// module-system/src/commonMain/kotlin/controller/admin/example/ExampleController.kt
-package controller.admin.example
-
-import neton.core.annotations.Controller
-import neton.core.annotations.Get
-import neton.core.annotations.Post
-import neton.core.annotations.Permission
-
-@Controller("/example")
-class ExampleController(private val logic: ExampleLogic) {
-
-    @Get("/list")
-    @Permission("system:example:list")
-    suspend fun list(page: Int = 1, size: Int = 20) = logic.page(page, size)
-
-    @Post("/create")
-    @Permission("system:example:create")
-    suspend fun create(request: CreateExampleRequest): Long = logic.create(request)
-}
-```
-
-KSP auto-generates route registration code — no manual route configuration needed.
-
-### Adding a New Model + Table
-
-```kotlin
-// model/Example.kt
-@Serializable
-@Table("system_examples")
-data class Example(
-    @Id val id: Long = 0,
-    val name: String,
-    val status: Int = 0,
-    @SoftDelete val deleted: Int = 0,
-    @CreatedAt val createdAt: String? = null,
-    @UpdatedAt val updatedAt: String? = null
-)
-
-// table/ExampleTable.kt (Facade, add custom methods here)
-object ExampleTable : Table<Example, Long> by ExampleTableImpl
-```
-
-KSP auto-generates `ExampleTableImpl`, `ExampleMeta`, `ExampleRowMapper`, and 3 other files.
-
-### Build Commands
-
-```bash
-# Compile only (no linking)
-./gradlew :application:compileKotlinMacosArm64
-
-# Compile + link
-./gradlew :application:linkDebugExecutableMacosArm64
-
-# Clean rebuild
-./gradlew clean :application:linkDebugExecutableMacosArm64
-
-# Run KSP code generation only
-./gradlew :module-system:kspKotlinMacosArm64
-```
-
-## Related Documentation
-
-| Document | Description |
-|----------|-------------|
-| **SPEC.md** | Project architecture, API specifications, configuration specs |
+## Documentation
+
+- [`docs/ENGINEERING_RULES.md`](./docs/ENGINEERING_RULES.md) — the hard rules (module
+  boundaries, what to grep before changing a public symbol, migration policy)
+- [`docs/rbac-spec.md`](./docs/rbac-spec.md) — User/Role/Menu, permission strings, wildcards
+- [`docs/module-template-spec.md`](./docs/module-template-spec.md) — how to add a module
+- [`docs/SPEC.md`](./docs/SPEC.md) — ⚠️ inherited scaffold, **partly stale**: it still says
+  Kotlin 2.3, describes the modules as `includeBuild`, links a file that is not in this repo,
+  and names a Vue admin console that NanoGate does not use. Trust this README and `DEPLOY.md`.
+
+## Known gaps
+
+Deliberately listed rather than hidden:
+
+- No health endpoint. The container `HEALTHCHECK` probes `/` without `-f` (any HTTP response
+  counts as alive); there is no readiness check that covers the database or Redis.
+- CORS `Access-Control-Allow-Origin` is **hardcoded to `*`** in `Main.kt` and is not a config
+  value — Neton's TOML parser cannot parse arrays. `allowCredentials = false`, so browsers
+  send no cookies cross-origin, but tightening the allowlist means editing code and rebuilding.
+- `security.unified_token.enabled` must stay `false`: no module in this distribution binds a
+  `UnifiedTokenAuthenticator`. The startup error says so explicitly.
+- The Docker/compose build path has not been executed on a real Docker host yet.
 
 ## License
 
-Private - All Rights Reserved
+Apache-2.0 — see [LICENSE](./LICENSE).

@@ -1,519 +1,147 @@
-# Neton Application
+# NanoGate 后端
 
-基于 [Neton](../neton) 框架构建的企业级后台管理系统，采用 Kotlin/Native 编译为原生二进制，启动快、内存低、单文件部署。
+[English](./README.md) | **简体中文**
 
-> 开发硬规范：见 [ENGINEERING_RULES.md](./ENGINEERING_RULES.md)
->
-> 模块模板规范：见 [docs/module-template-spec.md](./docs/module-template-spec.md)
+NanoGate 是一个自托管的 LLM API 网关：自己签发一套 Key，背后对接三个上游协议族
+（OpenAI、Anthropic、Gemini）并**任意方向互转**，同时负责计费、配额与渠道容错。它是 Go 版
+[`new-api`](https://github.com/QuantumNous/new-api) 在 [Neton](https://github.com/netonframework/neton)
+框架上的重写，用 Kotlin/Native 编译成单个静态可执行文件：运行期没有 JVM，也没有需要随包分发的 SQL 文件。
 
-## 技术栈
+本仓是**后端发行版**：把框架与六个 canonical 模块装配成一个二进制，并持有网关相关的配置。
+产品逻辑在各模块仓里，不在这里。
 
-| 项目 | 选型 |
-|------|------|
-| 语言 | Kotlin 2.3 (Multiplatform) |
-| 框架 | Neton 1.0.0-beta1 |
-| 编译 | Kotlin/Native → 原生二进制 |
-| 数据库 | MySQL / PostgreSQL / SQLite |
-| 认证 | JWT |
-| 构建 | Gradle 8.14 + KSP |
-| 日志 | 结构化 JSON，异步写入 |
+| | |
+|---|---|
+| 语言 | Kotlin 2.4.0（Multiplatform） |
+| 构建 | Gradle 8.14.4 + KSP 2.3.10 |
+| 运行形态 | Kotlin/Native 静态可执行文件（`application.kexe`），无 JVM |
+| 存储 | PostgreSQL（计费、账本、渠道）· Redis（可选：跨实例共享限流） |
+| 默认端口 | `7080` |
+| 许可 | [Apache-2.0](./LICENSE) |
 
-**运行指标：**
+配套仓：**nanogate-admin**（管理台）与 **nanogate-client**（用户控制台）。
+部署、密钥、反向代理与 SSRF 说明见 `nanogate` 仓的
+[`DEPLOY.md`](https://github.com/zoujiaqing/nanogate/blob/main/DEPLOY.md)，端到端测试 harness 也在那里。
 
-- 冷启动 ~150ms（debug）/ ~3ms（release）
-- 内存占用 ~20MB
-- 单文件部署，无 JVM 依赖
+## 仓库布局
 
-## 仓库结构
-
-采用**多仓库 + Gradle Composite Build** 架构，主仓库与扩展模块分离：
-
-| 仓库 | 内容 | 引入方式 |
-|------|------|---------|
-| `neton` | 框架 | `includeBuild("../neton")` |
-| `neton-application` | 主应用（module-system + module-infra + application 入口） | 根项目 |
-| `neton-application-module-member` | 会员模块 | `includeBuild` |
-| `neton-application-module-payment` | 支付模块 | `includeBuild` |
-| `neton-application-module-platform` | 开放平台模块 | `includeBuild` |
-| `neton-application-admin` | 管理端前端（Vue3 + Ant Design Vue） | 独立仓库 |
-
-目录布局：
+本仓**不能独立构建**。`settings.gradle.kts` 里写死了 `../../Neton/<repo>`，
+所以它必须正好落在持有 `Neton/` 的那层目录的**两层深处**：
 
 ```
 projects/
-├── neton/                              # 框架
-├── neton-application/                  # 主仓库（本项目）
-│   ├── application/                    # 应用入口
-│   │   ├── src/commonMain/kotlin/
-│   │   │   ├── Main.kt                # 启动入口
-│   │   │   ├── config/                # SecurityConfig 等
-│   │   │   └── controller/            # HomeController（健康检查）
-│   │   └── config/                    # TOML 配置文件
-│   │       ├── application.conf       # 服务器、日志配置
-│   │       ├── database.conf          # 数据库连接
-│   │       └── routing.conf           # 路由组定义
-│   ├── module-system/                  # 系统管理（核心）
-│   ├── module-infra/                   # 基础设施
-│   ├── sql/                            # 主库迁移脚本
-│   │   ├── mysql/
-│   │   ├── postgresql/
-│   │   └── sqlite/
-│   ├── build.gradle.kts
-│   ├── settings.gradle.kts
-│   └── gradle.properties
-├── neton-application-module-member/    # 会员模块（独立仓库）
-├── neton-application-module-payment/   # 支付模块（独立仓库）
-├── neton-application-module-platform/  # 开放平台模块（独立仓库）
-└── neton-application-admin/            # 管理端前端
+├── Neton/
+│   ├── neton/                              # 框架（includeBuild）
+│   ├── geolite4k/                          # GeoIP（includeBuild）
+│   ├── neton-application-module-system/
+│   ├── neton-application-module-infra/
+│   ├── neton-application-module-member/
+│   ├── neton-application-module-payment/
+│   ├── neton-application-module-platform/
+│   └── neton-application-module-gateway/   # NanoGate 的核心模块
+└── <workspace>/                            # Gradle 不关心这层叫什么…
+    └── newgate/                            # ← 本仓
 ```
 
-## 架构设计
+框架与模块是以**源码子项目**方式引入的（`include(...)` + `projectDir`），不是 `includeBuild`——
+每个模块仓保留自己的 `settings.gradle.kts`，仍可独立构建。只有 `neton` 与 `geolite4k` 是 composite build。
 
-### 分层架构
+> ⚠️ **现在从干净 clone 出发还构建不出来。** `neton-application-module-infra` 与
+> `neton-application-module-gateway`（真正实现网关的那个模块）目前是私有仓。在它们转公开
+> （或模块改为发布 Maven 制品）之前，公开本仓只意味着「源码可读」，不意味着「人人可自建」。
+> 另外 Docker 构建把外层目录名（`Neton/`、`NewGate/`）也钉死了，因为 `COPY` 源是字面路径。
 
-```
-Controller  ──  HTTP 路由处理，参数绑定，权限注解
-     │
-   Logic    ──  业务逻辑，状态机，事务编排
-     │
-   Table    ──  数据访问（KSP 自动生成 CRUD）
-     │
-   DB       ──  MySQL / PostgreSQL / SQLite
-```
-
-### 路由组
-
-| 组 | 挂载路径 | 用途 | requireAuth |
-|----|---------|------|-------------|
-| `admin` | `/admin` | 管理后台 API | true |
-| `app` | `/app` | C 端 / 移动端 API | true |
-| `open` | `/platform` | 开放平台 API | 按需 |
-
-### 模块依赖关系
-
-```
-application
-├── module-system        ← 核心，被所有模块依赖
-├── module-infra         ← 依赖 system
-├── module-member        ← 依赖 system（独立仓库）
-├── module-payment       ← 依赖 system（独立仓库）
-└── module-platform      ← 依赖 system（独立仓库）
-```
-
-## 功能模块
-
-### module-system — 系统管理
-
-RBAC 权限体系、认证、组织架构。
-
-| 功能 | 说明 |
-|------|------|
-| 认证 | 用户名密码登录、短信登录、社交登录（Google / Telegram）、Token 刷新 |
-| 用户管理 | CRUD、启用/禁用、密码重置、个人资料 |
-| 角色管理 | CRUD、角色分配、菜单权限分配 |
-| 菜单管理 | 树形结构 CRUD |
-| 权限管理 | 细粒度权限查询与分配 |
-| 部门管理 | 树形组织架构 CRUD |
-| 岗位管理 | 岗位 CRUD 与列表 |
-| 字典管理 | 字典类型 + 字典数据 CRUD |
-| 日志 | 登录日志、操作审计日志 |
-| 通知公告 | 系统公告 CRUD |
-| 消息系统 | 消息渠道、消息模板、发送记录、短信/邮件/通知模板 |
-| 社交用户 | 第三方社交账号绑定管理 |
-
-### module-infra — 基础设施
-
-| 功能 | 说明 |
-|------|------|
-| 动态配置 | Key-Value 配置管理 |
-| 文件管理 | 文件上传、S3 预签名 URL、多存储后端 |
-| 存储配置 | 存储后端 CRUD、连通性测试、默认存储切换 |
-| 定时任务 | Job CRUD、执行日志、Cron 调度 |
-| API 日志 | 访问日志 + 错误日志，请求/响应追踪 |
-| Redis 监控 | Redis 健康检查与统计 |
-
-### module-member — 会员体系
-
-| 功能 | 说明 |
-|------|------|
-| 会员认证 | C 端注册/登录/登出、短信验证、社交注册 |
-| 会员管理 | 会员 CRUD、分组、标签 |
-| 等级体系 | 等级定义、经验值、自动升级 |
-| 积分系统 | 积分发放、积分历史、兑换 |
-| 签到系统 | 每日签到奖励、签到记录、连续签到追踪 |
-| 收货地址 | 地址 CRUD |
-
-### module-payment — 支付系统
-
-| 功能 | 说明 |
-|------|------|
-| 支付应用 | 多应用管理、密钥生成 |
-| 支付渠道 | 多网关接入、渠道配置 |
-| 支付订单 | 下单、状态机流转、订单查询 |
-| 退款 | 退款申请与处理 |
-| 钱包 | 账户钱包、余额变动 |
-| 充值 | 充值套餐、充值记录 |
-| 转账 | 账户间转账 |
-| 异步通知 | 支付回调查询（Webhook 回调端点待实现） |
-
-### module-platform — 开放平台
-
-| 功能 | 说明 |
-|------|------|
-| 客户端管理 | 第三方客户端注册、AppID/Secret 生成 |
-| API 目录 | API 定义、授权策略、定价配置 |
-| 签名验证 | HMAC 请求签名与校验 |
-| 计费统计 | API 调用计费、用量统计、账单记录 |
-
-## 快速开始
-
-### 环境要求
-
-- **JDK 17+**（Gradle 构建需要，运行时不需要）
-- **Git**
-- **MySQL**（或 PostgreSQL / SQLite）
-
-### 1. 克隆项目
+## 构建
 
 ```bash
-git clone <repository-url>
-cd neton-application
+./gradlew :application:linkDebugExecutableMacosArm64      # Apple silicon 开发构建
+./gradlew :application:linkReleaseExecutableLinuxX64      # 镜像用的 release 产物
+./gradlew :module-gateway:macosArm64Test :module-system:macosArm64Test
 ```
 
-确保 neton 框架及扩展模块在同级目录：
+产物在 `application/build/bin/<target>/<debug|release>Executable/application.kexe`。
+Kotlin/Native 的测试任务只能在架构匹配的宿主上运行——Apple silicon 的 Mac 跑不了 `linuxX64Test`——
+所以 CI 把两件事分开：macOS job 编译 `macosArm64` 并跑模块单测，Linux job 原生构建 `linuxX64`
+并用它跑整个可靠性 harness。
 
-```
-projects/
-├── neton/                              # 框架
-├── neton-application/                  # 本项目
-├── neton-application-module-member/    # 会员模块
-├── neton-application-module-payment/   # 支付模块
-└── neton-application-module-platform/  # 开放平台模块
-```
+声明的目标：`macosArm64`、`linuxX64`、`linuxArm64`、`mingwX64`。实际验证情况：
 
-### 2. 初始化数据库
+| 目标 | 状态 |
+|---|---|
+| `macosArm64` | 编译、链接、单测均通过（开发机与 CI 的 macOS job） |
+| `linuxX64` | 在 CI 的 Linux job 上编译、链接并跑通 harness；也曾在 macOS 上交叉链接出可运行的 ELF 做本地验证 |
+| `linuxArm64` | 已声明，**未验证** |
+| `mingwX64` | 已声明，**未验证**；不带 DNS 解析器，SSRF 复查退化为只做字面量校验（见 `DEPLOY.md`） |
 
-每个仓库各自包含 `sql/` 目录，需在**同一数据库**上依次执行。
-
-#### MySQL
+## 运行
 
 ```bash
-# 主库（system + infra）
-mysql -u root -p neton-application < sql/mysql/V001__create_tables.sql
-mysql -u root -p neton-application < sql/mysql/V002__init_data.sql
-
-# 会员模块
-mysql -u root -p neton-application < ../neton-application-module-member/sql/mysql/V001__create_tables.sql
-mysql -u root -p neton-application < ../neton-application-module-member/sql/mysql/V002__init_data.sql
-
-# 支付模块
-mysql -u root -p neton-application < ../neton-application-module-payment/sql/mysql/V001__create_tables.sql
-mysql -u root -p neton-application < ../neton-application-module-payment/sql/mysql/V002__init_data.sql
-
-# 开放平台模块
-mysql -u root -p neton-application < ../neton-application-module-platform/sql/mysql/V001__create_tables.sql
-mysql -u root -p neton-application < ../neton-application-module-platform/sql/mysql/V002__init_data.sql
+./application.kexe migrate up     # 执行迁移；也接受 `status` / `verify`
+./application.kexe                # 在 :7080 提供服务
 ```
 
-#### PostgreSQL
+服务启动**绝不自动迁移**：启动时跑 precheck，发现迁移待执行 / 失败 / 不匹配就 fail-fast（exit 1）。
+迁移 SQL 在编译期被 embed 进二进制，所以没有 sidecar SQL 文件，也不依赖工作目录。
+
+配置在 `application/config/*.conf`（`application.conf`、`database.conf`、`routing.conf`、
+`storage.conf`、`geolite.conf`），每一项都能用环境变量覆盖——`NETON_` 前缀、`__` 表示点、路径小写
+（`NETON_REDIS__HOST` → `redis.host`）；产品自身的开关用 `NEWGATE_*`，如
+`NEWGATE_CHANNEL_KEY_ENC_KEY`、`NEWGATE_TRUSTED_PROXIES`、`NEWGATE_SALE_MARKUP`、`NEWGATE_MIN_MARGIN`。
+数据库只支持 PostgreSQL。
+
+路由组（见 `application/config/routing.conf`）：
+
+| 挂载点 | 认证 | 用途 |
+|---|---|---|
+| `/` | gateway 的 `sk-` TokenGuard | LLM 中转：`/v1/chat/completions`、`/v1/messages`、`/v1/embeddings`、Gemini `:generateContent` / `:embedContent` |
+| `/admin` | 管理员 JWT | 管理台 API |
+| `/app` | 会员 JWT（HttpOnly Cookie） | 用户控制台 API |
+| `/platform` | 开放 | 开放平台端点 |
+
+## 装配的模块
+
+模块列表只有一个来源：`application/build.gradle.kts` 里的 `ksp { arg("neton.modules", ...) }`。
+KSP 生成 `GeneratedApplicationModules`，`migrate` 子命令、启动 precheck 与 `serve` 三处共用，
+所以增删模块是两行改动（一个依赖 + 一个 id），不会出现三份列表各自漂移。
+
+`system` · `infra` · `member` · `payment` · `platform` · `gateway`
+
+## 测试
+
+行为测试是 [`nanogate` 仓](https://github.com/zoujiaqing/nanogate)里的 harness（`harness/run.sh`）：
+它在一个用完即弃的 PostgreSQL 库和一个隔离的 `redis-server` 上启动真实网关（`:7080`），
+用 Python 假上游驱动 25 个场景、断言 37 条性质——定价快照、双轨计价、毛利闸门、能力路由、
+渠道容错与冷却、原子限流、XFF 信任边界。它绝不碰不是自己启动的 Redis 实例。
 
 ```bash
-# 主库（system + infra）
-psql -U postgres -d neton-application -f sql/postgresql/V001__create_tables.sql
-psql -U postgres -d neton-application -f sql/postgresql/V002__init_data.sql
-
-# 会员模块
-psql -U postgres -d neton-application -f ../neton-application-module-member/sql/postgresql/V001__create_tables.sql
-psql -U postgres -d neton-application -f ../neton-application-module-member/sql/postgresql/V002__init_data.sql
-
-# 支付模块
-psql -U postgres -d neton-application -f ../neton-application-module-payment/sql/postgresql/V001__create_tables.sql
-psql -U postgres -d neton-application -f ../neton-application-module-payment/sql/postgresql/V002__init_data.sql
-
-# 开放平台模块
-psql -U postgres -d neton-application -f ../neton-application-module-platform/sql/postgresql/V001__create_tables.sql
-psql -U postgres -d neton-application -f ../neton-application-module-platform/sql/postgresql/V002__init_data.sql
+cd ..          # 含 harness/ 的工作区根目录
+bash harness/run.sh                          # macOS：默认构建 macosArm64
+NEWGATE_TARGET=linuxX64 bash harness/run.sh  # Linux
 ```
 
-#### SQLite
-
-```bash
-mkdir -p application/data application/logs
-
-# 主库（system + infra）
-sqlite3 application/data/backend.db < sql/sqlite/V001__create_tables.sql
-sqlite3 application/data/backend.db < sql/sqlite/V002__init_data.sql
-
-# 会员模块
-sqlite3 application/data/backend.db < ../neton-application-module-member/sql/sqlite/V001__create_tables.sql
-sqlite3 application/data/backend.db < ../neton-application-module-member/sql/sqlite/V002__init_data.sql
-
-# 支付模块
-sqlite3 application/data/backend.db < ../neton-application-module-payment/sql/sqlite/V001__create_tables.sql
-sqlite3 application/data/backend.db < ../neton-application-module-payment/sql/sqlite/V002__init_data.sql
-
-# 开放平台模块
-sqlite3 application/data/backend.db < ../neton-application-module-platform/sql/sqlite/V001__create_tables.sql
-sqlite3 application/data/backend.db < ../neton-application-module-platform/sql/sqlite/V002__init_data.sql
-```
-
-### 3. 配置数据库连接
-
-编辑 `application/config/database.conf`，按实际数据库类型配置：
-
-```toml
-# MySQL
-[default]
-driver = "MYSQL"
-uri = "mysql://root:123456@localhost:3306/neton-application"
-
-# PostgreSQL
-# [default]
-# driver = "POSTGRESQL"
-# uri = "postgresql://postgres:123456@localhost:5432/neton-application"
-
-# SQLite
-# [default]
-# driver = "SQLITE"
-# uri = "sqlite://data/backend.db"
-```
-
-### 4. 编译
-
-```bash
-# macOS ARM64 (Apple Silicon)
-./gradlew :application:linkDebugExecutableMacosArm64
-
-# macOS x64
-./gradlew :application:linkDebugExecutableMacosX64
-
-# Linux x64
-./gradlew :application:linkDebugExecutableLinuxX64
-
-# Linux ARM64
-./gradlew :application:linkDebugExecutableLinuxArm64
-```
-
-> 首次编译需下载 Kotlin/Native 工具链，耗时较长。后续增量编译较快。
-
-### 5. 运行
-
-**必须从 `application` 目录启动**，以正确加载配置：
-
-```bash
-cd application
-./build/bin/macosArm64/debugExecutable/application.kexe
-```
-
-输出：
-
-```
-░█▀█░█▀▀░▀█▀░█▀█░█▀█
-░█░█░█▀▀░░█░░█░█░█░█
-░▀░▀░▀▀▀░░▀░░▀▀▀░▀░▀░
-
-Neton 1.0.0-beta1
-Kotlin/Native Runtime
-
-Adapter     : Ktor CIO
-Environment : dev
-Port        : 7080
-Cold Start  : 154 ms
-
-Ready → http://localhost:7080
-```
-
-### 6. 验证
-
-```bash
-curl http://localhost:7080/
-# {"status":"ok","service":"neton-application","version":"1.0.0"}
-```
-
-## 配置说明
-
-### application.conf
-
-```toml
-[application]
-name = "neton-application"
-debug = false
-
-[server]
-port = 7080
-host = "0.0.0.0"
-
-[database]
-driver = "MYSQL"
-uri = "mysql://root:123456@localhost:3306/neton-application"
-
-[logging]
-level = "INFO"
-
-[logging.async]
-enabled = true
-queueSize = 8192
-flushEveryMs = 200
-flushBatchSize = 64
-shutdownFlushTimeoutMs = 2000
-
-[[logging.sinks]]
-name = "access"
-file = "logs/access.log"
-levels = "INFO"
-route = "http.access"
-
-[[logging.sinks]]
-name = "error"
-file = "logs/error.log"
-levels = "ERROR,WARN"
-
-[[logging.sinks]]
-name = "all"
-file = "logs/all.log"
-levels = "ALL"
-```
-
-### database.conf
-
-```toml
-[default]
-driver = "MYSQL"
-uri = "mysql://root:123456@localhost:3306/neton-application"
-debug = false
-```
-
-### routing.conf
-
-```toml
-[[groups]]
-group = "admin"
-mount = "/admin"
-requireAuth = true
-
-[[groups]]
-group = "app"
-mount = "/app"
-requireAuth = true
-
-[[groups]]
-group = "open"
-mount = "/platform"
-```
-
-### 环境覆盖
-
-支持按环境加载不同配置：
-
-```bash
-# 开发环境（默认）
-./application.kexe
-
-# 生产环境 → 加载 application.prod.conf 覆盖
-./application.kexe --env=prod
-```
-
-配置优先级：CLI 参数 > 环境变量 > 环境配置文件 > 基础配置文件 > 框架默认值
-
-## 编译目标
-
-| 平台 | Target | 产物路径 |
-|------|--------|---------|
-| macOS ARM64 | `macosArm64` | `application/build/bin/macosArm64/debugExecutable/` |
-| macOS x64 | `macosX64` | `application/build/bin/macosX64/debugExecutable/` |
-| Linux x64 | `linuxX64` | `application/build/bin/linuxX64/debugExecutable/` |
-| Linux ARM64 | `linuxArm64` | `application/build/bin/linuxArm64/debugExecutable/` |
-| Windows x64 | `mingwX64` | `application/build/bin/mingwX64/debugExecutable/` |
-
-Release 构建：将 `linkDebugExecutable` 替换为 `linkReleaseExecutable`。
-
-## 容器化部署
-
-```dockerfile
-FROM scratch
-COPY build/bin/linuxX64/releaseExecutable/application.kexe /app
-COPY application/config/ /config/
-EXPOSE 7080
-ENTRYPOINT ["/app", "--env=prod"]
-```
-
-```bash
-# 构建镜像（约 10MB）
-docker build -t neton-application .
-docker run -p 7080:7080 neton-application
-```
-
-## 开发指南
-
-### 添加新 Controller
-
-```kotlin
-// module-system/src/commonMain/kotlin/controller/admin/example/ExampleController.kt
-package controller.admin.example
-
-import neton.core.annotations.Controller
-import neton.core.annotations.Get
-import neton.core.annotations.Post
-import neton.core.annotations.Permission
-
-@Controller("/example")
-class ExampleController(private val logic: ExampleLogic) {
-
-    @Get("/list")
-    @Permission("system:example:list")
-    suspend fun list(page: Int = 1, size: Int = 20) = logic.page(page, size)
-
-    @Post("/create")
-    @Permission("system:example:create")
-    suspend fun create(request: CreateExampleRequest): Long = logic.create(request)
-}
-```
-
-KSP 自动生成路由注册代码，无需手动配置路由。
-
-### 添加新 Model + Table
-
-```kotlin
-// model/Example.kt
-@Serializable
-@Table("system_examples")
-data class Example(
-    @Id val id: Long = 0,
-    val name: String,
-    val status: Int = 0,
-    @SoftDelete val deleted: Int = 0,
-    @CreatedAt val createdAt: String? = null,
-    @UpdatedAt val updatedAt: String? = null
-)
-
-// table/ExampleTable.kt（Facade，可添加自定义方法）
-object ExampleTable : Table<Example, Long> by ExampleTableImpl
-```
-
-KSP 自动生成 `ExampleTableImpl`、`ExampleMeta`、`ExampleRowMapper` 等 6 个文件。
-
-### 项目构建命令
-
-```bash
-# 仅编译（不链接）
-./gradlew :application:compileKotlinMacosArm64
-
-# 编译 + 链接
-./gradlew :application:linkDebugExecutableMacosArm64
-
-# 清理重建
-./gradlew clean :application:linkDebugExecutableMacosArm64
-
-# 单独运行 KSP 代码生成
-./gradlew :module-system:kspKotlinMacosArm64
-```
-
-## 相关文档
-
-| 文档 | 说明 |
-|------|------|
-| **SPEC.md** | 项目架构、API 规范、配置规范 |
-
-## License
-
-Private - All Rights Reserved
+## 文档
+
+- [`docs/ENGINEERING_RULES.md`](./docs/ENGINEERING_RULES.md) —— 硬规范（模块边界、改 public
+  symbol 前要 grep 哪些仓、迁移策略）
+- [`docs/rbac-spec.md`](./docs/rbac-spec.md) —— User/Role/Menu、权限串、通配
+- [`docs/module-template-spec.md`](./docs/module-template-spec.md) —— 怎么加一个模块
+- [`docs/SPEC.md`](./docs/SPEC.md) —— ⚠️ 继承自上游脚手架，**部分已过时**：仍写着 Kotlin 2.3、
+  把模块描述成 `includeBuild`、链了一个本仓不存在的文件，并把管理台说成 Vue（NanoGate 不用 Vue）。
+  以本 README 与 `DEPLOY.md` 为准。
+
+## 已知缺口
+
+刻意列出来，不藏：
+
+- 没有健康端点。容器的 `HEALTHCHECK` 探 `/` 且不带 `-f`（任何 HTTP 应答都算活着），
+  没有覆盖数据库与 Redis 的就绪检查。
+- CORS 的 `Access-Control-Allow-Origin` 在 `Main.kt` 里**硬编码为 `*`**，不是配置项——
+  Neton 的 TOML parser 解析不了数组。`allowCredentials = false`，浏览器跨站不带 cookie，
+  但要收紧白名单只能改代码重新编译。
+- `security.unified_token.enabled` 必须保持 `false`：本发行版没有任何模块 bind
+  `UnifiedTokenAuthenticator`，启动时的报错信息已经把这件事写明了。
+- Docker / compose 构建路径尚未在真实 Docker 宿主上跑过。
+
+## 许可
+
+Apache-2.0 —— 见 [LICENSE](./LICENSE)。
