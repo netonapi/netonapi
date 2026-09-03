@@ -19,6 +19,11 @@ import neton.redis.RedisClient
  */
 object GatewayRuntimeBootstrap {
     fun initialize(ctx: NetonContext) {
+        // 渠道客户端按需创建（各自的代理与超时），建客户端的能力来自应用。
+        logic.RelayEngine.clientProvider = ctx.getOrNull(neton.http.client.HttpClientProvider::class) ?: error(
+            "module-gateway needs an HttpClientProvider bound in NetonContext. Bind one in the application: " +
+                "bind(HttpClientProvider::class, HttpClientProvider { HttpClient.create(it) }).",
+        )
         val log = ctx.get(LoggerFactory::class).get("logic.gateway-ratelimit")
         val redis = ctx.getOrNull(RedisClient::class)
         if (redis == null) {

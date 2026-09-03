@@ -52,7 +52,6 @@ kotlin {
                 implementation("com.netonstream:neton-routing")
                 implementation("com.netonstream:neton-security")
                 implementation("com.netonstream:neton-http")
-                implementation("com.netonstream:neton-http-ktor")
                 implementation("com.netonstream:neton-database")
                 implementation("com.netonstream:neton-logging")
                 implementation("com.netonstream:neton-validation")

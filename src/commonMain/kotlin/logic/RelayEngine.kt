@@ -711,12 +711,23 @@ class RelayEngine(
         private val clientMutex = Mutex()
         private val clients = mutableMapOf<String, HttpClient>()
 
+        /**
+         * 由 [init.GatewayRuntimeBootstrap] 从 `NetonContext` 取应用绑定的
+         * `HttpClientProvider` 后注入。网关按渠道各自的代理与超时建客户端，
+         * 所以借一个共享实例不够；但建客户端的能力必须来自应用——本模块不带引擎。
+         */
+        var clientProvider: HttpClientProvider? = null
+
         /** 渠道 client 缓存：key 含影响连接行为的字段；渠道配置变更后 key 变化自然重建。 */
         suspend fun clientFor(channel: Channel): HttpClient {
+            val provider = clientProvider ?: error(
+                "gateway needs an HttpClientProvider bound in NetonContext. Bind one in the application: " +
+                    "bind(HttpClientProvider::class, HttpClientProvider { HttpClient.create(it) }).",
+            )
             val key = "${channel.id}|${channel.proxyUrl ?: ""}|${channel.ttfbTimeoutMs}|${channel.idleTimeoutMs}"
             clientMutex.withLock {
                 return clients.getOrPut(key) {
-                    HttpClient.create {
+                    provider.create {
                         connectMillis = 5_000
                         requestMillis = 600_000               // 长流总上限 10 分钟
                         socketMillis = channel.idleTimeoutMs  // 块间空闲超时
