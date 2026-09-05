@@ -173,7 +173,9 @@ WITH lvl1 AS (
 ),
 lvl2 AS (
     INSERT INTO system_menus (name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at)
-    SELECT v.name, v.permission, v.type, p.id, v.path, v.component, v.icon, v.sort, v.status, (extract(epoch from now()) * 1000)::bigint, (extract(epoch from now()) * 1000)::bigint
+    SELECT v.name, v.permission, v.type,
+           (SELECT p.id FROM lvl1 p WHERE p.name = v.parent_name),
+           v.path, v.component, v.icon, v.sort, v.status, (extract(epoch from now()) * 1000)::bigint, (extract(epoch from now()) * 1000)::bigint
     FROM (VALUES
         ('上游渠道', 'gateway:channel:list', 2, 'AI 网关', 'channel', 'gateway/channel/index', 'ant-design:cluster-outlined', 1, 1),
         ('API 令牌', 'gateway:token:list', 2, 'AI 网关', 'token', 'gateway/token/index', 'ant-design:key-outlined', 2, 1),
@@ -181,12 +183,13 @@ lvl2 AS (
         ('用量日志', 'gateway:log:list', 2, 'AI 网关', 'log', 'gateway/log/index', 'ant-design:file-text-outlined', 4, 1),
         ('结算待处理', 'gateway:settlement:list', 2, 'AI 网关', 'settlement', 'gateway/settlement/index', 'ant-design:audit-outlined', 5, 1)
     ) AS v(name, permission, type, parent_name, path, component, icon, sort, status)
-    JOIN lvl1 p ON p.name = v.parent_name
     RETURNING id, name
 ),
 lvl3 AS (
     INSERT INTO system_menus (name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at)
-    SELECT v.name, v.permission, v.type, p.id, v.path, v.component, v.icon, v.sort, v.status, (extract(epoch from now()) * 1000)::bigint, (extract(epoch from now()) * 1000)::bigint
+    SELECT v.name, v.permission, v.type,
+           (SELECT p.id FROM lvl2 p WHERE p.name = v.parent_name),
+           v.path, v.component, v.icon, v.sort, v.status, (extract(epoch from now()) * 1000)::bigint, (extract(epoch from now()) * 1000)::bigint
     FROM (VALUES
         ('渠道创建', 'gateway:channel:create', 3, '上游渠道', '', NULL, '', 1, 1),
         ('渠道修改', 'gateway:channel:update', 3, '上游渠道', '', NULL, '', 2, 1),
@@ -200,12 +203,12 @@ lvl3 AS (
         ('配额管理', 'gateway:quota:grant', 3, '用量日志', '', NULL, '', 1, 1),
         ('执行结算恢复', 'gateway:settlement:tick', 3, '结算待处理', '', NULL, '', 1, 1)
     ) AS v(name, permission, type, parent_name, path, component, icon, sort, status)
-    JOIN lvl2 p ON p.name = v.parent_name
     RETURNING id, name
 )
 SELECT count(*) FROM (SELECT id, name FROM lvl1
         UNION ALL SELECT id, name FROM lvl2
         UNION ALL SELECT id, name FROM lvl3) t;
+
 
 
 
