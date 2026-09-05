@@ -2,11 +2,16 @@ import kotlin.system.exitProcess
 import migration.MigrationCommandRunner
 import migration.MigrationStartupPrecheck
 import neton.core.Neton
+import neton.core.component.NetonContext
+import neton.core.component.NetonLifecycle
 import neton.core.component.cors
 import neton.core.generated.GeneratedNetonConfigRegistry
 import neton.database.database
 import neton.jobs.jobs
 import neton.http.http
+import neton.http.client.HttpClient
+import neton.http.client.HttpClientProvider
+import neton.http.client.create
 import neton.http.ktor.KtorHttpAdapter
 import neton.redis.redis
 import neton.routing.routing
@@ -40,6 +45,33 @@ fun main(args: Array<String>) {
 
     Neton.run(args) {
         configRegistry(GeneratedNetonConfigRegistry)
+
+        // ====== 出站 HTTP 客户端：应用创建、应用绑定、应用关闭 ======
+        // 借用方：module-system（短信）、module-payment（支付平台回调）、
+        // module-gateway（渠道客户端 —— 按各渠道自己的代理与超时，走下面的 provider 建）。
+        //
+        // 为什么由应用建而不是各模块自建：模块自建就得自带引擎，带引擎的模块一多，
+        // 类路径上会出现多个 `create`。所以引擎只在本工程的 build 文件里出现一次
+        // （neton-http-ktor），源码里不出现引擎名 —— 换引擎不需要改这里。
+        //
+        // 两个模块把这个绑定当**硬要求**：module-system 的 SystemRuntimeBootstrap 与
+        // module-gateway 的 GatewayRuntimeBootstrap 都取不到就 error() 启动失败。
+        // 宁可启动即炸，也不要运行到发短信/调上游那一刻才发现没有客户端。
+        val outboundHttp = HttpClient.create {
+            connectMillis = 3_000
+            requestMillis = 15_000
+            socketMillis = 15_000
+        }
+        bind(HttpClient::class, outboundHttp)
+        // provider 建出来的客户端由**调用方模块自己关闭**（见 HttpClientProvider 的约定）；
+        // 这里只负责关掉应用自己持有的那一个。
+        bind(HttpClientProvider::class, HttpClientProvider { HttpClient.create(it) })
+        onStart {
+            get(NetonContext::class).lifecycle.register("outbound-http-client", object : NetonLifecycle {
+                override suspend fun start() = Unit
+                override suspend fun stop() = outboundHttp.close()
+            })
+        }
 
         // CORS via DSL —— neton 的 TomlParser 不支持 array 语法，application.conf
         // 里写 [cors] allowedOrigins = [...] 会被吞掉（详见 HttpComponent.kt:36），
