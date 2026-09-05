@@ -17,7 +17,9 @@ import neton.redis.redis
 import neton.routing.routing
 import neton.security.security
 import neton.storage.storage
+import logic.MemberGroupPort
 import security.WildcardPermissionEvaluator
+import table.MemberTable
 
 // MANIFEST-P2: 模块列表唯一来源是 application/build.gradle.kts 的
 // `ksp { arg("neton.modules", "...") }`。KSP 生成 GeneratedApplicationModules,
@@ -72,6 +74,20 @@ fun main(args: Array<String>) {
                 override suspend fun stop() = outboundHttp.close()
             })
         }
+
+        // ====== 会员分组 → 计费组（module-gateway 的 SPI 由装配层实现）======
+        // gateway 与 member 之间没有编译依赖：gateway 只问「这个用户属于哪个会员组」，
+        // 而「由谁回答、按什么规则回答」是**产品策略**，不是通用模块的职责，所以放在这里。
+        //
+        // 默认**不启用**：设 NEWGATE_MEMBER_GROUP_BILLING=true 才生效（开关在 gateway 的
+        // GatewayRuntimeBootstrap 里门控；开着却没绑定下面这个 port 会直接启动失败）。
+        //
+        // 启用前必须先把会员组映射到 gateway_groups.member_group_id：映射缺失时，有分组的
+        // 会员会一律 403 billing_group_not_allowed。那是有意的 —— 宁可拒绝，也不要悄悄按
+        // default 组计价（少收的差额不会在任何日志里留痕迹）。
+        bind(MemberGroupPort::class, object : MemberGroupPort {
+            override suspend fun memberGroupId(userId: Long): Long? = MemberTable.get(userId)?.groupId
+        })
 
         // CORS via DSL —— neton 的 TomlParser 不支持 array 语法，application.conf
         // 里写 [cors] allowedOrigins = [...] 会被吞掉（详见 HttpComponent.kt:36），
