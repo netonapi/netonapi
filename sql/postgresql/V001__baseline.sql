@@ -149,31 +149,64 @@ CREATE INDEX idx_gateway_usage_logs_user ON gateway_usage_logs(user_id, created_
 CREATE INDEX idx_gateway_usage_logs_channel ON gateway_usage_logs(channel_id, created_at);
 
 -- 种子：默认分组
-INSERT INTO gateway_groups (name, ratio, description, created_at) VALUES ('default', '1.0', '默认分组', 0);
+INSERT INTO gateway_groups (name, ratio, description, created_at) VALUES ('default', '1.0', '默认分组', 0);-- ── 后台菜单 ──────────────────────────────────────────────────────────
+--
+-- 🔴 **不写死菜单 id**：id 由 system_menus 的序列在安装时分配。
+--
+-- 以前每个模块把 id 硬编码在 SQL 里，模块之间就得就编号达成一致，而唯一的
+-- 保护是 `ON CONFLICT (id) DO NOTHING`——撞号不会报错，只会**静默**丢菜单。
+-- 实测后果：gateway 和 privchat 撞了 700-704，于是「令牌管理」「定价修改」这些
+-- AI 网关的按钮被挂到了「用户管理」「群组管理」底下，而没有任何地方报错。
+--
+-- 现在父子关系在语句内部用**模块内唯一的菜单名**连接（同一模块内不允许重名），
+-- 跨模块不再共享任何编号，撞号从结构上不可能发生。
+--
+-- 加菜单：往对应层级的 VALUES 里加一行即可，不需要挑号。
+-- 改菜单：后续迁移按 permission 定位；若该 permission 在本模块内不唯一，
+--         用 name 加父节点定位。
 
+WITH lvl1 AS (
+    INSERT INTO system_menus (name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at)
+    VALUES
+        ('AI 网关', '', 1, 0, '/gateway', NULL, 'ant-design:api-outlined', 7, 1, (extract(epoch from now()) * 1000)::bigint, (extract(epoch from now()) * 1000)::bigint)
+    RETURNING id, name
+),
+lvl2 AS (
+    INSERT INTO system_menus (name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at)
+    SELECT v.name, v.permission, v.type, p.id, v.path, v.component, v.icon, v.sort, v.status, (extract(epoch from now()) * 1000)::bigint, (extract(epoch from now()) * 1000)::bigint
+    FROM (VALUES
+        ('上游渠道', 'gateway:channel:list', 2, 'AI 网关', 'channel', 'gateway/channel/index', 'ant-design:cluster-outlined', 1, 1),
+        ('API 令牌', 'gateway:token:list', 2, 'AI 网关', 'token', 'gateway/token/index', 'ant-design:key-outlined', 2, 1),
+        ('模型定价', 'gateway:price:list', 2, 'AI 网关', 'price', 'gateway/price/index', 'ant-design:dollar-outlined', 3, 1),
+        ('用量日志', 'gateway:log:list', 2, 'AI 网关', 'log', 'gateway/log/index', 'ant-design:file-text-outlined', 4, 1),
+        ('结算待处理', 'gateway:settlement:list', 2, 'AI 网关', 'settlement', 'gateway/settlement/index', 'ant-design:audit-outlined', 5, 1)
+    ) AS v(name, permission, type, parent_name, path, component, icon, sort, status)
+    JOIN lvl1 p ON p.name = v.parent_name
+    RETURNING id, name
+),
+lvl3 AS (
+    INSERT INTO system_menus (name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at)
+    SELECT v.name, v.permission, v.type, p.id, v.path, v.component, v.icon, v.sort, v.status, (extract(epoch from now()) * 1000)::bigint, (extract(epoch from now()) * 1000)::bigint
+    FROM (VALUES
+        ('渠道创建', 'gateway:channel:create', 3, '上游渠道', '', NULL, '', 1, 1),
+        ('渠道修改', 'gateway:channel:update', 3, '上游渠道', '', NULL, '', 2, 1),
+        ('渠道删除', 'gateway:channel:delete', 3, '上游渠道', '', NULL, '', 3, 1),
+        ('令牌创建', 'gateway:token:create', 3, 'API 令牌', '', NULL, '', 1, 1),
+        ('令牌管理', 'gateway:token:update', 3, 'API 令牌', '', NULL, '', 2, 1),
+        ('令牌删除', 'gateway:token:delete', 3, 'API 令牌', '', NULL, '', 3, 1),
+        ('定价创建', 'gateway:price:create', 3, '模型定价', '', NULL, '', 1, 1),
+        ('定价修改', 'gateway:price:update', 3, '模型定价', '', NULL, '', 2, 1),
+        ('定价删除', 'gateway:price:delete', 3, '模型定价', '', NULL, '', 3, 1),
+        ('配额管理', 'gateway:quota:grant', 3, '用量日志', '', NULL, '', 1, 1),
+        ('执行结算恢复', 'gateway:settlement:tick', 3, '结算待处理', '', NULL, '', 1, 1)
+    ) AS v(name, permission, type, parent_name, path, component, icon, sort, status)
+    JOIN lvl2 p ON p.name = v.parent_name
+    RETURNING id, name
+)
+SELECT count(*) FROM (SELECT id, name FROM lvl1
+        UNION ALL SELECT id, name FROM lvl2
+        UNION ALL SELECT id, name FROM lvl3) t;
 
--- ─────────────────────────────────────────────────────────────
--- 原 V002__seed_menus.sql
--- ─────────────────────────────────────────────────────────────
-
--- gateway 后台菜单（父菜单 id=7，子项 700-703；权限码对齐 controller）
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7, 'AI 网关', '', 1, 0, '/gateway', NULL, 'ant-design:api-outlined', 7, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (700, '上游渠道', 'gateway:channel:list', 2, 7, 'channel', 'gateway/channel/index', 'ant-design:cluster-outlined', 1, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (701, 'API 令牌', 'gateway:token:list', 2, 7, 'token', 'gateway/token/index', 'ant-design:key-outlined', 2, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (702, '模型定价', 'gateway:price:list', 2, 7, 'price', 'gateway/price/index', 'ant-design:dollar-outlined', 3, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (703, '用量日志', 'gateway:log:list', 2, 7, 'log', 'gateway/log/index', 'ant-design:file-text-outlined', 4, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-
--- 按钮级权限（type=3，隶属各列表菜单）
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7000, '渠道创建', 'gateway:channel:create', 3, 700, '', NULL, '', 1, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7001, '渠道修改', 'gateway:channel:update', 3, 700, '', NULL, '', 2, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7002, '渠道删除', 'gateway:channel:delete', 3, 700, '', NULL, '', 3, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7010, '令牌创建', 'gateway:token:create', 3, 701, '', NULL, '', 1, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7011, '令牌管理', 'gateway:token:update', 3, 701, '', NULL, '', 2, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7012, '令牌删除', 'gateway:token:delete', 3, 701, '', NULL, '', 3, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7020, '定价创建', 'gateway:price:create', 3, 702, '', NULL, '', 1, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7021, '定价修改', 'gateway:price:update', 3, 702, '', NULL, '', 2, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7022, '定价删除', 'gateway:price:delete', 3, 702, '', NULL, '', 3, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at) VALUES (7030, '配额管理', 'gateway:quota:grant', 3, 703, '', NULL, '', 1, 1, 0, 0) ON CONFLICT (id) DO NOTHING;
 
 
 -- ─────────────────────────────────────────────────────────────
@@ -285,22 +318,6 @@ ALTER TABLE gateway_settlements ADD COLUMN cache_write_tokens INT NOT NULL DEFAU
 ALTER TABLE gateway_tokens ADD COLUMN rpm_limit         INT;
 ALTER TABLE gateway_tokens ADD COLUMN tpm_limit         INT;
 ALTER TABLE gateway_tokens ADD COLUMN concurrency_limit INT;
-
-
--- ─────────────────────────────────────────────────────────────
--- 原 V006__settlement_menu.sql
--- ─────────────────────────────────────────────────────────────
-
--- gateway V006: 结算待处理页的菜单与权限
--- 这些记录仍持有用户预留额度，需要运营能看到并裁定，否则预留会无声地卡住用户额度。
-
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at)
-VALUES (704, '结算待处理', 'gateway:settlement:list', 2, 7, 'settlement', 'gateway/settlement/index', 'ant-design:audit-outlined', 5, 1, 0, 0)
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO system_menus (id, name, permission, type, parent_id, path, component, icon, sort, status, created_at, updated_at)
-VALUES (7040, '执行结算恢复', 'gateway:settlement:tick', 3, 704, '', NULL, '', 1, 1, 0, 0)
-ON CONFLICT (id) DO NOTHING;
 
 
 -- ─────────────────────────────────────────────────────────────
