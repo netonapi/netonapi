@@ -17,7 +17,12 @@ import neton.redis.redis
 import neton.routing.routing
 import neton.security.security
 import neton.storage.storage
+import bridge.GatewayQuotaRechargePaidListener
+import bridge.PayRechargeOrderBridge
 import logic.MemberGroupPort
+import logic.QuotaRechargeLogic
+import logic.RechargeOrderPort
+import neton.core.event.DomainEventBus
 import security.WildcardPermissionEvaluator
 import table.MemberTable
 
@@ -68,11 +73,34 @@ fun main(args: Array<String>) {
         // provider 建出来的客户端由**调用方模块自己关闭**（见 HttpClientProvider 的约定）；
         // 这里只负责关掉应用自己持有的那一个。
         bind(HttpClientProvider::class, HttpClientProvider { HttpClient.create(it) })
+
+        // ====== 网关额度充值下单（module-gateway 的 SPI 由装配层实现）======
+        // 与下面的 MemberGroupPort 同理：gateway 编译期对 payment 零依赖，payment 也不认识
+        // 网关额度语义（它自己的 WalletRechargePaidListener 只管 `wallet:recharge:`）。
+        //
+        // 桥在 bind 时**拿不到** ctx：bind 收集到 deferredBindings，执行于 Neton.kt:298，
+        // 而模块初始化在 :320 —— 那时 PayOrderLogic 还不存在。所以这里只建实例，
+        // ctx 在下面 onStart（:333）里 attach；createOrder 只在 HTTP 请求中被调用，远晚于此。
+        val rechargeOrders = PayRechargeOrderBridge()
+        bind(RechargeOrderPort::class, rechargeOrders)
+
+        // ⚠️ 全应用只能有**一个** onStart：LaunchBuilder.onStart 是赋值而非追加（Neton.kt:256），
+        // 再写一个会把这里注册的生命周期钩子整个覆盖掉。需要新的启动期动作就往这个块里加。
         onStart {
-            get(NetonContext::class).lifecycle.register("outbound-http-client", object : NetonLifecycle {
+            val ctx = get(NetonContext::class)
+            ctx.lifecycle.register("outbound-http-client", object : NetonLifecycle {
                 override suspend fun start() = Unit
                 override suspend fun stop() = outboundHttp.close()
             })
+            rechargeOrders.attach(ctx)
+
+            // 网关额度充值到账的监听者。必须在这里注册而不是 gateway 自己的 bootstrap 里：
+            // 它要 import payment 的 PayOrderPaidEvent，那条依赖正是上面 RechargeOrderPort
+            // 要避免的。时序上安全 —— 模块初始化（:320）已完成，QuotaRechargeLogic 取得到；
+            // 而事件总线在 :338 才 seal()，此刻登记监听者还来得及。
+            ctx.get(DomainEventBus::class).register(
+                GatewayQuotaRechargePaidListener(ctx.get(QuotaRechargeLogic::class))
+            )
         }
 
         // ====== 会员分组 → 计费组（module-gateway 的 SPI 由装配层实现）======
