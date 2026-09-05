@@ -1,5 +1,7 @@
 package init
 
+import logic.BillingGroupResolver
+import logic.MemberGroupPort
 import logic.RateLimiter
 import neton.core.component.NetonContext
 import neton.logging.LoggerFactory
@@ -31,5 +33,28 @@ object GatewayRuntimeBootstrap {
             log.warn("rate limit: RedisClient not bound, counters are in-process only (not shared across instances)")
         }
         ctx.bind(RateLimiter::class, RateLimiter(log = log, redis = redis))
+
+        // 会员分组 → 计费组：gateway 不认识 member，port 由装配层实现并绑定。
+        // 开关打开却没绑定就**启动失败** —— 静默跳过会员映射会退回 default 组，
+        // 那正是本批要消灭的「不报错的错账」，不能从装配层再引进来一次。
+        val memberBilling = neton.core.config.getEnv(BillingGroupResolver.ENV_MEMBER_GROUP_BILLING)
+            ?.trim()?.lowercase() in setOf("1", "true", "yes", "on")
+        val port = ctx.getOrNull(MemberGroupPort::class)
+        if (memberBilling && port == null) {
+            error(
+                "module-gateway: ${BillingGroupResolver.ENV_MEMBER_GROUP_BILLING} is on but no MemberGroupPort " +
+                    "is bound in NetonContext. Bind one in the application (it reads the member's group id), " +
+                    "or unset the switch.",
+            )
+        }
+        // 开关门控：绑了 port 但开关没开就不启用会员映射，并且**说出来** ——
+        // 否则「我明明绑了怎么没生效」会被当成解析器的 bug 去查。
+        BillingGroupResolver.memberPort = if (memberBilling) port else null
+        if (port != null && !memberBilling) {
+            ctx.get(LoggerFactory::class).get("init.gateway-bootstrap").info(
+                "member group billing is off: set ${BillingGroupResolver.ENV_MEMBER_GROUP_BILLING}=true " +
+                    "to map member groups onto billing groups"
+            )
+        }
     }
 }

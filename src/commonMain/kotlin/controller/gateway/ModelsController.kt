@@ -1,11 +1,15 @@
 package controller.gateway
 
+import logic.BillingGroupResolver
 import logic.ChannelLogic
+import logic.GroupResolution
 import logic.RelayRouter
 import logic.TokenLogic
+import model.GatewayToken
 import neton.core.annotations.Controller
 import neton.core.annotations.Get
 import neton.core.http.HttpResponse
+import neton.core.http.HttpStatus
 import neton.core.interfaces.Identity
 import security.GatewayTokenIdentity
 
@@ -24,16 +28,32 @@ class ModelsController(
     @Get("")
     suspend fun list(response: HttpResponse, identity: Identity) {
         val created = nowMillis() / 1000
-        val data = availableModels(identity).joinToString(",") { m ->
+        val tokenId = (identity as? GatewayTokenIdentity)?.tokenId
+        val token = tokenId?.let { tokenLogic.get(it) }
+        if (token == null) {
+            response.json("""{"object":"list","data":[]}""")
+            return
+        }
+        // 与 RelayEngine 走同一个解析器：广场列出来的模型必须就是此刻真能路由的模型。
+        // 拒绝时**不回空表** —— 空表在客户端看来等于「这个 key 没有任何可用模型」，会把人引去查渠道，
+        // 而真实原因是计费组配置坏了或该会员组没开通，两者处置方完全不同。
+        val groupCode = when (val r = BillingGroupResolver.resolve(token.userId, token.groupOverride)) {
+            is GroupResolution.Rejected -> {
+                response.status = HttpStatus.fromCode(r.reason.httpStatus) ?: HttpStatus.BAD_GATEWAY
+                response.json(
+                    """{"error":{"message":${quote(r.message)},"type":${quote(r.reason.code)}}}"""
+                )
+                return
+            }
+            is GroupResolution.Resolved -> r.group.code
+        }
+        val data = availableModels(token, groupCode).joinToString(",") { m ->
             """{"id":${quote(m)},"object":"model","created":$created,"owned_by":"nanogate"}"""
         }
         response.json("""{"object":"list","data":[$data]}""")
     }
 
-    private suspend fun availableModels(identity: Identity): List<String> {
-        val tokenId = (identity as? GatewayTokenIdentity)?.tokenId ?: return emptyList()
-        val token = tokenLogic.get(tokenId) ?: return emptyList()
-        val group = token.groupOverride?.takeIf { it.isNotBlank() } ?: "default"
+    private suspend fun availableModels(token: GatewayToken, group: String): List<String> {
         val allowed = token.allowedModels.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
 
         val enabled = channelLogic.listEnabled()

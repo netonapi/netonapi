@@ -13,7 +13,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import model.Channel
-import model.GatewayGroup
 import model.GatewayToken
 import model.ModelPrice
 import model.UsageLog
@@ -21,7 +20,6 @@ import neton.core.http.HttpContext
 import neton.core.http.HttpStatus
 import neton.http.client.*
 import neton.logging.Logger
-import table.GatewayGroupTable
 import table.ModelPriceTable
 import table.UsageLogTable
 import logic.protocol.ProtocolAdapter
@@ -93,7 +91,22 @@ class RelayEngine(
             RateLimiter.Decision.ALLOWED -> { concurrencyHeld = token.concurrencyLimit; tokenIdForLimits = token.id }
         }
 
-        val group = token.groupOverride?.takeIf { it.isNotBlank() } ?: "default"
+        // 计费组：解析一次，路由与计价共用同一个结果（此前路由按名字匹配、计价再查一次，
+        // 中间夹着 `?: "default"` 与 `?: "1.0"` 两级静默回落 —— 组被改名/删除时请求照常放行、
+        // 倍率悄悄变 1.0，钱少收而日志里一行痕迹都没有）。
+        val billingGroup = when (val r = BillingGroupResolver.resolve(userId, token.groupOverride)) {
+            is GroupResolution.Rejected -> {
+                log.warn(
+                    "relay billing group rejected user=$userId token=$tokenId " +
+                        "reason=${r.reason} detail=${r.message}"
+                )
+                return respondError(ctx, inbound, r.reason.httpStatus, r.reason.code, r.message)
+            }
+            is GroupResolution.Resolved -> r.group
+        }
+        // 往下 execute/recordLog/bill 一路传的都是这个字符串：必须是稳定 code，不能是可改的显示名，
+        // 否则管理员改个显示名就能让渠道匹配静默失配。
+        val group = billingGroup.code
         val requestModel = runCatching { RequestRewriter.rewrite(rawBody, DUMMY).requestModel }.getOrElse {
             return respondError(ctx, inbound, 400, "invalid_request_error", "request body is not valid JSON")
         }
@@ -126,7 +139,8 @@ class RelayEngine(
         // 双轨计价：官方价 = 成本轨，售价（saleOverride 或官方价 × 全局加价率）= 收入轨。
         // 定价数据非法在入口 fail-fast 拒绝——坏价一旦进了 reserve，结算时就只能猜价或转人工。
         val officialPrice = ModelPriceTable.oneWhere { ModelPrice::model eq requestModel }
-        val ratio = GatewayGroupTable.oneWhere { GatewayGroup::name eq group }?.ratio ?: "1.0"
+        // 倍率取自上面那一次解析（同一行数据），不再按名字重查、也不再回落 1.0。
+        val ratio = billingGroup.ratio
         val salePrice = officialPrice?.let { op ->
             runCatching { SalePricing.resolve(op) }.getOrElse { e ->
                 log.error("CRITICAL model pricing invalid model=$requestModel: ${e.message}")
