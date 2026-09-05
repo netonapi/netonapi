@@ -2,6 +2,8 @@ package init
 
 import logic.BillingGroupResolver
 import logic.MemberGroupPort
+import logic.QuotaRechargeLogic
+import logic.RechargeOrderPort
 import logic.RateLimiter
 import neton.core.component.NetonContext
 import neton.logging.LoggerFactory
@@ -33,6 +35,10 @@ object GatewayRuntimeBootstrap {
             log.warn("rate limit: RedisClient not bound, counters are in-process only (not shared across instances)")
         }
         ctx.bind(RateLimiter::class, RateLimiter(log = log, redis = redis))
+
+        // 充值下单能力同样来自装配层（gateway 不认识 payment）。absent 就保持 null：
+        // 充值接口会明确报错，而不是静默把单建到别处、或凭空发放额度。
+        ctx.getOrNull(QuotaRechargeLogic::class)?.orderPort = ctx.getOrNull(RechargeOrderPort::class)
 
         // 会员分组 → 计费组：gateway 不认识 member，port 由装配层实现并绑定。
         // 开关打开却没绑定就**启动失败** —— 静默跳过会员映射会退回 default 组，
