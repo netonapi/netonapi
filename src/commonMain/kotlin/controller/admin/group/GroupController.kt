@@ -3,11 +3,13 @@ package controller.admin.group
 import kotlinx.serialization.Serializable
 import model.Channel
 import model.GatewayGroup
+import model.GroupOverride
 import model.GatewayToken
 import neton.core.annotations.*
 import neton.database.dsl.*
 import table.ChannelTable
 import table.GatewayGroupTable
+import table.GroupOverrideTable
 import table.GatewayTokenTable
 
 @Serializable
@@ -91,6 +93,14 @@ class GroupController {
             throw IllegalArgumentException(
                 "gateway group code='${current.code}' is still used as a token group override; " +
                     "move those tokens to another group first",
+            )
+        }
+        // 用户级例外同样算引用。漏掉它会留下悬空 group_code，而悬空之后该用户走哪个组
+        // 取决于 GroupResolver 的回落策略 —— 也就是一处不报错的错账。
+        if (GroupOverrideTable.existsWhere { GroupOverride::groupCode eq current.code }) {
+            throw IllegalArgumentException(
+                "gateway group code='${current.code}' is still used by a per-user override; " +
+                    "remove those overrides first",
             )
         }
         // channel.groups 是 CSV，用 LIKE 会把 'vip' 匹配到 'vip2'。这里取回来按与
