@@ -17,11 +17,13 @@ import neton.redis.redis
 import neton.routing.routing
 import neton.security.security
 import neton.storage.storage
+import bridge.GatewayInviteRewardBridge
 import bridge.GatewayQuotaRechargePaidListener
 import bridge.PayRechargeOrderBridge
 import logic.MemberGroupPort
 import logic.QuotaRechargeLogic
 import logic.RechargeOrderPort
+import port.MemberInviteRewardRegistry
 import neton.core.event.DomainEventBus
 import security.WildcardPermissionEvaluator
 import table.MemberTable
@@ -84,6 +86,19 @@ fun main(args: Array<String>) {
         val rechargeOrders = PayRechargeOrderBridge()
         bind(RechargeOrderPort::class, rechargeOrders)
 
+        // ====== 邀请奖励 → 网关额度（module-member 的扩展点由装配层实现）======
+        // member 报「邀请达成」这个事实，不认识额度；gateway 管额度，不认识邀请。注册表只能在这里 bind。
+        //
+        // 时序比上面那个桥更紧：member 的 MemberRuntimeBootstrap 在模块初始化（:320）里用 getOrNull
+        // 把注册表**读走一次**存进 MemberInviteLogic 的构造参数 —— 所以它必须在 bind 阶段（:298）就位，
+        // 晚一步就永远是 null（那正是此前的状态：邀请照记，奖励一份也发不出，且无任何日志）。
+        // 而桥需要的 QuotaLogic 在 bind 阶段还不存在，所以照旧走 deferred-attach：
+        // 注册表按引用持有这个实例，onStart 里挂上 ctx 后，它后续的变化注册表看得见。
+        //
+        // 额度默认 0 = 不奖励，必须显式设 NEWGATE_INVITE_REWARD_INVITER / _INVITEE 才发。
+        val inviteRewards = GatewayInviteRewardBridge()
+        bind(MemberInviteRewardRegistry::class, MemberInviteRewardRegistry(listOf(inviteRewards)))
+
         // ⚠️ 全应用只能有**一个** onStart：LaunchBuilder.onStart 是赋值而非追加（Neton.kt:256），
         // 再写一个会把这里注册的生命周期钩子整个覆盖掉。需要新的启动期动作就往这个块里加。
         onStart {
@@ -93,6 +108,9 @@ fun main(args: Array<String>) {
                 override suspend fun stop() = outboundHttp.close()
             })
             rechargeOrders.attach(ctx)
+            // 挂上 QuotaLogic 与 logger，并把生效的邀请奖励额度念一遍 —— 运营确认「奖励到底开没开」
+            // 只有这一行日志可看（未装配时整条链路是静默的，契约如此）。
+            inviteRewards.attach(ctx)
 
             // 网关额度充值到账的监听者。必须在这里注册而不是 gateway 自己的 bootstrap 里：
             // 它要 import payment 的 PayOrderPaidEvent，那条依赖正是上面 RechargeOrderPort

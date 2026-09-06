@@ -2,9 +2,14 @@
 
 ## Status
 
-**OPEN.** Not a defect — the contract explicitly allows this configuration. Recorded because the
-referral loop is built end to end on the member side and then stops one binding short of doing
-anything, which is easy to mistake for a working feature.
+**CLOSED.** It was not a defect — the contract explicitly allows this configuration. Recorded
+because the referral loop was built end to end on the member side and then stopped one binding short
+of doing anything, which is easy to mistake for a working feature.
+
+Closed by `application/src/commonMain/kotlin/bridge/GatewayInviteRewardBridge.kt` and its bind in
+`application/src/commonMain/kotlin/Main.kt`, an operator retry endpoint on the member side, and
+harness scenarios S42–S45. Rewards stay off unless an operator turns them on. The verification
+criteria this document listed are recorded below as results, not as intentions.
 
 ## Standard
 
@@ -30,13 +35,17 @@ Current wiring:
 - consumed at: `init/MemberRuntimeBootstrap.kt:45`, via `ctx.getOrNull(...)`
 - handed to: `logic/MemberInviteLogic.kt:31` as `rewardRegistry: ... ? = null`
 - dispatched by: `MemberInviteLogic.dispatchInviteReward`
-- bound at: **nowhere**
+- bound at: `application/src/commonMain/kotlin/Main.kt`, next to the other cross-module bridges
 
-## Gap
+The bridge follows the deferred-attach shape of `PayRechargeOrderBridge`: the instance is built and
+bound during the DSL phase, then `attach(ctx)` runs inside the single existing `onStart`, because
+`QuotaLogic` does not exist yet at bind time.
 
-There is no `bind(MemberInviteRewardRegistry::class, ...)` in any Neton module repository or in
-`newgate/application`. `getOrNull` therefore always returns null, the registry is always absent,
-and `dispatchInviteReward` has nothing to iterate.
+## Gap (as it was)
+
+There was no `bind(MemberInviteRewardRegistry::class, ...)` in any Neton module repository or in
+`newgate/application`. `getOrNull` therefore always returned null, the registry was always absent,
+and `dispatchInviteReward` had nothing to iterate.
 
 Consequences:
 
@@ -55,7 +64,7 @@ not a defect.
 
 ## Implementation shape
 
-Follow the two bridges that already exist in `application/src/commonMain/kotlin/bridge/`
+Followed the two bridges that already existed in `application/src/commonMain/kotlin/bridge/`
 (`PayRechargeOrderBridge`, `GatewayQuotaRechargePaidListener`) — the assembly layer is the only
 place that may know both `member` and `gateway`.
 
@@ -72,15 +81,40 @@ place that may know both `member` and `gateway`.
   no quota account yet): log and return, because a throw there is only noise next to the other
   listeners' results.
 
-## Verification
+## Verification (results)
 
-- with reward amounts unset or 0, behaviour is byte-for-byte what it is today: invites are recorded,
-  no quota moves, no ledger rows appear
-- with amounts set, one successful invite produces exactly one ledger row per rewarded role, with the
-  refs above, and the balance moves by the configured amount
-- re-driving the same `recordId` produces no additional ledger row (this is the idempotency the
-  contract delegates to the listener, so it has to be demonstrated, not assumed)
-- a reward failure leaves the invite binding in place: the registration is not rolled back
-- harness covers both the 0-amount default and the configured-amount path, and asserts ledger
-  row count and balance rather than only the HTTP status
-- `harness/run.sh` stays green
+Harness scenarios S42–S45, each asserting ledger rows and balances rather than only HTTP status.
+A successful invite is driven end to end over HTTP: `send-sms-code` then `sms-login` with an
+`inviteCode`, which is the path that reaches `dispatchInviteReward`.
+
+- **S42, amounts unset** — behaviour is what it was before the bridge existed: invite recorded,
+  zero `invite:*` ledger rows, zero quota accounts for either user. It also proves the registry is
+  actually bound rather than merely constructed: the listener logs one skip per role (+2), which is
+  only possible if `member` received the registry.
+- **S43, amounts set** (inviter 50000, invitee 20000) — one ledger row per role under the refs
+  above, balances 50000 / 20000.
+- **S44, replay** — `retry-invite-reward/{recordId}` returns 200, ledger stays at 2 rows, balances
+  unchanged, and the idempotency-skip log goes up by exactly 2 (one per ref), so the replay really
+  did reach the granting step instead of returning early. Unknown record → 400, no credentials → 401.
+- **S45, malformed amount** (`INVITE_REWARD_INVITER=INVALID`) — that role grants nothing, logs
+  `MISCONFIGURED`, and creates no quota account; the other role on the same record still receives
+  20000. One bad value does not take the whole reward path down.
+- **Binding survives a reward that does not happen** — demonstrated through S45 and S42: the invite
+  record exists in every case even where no grant was made. Not demonstrated by injecting an
+  exception out of `onInviteReward`; `dispatchInviteReward` already catches per listener and logs.
+
+### What mutation testing changed
+
+Green on the first run was not taken as evidence. Two mutations were applied to the finished work:
+
+- **M1, delete the `bind` and keep `attach(ctx)`** — the historical shape of this gap. S42 as first
+  written stayed green: the attach log still printed, and with amounts at 0 every ledger assertion
+  was trivially satisfied. Only the listener-callback count caught it. S42 was strengthened because
+  of this run, not before it.
+- **M2, both roles share one ref** — the trap the bridge KDoc warns about. S43/S44/S45 went red with
+  exactly the predicted symptom: 1 ledger row instead of 2, invitee balance 0 instead of 20000, and
+  every HTTP status still 200. The second grant collides with the first role's sentinel row and is
+  silently skipped.
+
+Both mutations were reverted and the restored files verified byte for byte against a checksum taken
+before mutating. `harness/run.sh` is green at 68 passed / 0 failed.
