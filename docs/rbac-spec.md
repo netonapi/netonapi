@@ -400,6 +400,39 @@ CI/lint 阶段应当检查：
 - `controller/app/**` 不出现 `@Permission`（出现即报错，提示改为 `@RequireAuth`）
 - `controller/platform/**` 不出现 `@Permission` 与 `@RequireAuth`
 
+### 9.4 存在性缺口：§9.3 只管格式，不管有没有
+
+§9.3 检查的是 `@Permission` 字符串**写得对不对**，没有检查 admin 路由**有没有** `@Permission`。
+两者的失效后果完全不同：格式错是显式的（匹配不上，或被 lint 抓住），**缺失是静默的** ——
+框架 `SecurityPreHandle` 里的条件是 `route.permission != null`，注解缺失时它根本不做授权检查，
+于是路由组成了唯一的门。而 `/admin` 路由组只保证「你是某个管理端账号」，
+不保证「你这个角色能做这件事」。任何能登进后台的账号都等于全权。
+
+缺失又不能一律靠句法检查补齐，因为有合法形态：
+
+| 形态 | 例子 | 判定 |
+|------|------|------|
+| 显式匿名 | `DictDataController.simple-list` 带 `@AllowAnonymous` | 合法：意图写在注解里，可机检 |
+| 处理器的唯一主体是调用者自己 | `UserProfileController` 的 get / update / update-password | 合法：自助改自己的资料与密码不该需要一个权限串；给它加权限反而把「每个管理员都能改自己密码」变成一个可被配错的开关 |
+| 健康检查 | `GatewayInfoController./ping` | 合法：无副作用 |
+| 作用于**任意目标数据**却无注解 | `RedemptionCodeAdminController`（曾如此，已修） | **这就是洞**：造兑换码等于造钱 |
+
+区分第二行与第四行的是**语义**（body / path 参数指向的是别人还是自己），不是句法 ——
+`UserProfileController.update` 同样收 `@Body`。所以 KSP 编译期守卫做不到不误伤，
+强制点落在 harness：
+
+- **S46** 造一个「能登录但零角色」的管理端账号（插 `system_users`、**不插** `system_user_roles`；
+  `resolvePermissions` 对无角色用户返回 `emptySet()`），断言它被 403 挡住且一行也没写；
+  同一接口换 super_admin 必须 200 —— 少了这半对照，403 可能来自任何原因（路由坏了、body 不合法），
+  场景会绿着放行一个已经谁都用不了的接口。
+- **S47** 把同一主体打到另外三个跨模块的钱端点（发额度 / 退款 / 建计价组），断言 403
+  **且响应体点名那条权限串**（`Permission denied: <permission>`，`code=10004`）。
+  只断 403 不够：路由写错打到别处的 403 与权限生效长得一模一样。
+
+变异验证：摘掉 `@Permission("gateway:redemption:create")` 与 `@Permission("gateway:quota:grant")`
+后 S46/S47 双双转红 —— 零权限账号造出 3 张码、给自己发了 100000 额度，其余 45 个场景仍绿；
+两个场景里**未被变异的那几发仍然 403**，说明红得精确。
+
 ---
 
 ## 十、与框架抽象的对接
@@ -443,8 +476,11 @@ CI/lint 阶段应当检查：
 
 ### P0（影响正确性）
 
-1. **super_admin 通配实际不生效** —— 框架默认 `PermissionEvaluator` 是精确匹配，当前 `PermissionLogic` 给 super_admin 返回 `["*:*:*"]` 但**没有任何代码注入支持通配的 evaluator**。结果：super_admin 用户调用 `@Permission("system:user:list")` 接口会被拒。
-   - **修复**：在 `SystemModuleInitializer` 实现 `WildcardPermissionEvaluator`（按 §4.2 算法），通过 `SecurityBuilder.setPermissionEvaluator(...)` 注入
+1. ~~**super_admin 通配实际不生效**~~ —— **已修，条目保留以免被当成新发现重做一遍**。
+   `WildcardPermissionEvaluator` 已在 `module-system/security/` 实现，并由
+   `newgate/application/Main.kt` 的 `security { setPermissionEvaluator(...) }` 注入。
+   实证：harness S46 用 super_admin 打带 `@Permission("gateway:redemption:create")` 的接口得到 200，
+   同一发换成零角色账号得到 403。
 2. **`SUPER_ADMIN_ROLE` 硬编码** —— 见 §7.1，需改为 SPI
 
 ### P1（影响可维护性）
@@ -455,8 +491,12 @@ CI/lint 阶段应当检查：
 
 ### P2（规范化补强）
 
-6. **缺少 lint/CI 检查** —— §9.3 约束目前靠人工 review
-7. **缺少权限串单元测试** —— `WildcardPermissionEvaluator` 必须有契约测试覆盖 §4.2 全部分支
+6. **缺少 lint/CI 检查** —— §9.3 约束目前靠人工 review。注意 §9.3 只管**格式**；
+   **存在性**（admin 路由到底有没有 `@Permission`）是另一回事，详见 §9.4，
+   它不能靠句法检查补齐，目前的强制点是 harness S46/S47。
+7. ~~**缺少权限串单元测试**~~ —— **已补**。`WildcardPermissionEvaluatorTest` 8 个用例覆盖
+   §4.2 全部分支，以及 §4.1/§4.3 的禁止形式（中间段通配不匹配、注解里写通配被拒、
+   非三段式 required 被拒）。
 8. **缺少缓存驱逐契约测试** —— §8.5 全部触发事件应有测试
 
 ---
