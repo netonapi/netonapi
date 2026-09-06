@@ -3,7 +3,7 @@ package model
 import kotlinx.serialization.Serializable
 import neton.database.annotations.*
 
-/** 额度台账（审计，只增不改）。type: grant/consume/refund/redeem。 */
+/** 额度台账（审计，只增不改）。type: grant/consume/refund/redeem/invite。 */
 @Serializable
 @Table("gateway_quota_transactions")
 data class QuotaTransaction(
