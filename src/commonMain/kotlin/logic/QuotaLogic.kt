@@ -56,8 +56,14 @@ class QuotaLogic(private val log: Logger) {
         if (ref != null) {
             val ins = neton.database.dbContext().execute(
                 "INSERT INTO gateway_quota_transactions (user_id, type, amount, balance_after, ref, created_at) " +
-                    "VALUES (:uid, :t, :amt, 0, :ref, 0) ON CONFLICT (ref) WHERE ref IS NOT NULL DO NOTHING",
-                mapOf("uid" to userId, "t" to type, "amt" to delta, "ref" to ref),
+                    "VALUES (:uid, :t, :amt, 0, :ref, :ts) ON CONFLICT (ref) WHERE ref IS NOT NULL DO NOTHING",
+                // created_at 必须在这里就填真值。哨兵行不是临时占位后就删掉的东西 —— 它就是最终的
+                // 台账行，后面的 UPDATE 只回填 balance_after。写成字面量 0 的话，**每一条带 ref 的
+                // 台账**（结算 settlement:*、充值 gateway:quota:*、兑换 redeem:*）时间戳都停在 epoch 0，
+                // 而 idx_gateway_quota_tx_user(user_id, created_at) 正是为按时间查流水建的：全表同值
+                // 等于索引白建，「这个客户上个月花了多少」在台账上无法回答。台账是钱的唯一审计来源，
+                // 走非 ref 路径的行时间反而是对的，两种行混在一张表里按时间排序会看不出真实先后。
+                mapOf("uid" to userId, "t" to type, "amt" to delta, "ref" to ref, "ts" to nowMillis()),
             )
             if (ins == 0L) {
                 log.warn("quota debit idempotent skip: ref=$ref already settled userId=$userId")
@@ -83,6 +89,8 @@ class QuotaLogic(private val log: Logger) {
         }
         return newBalance
     }
+
+    private fun nowMillis(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 
     /** BIGINT 溢出保护：同号相加结果变号即溢出。 */
     private fun checkedAdd(a: Long, b: Long): Long {
