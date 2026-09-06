@@ -83,8 +83,17 @@ data class RedemptionBatchStatsVO(
  *
  * 生成与作废都会记 [RedemptionCode.createdBy] / 日志，因为兑换码是**能直接变成钱的凭据**：
  * 谁造的码、造了多少面额、什么时候作废的，客诉与内部审计都要能追到人。
- * 这也是为什么这些接口只挂在 admin 路由组下 —— 用户侧唯一的入口是兑换（见 app 的 RedemptionController），
- * 任何能让用户自己生成码或改面额的路径都等于让用户自己印钱。
+ * 用户侧唯一的入口是兑换（见 app 的 RedemptionController），任何能让用户自己生成码或改面额的
+ * 路径都等于让用户自己印钱。
+ *
+ * 两道闸门各管一件事，缺一不可：
+ *  - **admin 路由组**只管认证 —— 「你是某个管理端账号」。框架对没有 `@Permission` 的路由
+ *    **完全不做授权检查**（SecurityPreHandle 第 5 步的条件是 `route.permission != null`），
+ *    所以只靠路由组的话，一个只有客服权限的账号照样能造码。
+ *  - **`@Permission`** 管授权 —— 「你这个角色能做这件事」。动词拆成 create / list / get /
+ *    disable 而不是笼统一个 `gateway:redemption:*`，为的正是「客服能查不能造」这个最常见的分工。
+ *
+ * super_admin 持有 `*:*:*`，WildcardPermissionEvaluator 直接放行，所以补注解不会把既有部署锁在门外。
  */
 @Controller("/gateway/redemption")
 class RedemptionCodeAdminController(
@@ -93,6 +102,7 @@ class RedemptionCodeAdminController(
 
     /** 批量生成。返回明文码清单，运营据此导出发放。 */
     @Post("/generate")
+    @Permission("gateway:redemption:create")
     suspend fun generate(identity: Identity, @Body request: GenerateRedemptionRequest): GenerateRedemptionVO {
         val g = redemptionLogic.generate(
             quotaMicro = request.quotaMicro,
@@ -106,6 +116,7 @@ class RedemptionCodeAdminController(
 
     /** 分页查询。status 与 batchId 都可选；两个都不传时列全部（倒序）。 */
     @Get("/page")
+    @Permission("gateway:redemption:list")
     suspend fun page(
         @Query pageNo: Int = 1,
         @Query pageSize: Int = 20,
@@ -130,6 +141,7 @@ class RedemptionCodeAdminController(
 
     /** 批次核销情况：总数 / 未用 / 已用 / 作废 / 过期 / 已核销总额。 */
     @Get("/stats/{batchId}")
+    @Permission("gateway:redemption:get")
     suspend fun stats(@PathVariable batchId: String): RedemptionBatchStatsVO {
         val s = redemptionLogic.stats(batchId)
         return RedemptionBatchStatsVO(
@@ -139,6 +151,7 @@ class RedemptionCodeAdminController(
 
     /** 作废单张（只能作废未用的）。 */
     @Post("/disable/{id}")
+    @Permission("gateway:redemption:disable")
     suspend fun disable(@PathVariable id: Long): RedemptionCodeVO {
         val row = redemptionLogic.disable(id)
         return row.toVO(kotlin.time.Clock.System.now().toEpochMilliseconds())
@@ -149,6 +162,7 @@ class RedemptionCodeAdminController(
      * `disabled = 0` 是合法结果（这批本来就全用完或已作废），不是错误。
      */
     @Post("/disable-batch")
+    @Permission("gateway:redemption:disable")
     suspend fun disableBatch(@Body request: DisableBatchRedemptionRequest): DisableBatchRedemptionVO {
         val n = redemptionLogic.disableBatch(request.batchId)
         return DisableBatchRedemptionVO(request.batchId.trim(), n)
