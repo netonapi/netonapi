@@ -29,10 +29,10 @@ data class GenerateRedemptionVO(
     val expiresAt: Long?,
     val note: String?,
     /**
-     * 明文码清单（展示形态，4 组 × 5 字符）。
+     * 明文码清单（展示形态，4 组 × 5 字符）。**这是全站唯一一处下发完整码的地方**：
+     * 运营必须在此刻导出，事后管理端任何响应都给不出完整码（见 [RedemptionCodeVO.code]）。
      *
-     * 明文而非哈希，是为了让运营能把码导出发给客户、事后还能在后台翻出来看
-     * （见 [RedemptionCode] 的 KDoc）。代价是库泄露即额度泄露，靠码体熵兜住。
+     * 明文而非哈希，是为了让运营能把码导出发给客户（见 [RedemptionCode] 的 KDoc）。
      */
     val codes: List<String>,
 )
@@ -40,7 +40,10 @@ data class GenerateRedemptionVO(
 @Serializable
 data class RedemptionCodeVO(
     val id: Long,
-    /** 展示形态。DB 里存的是无分隔大写裸码，用户输入会先归一化再比对。 */
+    /**
+     * **脱敏**展示形态：首尾两组是真的，中间两组是 `*`（见 [RedemptionCodeLogic.redact]）。
+     * 够客服跟客户手里那张码对上号，不够拿去兑换。DB 里存的是无分隔大写裸码。
+     */
     val code: String,
     val quotaMicro: Long,
     val status: Int,
@@ -100,7 +103,7 @@ class RedemptionCodeAdminController(
     private val redemptionLogic: RedemptionCodeLogic,
 ) {
 
-    /** 批量生成。返回明文码清单，运营据此导出发放。 */
+    /** 批量生成。返回明文码清单（**只此一次**，事后列表里只剩脱敏形态），运营据此导出发放。 */
     @Post("/generate")
     @Permission("gateway:redemption:create")
     suspend fun generate(identity: Identity, @Body request: GenerateRedemptionRequest): GenerateRedemptionVO {
@@ -114,7 +117,7 @@ class RedemptionCodeAdminController(
         return GenerateRedemptionVO(g.batchId, g.codes.size, g.quotaMicro, g.expiresAt, g.note, g.codes)
     }
 
-    /** 分页查询。status 与 batchId 都可选；两个都不传时列全部（倒序）。 */
+    /** 分页查询。status 与 batchId 都可选；两个都不传时列全部（倒序）。码是脱敏形态。 */
     @Get("/page")
     @Permission("gateway:redemption:list")
     suspend fun page(
@@ -170,7 +173,7 @@ class RedemptionCodeAdminController(
 
     private fun RedemptionCode.toVO(now: Long) = RedemptionCodeVO(
         id = id,
-        code = RedemptionCodeLogic.format(code),
+        code = RedemptionCodeLogic.redact(code),
         quotaMicro = quotaMicro,
         status = status,
         statusText = when {

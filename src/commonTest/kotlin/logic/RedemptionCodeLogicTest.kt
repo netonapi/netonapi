@@ -14,7 +14,8 @@ import kotlin.test.assertTrue
  *    `SecureRandomTest.string_covers_alphabet_without_modulo_bias`，这里不复制一份。
  *
  * 这里测的恰好是**没人替我测的那部分**：码存明文，整个防枚举设计就压在字符集与码长这两个常数上，
- * 而它们正是别人为了「码短一点好念」最可能顺手改掉的东西。
+ * 而它们正是别人为了「码短一点好念」最可能顺手改掉的东西。同理，管理端列表的脱敏也压在这里 ——
+ * 码在库里是明文，`redact` 是它与「能看列表就能兑换」之间唯一的一层。
  */
 class RedemptionCodeLogicTest {
 
@@ -67,6 +68,38 @@ class RedemptionCodeLogicTest {
         assertEquals(bare, RedemptionCodeLogic.normalize("  23456789abcdefghjkmn  "))
         assertEquals("", RedemptionCodeLogic.normalize("   "))
         assertEquals("", RedemptionCodeLogic.normalize(""))
+    }
+
+    @Test fun redactKeepsEnoughToIdentifyButNotEnoughToRedeem() {
+        // 首尾两组留着，客服才能拿客户念的码对上库里哪一行；中间两组必须消失。
+        assertEquals("23456-*****-*****-HJKMN", RedemptionCodeLogic.redact("23456789ABCDEFGHJKMN"))
+        // 掩码字符不能来自码体字符集，否则脱敏串看起来像一张真码，运营会照着念给客户。
+        assertTrue('*' !in RedemptionCodeLogic.ALPHABET, "掩码字符混进了码体字符集")
+        repeat(500) {
+            val c = RedemptionCodeLogic.randomCode()
+            val r = RedemptionCodeLogic.redact(c)
+            // 露出的码体字符数恰好是两组。这条比「原码不是子串」要紧：改 redact 多保一组，
+            // 子串断言照样绿（`*` 还在），只有计数会红。
+            assertEquals(
+                2 * RedemptionCodeLogic.CODE_GROUP_LEN,
+                r.count { it in RedemptionCodeLogic.ALPHABET },
+                "脱敏后露出的码体字符数不是两组: '$c' -> '$r'",
+            )
+            // 归一化后必须对不上原码：`*` 会被 normalize 滤掉，粘进兑换框也查不到行。
+            assertTrue(
+                RedemptionCodeLogic.normalize(r) != c,
+                "脱敏串归一化后就是原码，等于没脱敏: '$r'",
+            )
+            assertTrue(
+                RedemptionCodeLogic.normalize(r).length < RedemptionCodeLogic.CODE_MAX_LEN,
+                "脱敏串归一化后仍有 ${RedemptionCodeLogic.CODE_MAX_LEN} 字符: '$r'",
+            )
+        }
+        // 少于 3 组时「保首尾」等于全保，所以整体掩掉。randomCode 恒产出 20 字符，
+        // 这一支只可能由脏数据触发 —— 但脱敏函数宁可少给，不能多给。
+        assertEquals("*****-**", RedemptionCodeLogic.redact("2345678"))
+        assertEquals("*****", RedemptionCodeLogic.redact("23456"))
+        assertEquals("", RedemptionCodeLogic.redact(""))
     }
 
     @Test fun formatGroupsByFiveAndNormalizeUndoesIt() {

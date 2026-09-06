@@ -326,6 +326,31 @@ class RedemptionCodeLogic(private val log: Logger, private val quotaLogic: Quota
         fun format(code: String): String = code.chunked(CODE_GROUP_LEN).joinToString(GROUP_SEP)
 
         /**
+         * 裸码 → 管理端列表用的**脱敏**形态：保首尾两组，中间两组换成 `*`。
+         *
+         * 为什么不干脆全掩：客服在工单里要能拿客户念的码对上库里哪一行，全掩之后同一批一千张
+         * 长得一模一样，只能靠 id 找 —— 而客户不会报 id。首尾两组是 10 字符 / 31 字符集
+         * ≈ 49 bit，千张批次里定位一张绰绰有余，也仍远低于兑换所需的 99 bit。
+         *
+         * `*` 不在 [ALPHABET] 里，所以脱敏串不可能被当成一张真码：即使有人把它粘进兑换框，
+         * [normalize] 会把 `*` 滤掉（它不是字母数字），只剩 10 个字符，长度就对不上
+         * [CODE_MAX_LEN] 的裸码，查不到任何行。
+         *
+         * 与私有的 `mask()`（日志用，只留前 4 位）不是一个用途，别合并：日志要的是**最少**披露，
+         * 列表要的是**可定位**，而且得保留分组结构，才能和客户电话里念出来的那串逐组对齐。
+         *
+         * 少于 3 组时「保首尾」就等于全保，那种码整体掩掉 —— 脱敏函数宁可少给，不能多给。
+         * [randomCode] 恒产出 [CODE_MAX_LEN] 个字符，所以这一支只可能由脏数据触发。
+         */
+        fun redact(code: String): String {
+            val groups = code.chunked(CODE_GROUP_LEN)
+            if (groups.size < 3) return groups.joinToString(GROUP_SEP) { "*".repeat(it.length) }
+            return groups
+                .mapIndexed { i, g -> if (i == 0 || i == groups.lastIndex) g else "*".repeat(g.length) }
+                .joinToString(GROUP_SEP)
+        }
+
+        /**
          * 码体字符集：31 个字符，去掉 `0/O/1/I/L`。
          *
          * 去掉它们不是为了熵（少 5 个字符只损失约 2 bit），而是因为码要经人工转录 ——
