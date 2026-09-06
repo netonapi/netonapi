@@ -120,10 +120,22 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
         }
     }
 
+    /**
+     * 关掉一张永远付不了的意图单。
+     *
+     * `:waiting` 必须真的绑上值：SQL 里有它而 map 里没有，sqlx4k 会抛
+     * NamedParameterValueNotSupplied —— 那会在 catch 块里盖掉**下单失败的真实原因**
+     * （运维只看到一条 sqlx4k 内部错误，查不到是哪个渠道不可用），同时意图单停在待支付，
+     * 正是这个方法本来要消除的那条对账噪声。
+     */
     private suspend fun close(rechargeId: Long) {
         neton.database.dbContext().execute(
             "UPDATE gateway_quota_recharges SET pay_status = :closed WHERE id = :id AND pay_status = :waiting",
-            mapOf("closed" to PAY_STATUS_CLOSED, "id" to rechargeId),
+            mapOf(
+                "closed" to PAY_STATUS_CLOSED,
+                "id" to rechargeId,
+                "waiting" to PAY_STATUS_WAITING,
+            ),
         )
     }
 
