@@ -26,9 +26,20 @@ enum class GroupSource { TOKEN_OVERRIDE, USER_OVERRIDE, MEMBER_GROUP, DEFAULT }
 
 /**
  * 拒绝原因。三者的处置方与响应码都不同，不能一律 400：
- *  - [CONFIG_BROKEN] 运营事故（组被删/改名、悬空引用）→ 500 并告警；回 4xx 会让人以为是客户端的错。
+ *  - [CONFIG_BROKEN] 运营事故（兜底组缺失、令牌/用户级例外指向已删的组）→ 500，且调用方**必须 ERROR 告警**。
  *  - [NOT_ALLOWED] 部署决策（会员有所属分组，但没给它配计费组）→ 403，客户端重试无意义。
  *  - [RESOLUTION_FAILED] 依赖方（会员系统 / DB）解析时抛错 → 500，且**绝不回落**。
+ *
+ * 这两个 5xx 与 [RelayEngine] 里 `no_candidate` 的 404 看着像两套标准，其实是同一条的两面：
+ * **5xx 只在「有人会被叫醒去修」时才许用**。
+ *  - `no_candidate`（模型没配 / 能力没声明）→ 404：请求指向一个我们不提供的东西，404 是关于
+ *    「客户端要什么」的真实陈述，我方没有故障要告警；回 503 只会让客户端对着不变的配置一直重试。
+ *  - [CONFIG_BROKEN] → 500：请求完全合法，坏的是我方配置，回 4xx 等于把责任推给客户端。
+ *    代价同样是客户端会重试撞墙 —— 所以告警不是可选项，它是这个 500 成立的**前提**。
+ *
+ * 告警只能落在调用方的日志级别上：拒绝走 `respondError` / 直接写响应，**不抛异常**，因此框架那条
+ * 「5xx → ERROR 带 cause + 落 infra_api_error_logs」的路径对这里不可达（见 BufferedHttpDispatcher）。
+ * 于是两个消费点（RelayEngine、ModelsController）都按 `httpStatus >= 500` 把日志升到 ERROR。
  */
 enum class GroupReject(val httpStatus: Int, val code: String) {
     CONFIG_BROKEN(500, "billing_group_config_broken"),

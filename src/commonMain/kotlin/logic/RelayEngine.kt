@@ -96,10 +96,12 @@ class RelayEngine(
         // 倍率悄悄变 1.0，钱少收而日志里一行痕迹都没有）。
         val billingGroup = when (val r = BillingGroupResolver.resolve(userId, token.groupOverride)) {
             is GroupResolution.Rejected -> {
-                log.warn(
-                    "relay billing group rejected user=$userId token=$tokenId " +
-                        "reason=${r.reason} detail=${r.message}"
-                )
+                val detail = "relay billing group rejected user=$userId token=$tokenId " +
+                    "reason=${r.reason} detail=${r.message}"
+                // 5xx 类的拒绝必须 ERROR：respondError 不抛异常，框架那条「5xx → ERROR + 落
+                // infra_api_error_logs」的路径走不到，日志级别是运营唯一的告警面（见 GroupReject）。
+                // NOT_ALLOWED(403) 是部署决策、不是故障，留 WARN，免得把告警噪声化。
+                if (r.reason.httpStatus >= 500) log.error(detail) else log.warn(detail)
                 return respondError(ctx, inbound, r.reason.httpStatus, r.reason.code, r.message)
             }
             is GroupResolution.Resolved -> r.group

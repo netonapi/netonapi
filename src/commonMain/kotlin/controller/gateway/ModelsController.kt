@@ -11,6 +11,7 @@ import neton.core.annotations.Get
 import neton.core.http.HttpResponse
 import neton.core.http.HttpStatus
 import neton.core.interfaces.Identity
+import neton.logging.Logger
 import security.GatewayTokenIdentity
 
 /**
@@ -21,6 +22,7 @@ import security.GatewayTokenIdentity
  */
 @Controller("/v1/models")
 class ModelsController(
+    private val log: Logger,
     private val channelLogic: ChannelLogic,
     private val tokenLogic: TokenLogic,
 ) {
@@ -39,6 +41,11 @@ class ModelsController(
         // 而真实原因是计费组配置坏了或该会员组没开通，两者处置方完全不同。
         val groupCode = when (val r = BillingGroupResolver.resolve(token.userId, token.groupOverride)) {
             is GroupResolution.Rejected -> {
+                val detail = "models list billing group rejected user=${token.userId} " +
+                    "token=$tokenId reason=${r.reason} detail=${r.message}"
+                // 与 RelayEngine 同一标准：直接写响应、不抛异常，框架的 5xx 错误日志路径不可达，
+                // 日志级别就是唯一的告警面（见 GroupReject）。此前这里对拒绝一行日志都没有。
+                if (r.reason.httpStatus >= 500) log.error(detail) else log.warn(detail)
                 response.status = HttpStatus.fromCode(r.reason.httpStatus) ?: HttpStatus.BAD_GATEWAY
                 response.json(
                     """{"error":{"message":${quote(r.message)},"type":${quote(r.reason.code)}}}"""
