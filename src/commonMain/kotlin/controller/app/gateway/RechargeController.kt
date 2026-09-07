@@ -4,6 +4,8 @@ import kotlinx.serialization.Serializable
 import logic.QuotaLogic
 import logic.QuotaRechargeLogic
 import neton.core.annotations.*
+import neton.core.http.HttpException
+import neton.core.http.NetonErrorCode
 import neton.core.http.ValidationError
 import neton.core.http.ValidationException
 import neton.core.interfaces.Identity
@@ -42,10 +44,40 @@ data class RechargeOrderVO(
 )
 
 /**
+ * 充值单的回读快照。
+ *
+ * 刻意**不含**两列：`payOrderId` 是 payment 那张表的内部主键，对用户没有意义，回给前端
+ * 只是多一个能被拿去别处试探的 id；`payChannelCode` 是用户自己下单时填的
+ * （[RechargeRequest.channelCode]），回读时再说一遍不产生信息。VO 是这里唯一的出口闸 ——
+ * 只有列出来的字段会离开，新增字段要过一遍「用户拿它做什么」这个问题。
+ */
+@Serializable
+data class RechargeStatusVO(
+    val rechargeId: Long,
+    /** 商户订单号 `gateway:quota:{id}`。找客服对账时报这个 —— 它是与 payment 关联的唯一键。 */
+    val merchantOrderId: String,
+    /** 会入账的网关额度 μUSD。下单那一刻按汇率算定，之后不再变：改汇率不追溯已下的单。 */
+    val amountMicro: Long,
+    /** 实收法币金额，单位同 payment 的 pay_orders.price。 */
+    val price: Long,
+    /**
+     * 0=待支付 1=已入账 2=已关闭（下单失败时由服务端关掉，见 QuotaRechargeLogic.close）。
+     *
+     * 这三态正是本 VO 存在的理由：轮询余额只能看到「没变」，而「没变」对应三种完全不同的
+     * 处置 —— 待支付要等、已关闭要重新下单、回调没落要找运营。
+     */
+    val payStatus: Int,
+    /** 入账时刻（毫秒）。待支付与已关闭时为 null。 */
+    val paidAt: Long? = null,
+    val createdAt: Long? = null,
+)
+
+/**
  * 额度充值。
  *
  * 真实充值见 [create]：payment 下单 → 支付回调 → 装配层监听者按订单号入账。
  * 钱包是法币账本、网关额度是 μUSD 账本，两者通过订单号关联而非共用余额。
+ * 用户送出站付款之后靠 [status] 回读结果 —— 到账不在这个请求里发生，所以必须有个地方能问。
  *
  * [mock] 是**模拟充值**，用于打通「付款 → 额度到账 → 能用」这条链路的联调；
  * 它凭空发放额度，因此默认关闭，必须显式设置 `NEWGATE_ENABLE_MOCK_RECHARGE=true` 才可用，
@@ -100,6 +132,34 @@ class RechargeController(
         )
     }
 
+    /**
+     * 回读一张充值单的状态 —— 跳转式支付的**完成信号**，此前没有。
+     *
+     * [create] 在 displayMode=REDIRECT_URL 时把用户送出本站，回来后这个标签页不知道回调落了
+     * 没有。旧的唯一信号是轮询 usage/balance，而余额不动分不清「还在等 / 回调失败 / 单子已被
+     * 关掉」，三者的处置分别是等、找运营、重新下单。
+     *
+     * 不是自己的单一律 404，与真的不存在同形，理由见 [logic.QuotaRechargeLogic.visibleTo]。
+     *
+     * 没有 @Permission：/app 组按 identity 隔离，权限串是管理端的概念 —— 这里加一个反而会被
+     * harness S49 要求补一条 system_menus 种子（那条断言是「凡 @Permission 必有菜单入口」）。
+     */
+    @Get("/get/{rechargeId}")
+    suspend fun status(identity: Identity, @PathVariable rechargeId: Long): RechargeStatusVO {
+        val r = rechargeLogic.findForUser(rechargeId, identity.id.toLong())
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, NOT_OURS_MESSAGE)
+        return RechargeStatusVO(
+            rechargeId = r.id,
+            // merchant_order_id 不落库，两处都按同一规则现算（markPaid 认单也是这么算的）
+            merchantOrderId = QuotaRechargeLogic.merchantOrderId(r.id),
+            amountMicro = r.amountMicro,
+            price = r.price,
+            payStatus = r.payStatus,
+            paidAt = r.paidAt,
+            createdAt = r.createdAt,
+        )
+    }
+
     @Post("/mock")
     suspend fun mock(identity: Identity, @Body request: MockRechargeRequest): RechargeResultVO {
         if (!mockEnabled()) {
@@ -121,4 +181,13 @@ class RechargeController(
 
     private fun mockEnabled(): Boolean =
         neton.core.config.getEnv("NEWGATE_ENABLE_MOCK_RECHARGE")?.lowercase() == "true"
+
+    companion object {
+        /**
+         * 「不存在」与「不是你的」共用这一句。写成常量是为了让共用变成看得见的事实 ——
+         * 两处各写一句字面量，将来改一处忘一处就把区分泄出去了。harness S53 的块 D 逐字比对
+         * 这两种情况的 message，并且要求它非空（否则提取链断掉时两个空串相等会假绿）。
+         */
+        const val NOT_OURS_MESSAGE = "充值单不存在"
+    }
 }

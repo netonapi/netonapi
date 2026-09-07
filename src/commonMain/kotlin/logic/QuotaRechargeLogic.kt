@@ -78,6 +78,21 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
     }
 
     /**
+     * 用户回读自己的一张充值单；不是他的、或不存在的，一律 null（调用方按 404 处置）。
+     *
+     * 跳转式支付需要这个：[create] 在 displayMode=REDIRECT_URL 时把用户送出本站，回来后
+     * 那个标签页对「回调到底落了没有」一无所知。此前唯一的信号是轮询余额，而余额不动
+     * 分不清三件事 —— 还在等、回调失败、单子已被 [close] 关掉。三者的处置分别是等 /
+     * 找运营 / 重新下单，混成「余额没变」等于让用户自己猜。
+     *
+     * 不做 /page 列表：已入账的充值在台账里就是一行 type='recharge'、ref='gateway:quota:{id}'，
+     * 要历史去流水页翻；待支付单只活在跳转付款那几分钟，前端把 rechargeId 存进 sessionStorage
+     * 就够。再加一个列表端点等于同一份数据有两个真相来源。
+     */
+    suspend fun findForUser(rechargeId: Long, userId: Long): GatewayQuotaRecharge? =
+        visibleTo(GatewayQuotaRechargeTable.get(rechargeId), userId)
+
+    /**
      * 支付成功 → 入账。由装配层的监听者调用（监听 payment 的 PayOrderPaidEvent 会引入编译依赖，
      * 那条依赖正是 [RechargeOrderPort] 要避免的，所以监听者放装配层）。
      *
@@ -184,6 +199,24 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
             merchantOrderId.takeIf { it.startsWith(PREFIX) }
                 ?.removePrefix(PREFIX)
                 ?.toLongOrNull()
+
+        /**
+         * 归属门：这张单是 [userId] 的才可见，否则**当作不存在**（null），而不是「存在但你无权」。
+         *
+         * 两者返回同形是刻意的：rechargeId 是自增的，回 403 就等于给探测者装了一台
+         * 「哪些 id 存在」的预言机 —— 而存在性本身在这里没有价值，能读的只有自己的单。
+         * 与 MyTokenController.requireOwned 同一条规则（那里也写着「不泄露他人令牌是否存在」），
+         * 区别只在状态码：读端点回 404 才是准确的语义，400 意思是「你的请求格式不对」，
+         * 而请求没毛病、只是这张单对他不可见。
+         *
+         * 抽成纯函数是为了能被单测覆盖，但要说清覆盖到哪一步：单测钉得住这条规则本身，
+         * 钉不住「有没有人真的调它」。后者只有 harness S53 的块 C（另一个真会员读这张单必须
+         * 404）与块 D（那个 404 必须与「查无此单」逐字同形）能钉。实测：把 [findForUser] 里那次
+         * visibleTo 调用拿掉，单测 170/0 全绿，S53 变成 92/2 —— 与 QuotaLogicTest 里 balanceAfter*
+         * 那几条的诚实标注同一处理方式。
+         */
+        fun visibleTo(recharge: GatewayQuotaRecharge?, userId: Long): GatewayQuotaRecharge? =
+            recharge?.takeIf { it.userId == userId }
 
         private const val RECHARGE_SUBJECT = "NanoGate 网关额度充值"
     }
