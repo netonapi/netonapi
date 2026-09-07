@@ -1,6 +1,8 @@
 package init
 
 import logic.BillingGroupResolver
+import logic.MemberDirectory
+import logic.MemberDirectoryPort
 import logic.MemberGroupPort
 import logic.QuotaRechargeLogic
 import logic.RechargeOrderPort
@@ -60,6 +62,19 @@ object GatewayRuntimeBootstrap {
             ctx.get(LoggerFactory::class).get("init.gateway-bootstrap").info(
                 "member group billing is off: set ${BillingGroupResolver.ENV_MEMBER_GROUP_BILLING}=true " +
                     "to map member groups onto billing groups"
+            )
+        }
+
+        // 会员名录：管理端写用户级计费例外时校验 userId。与上面那个 port 不同，这里**没有开关**——
+        // 校验「这个人存在」不是可选特性，开着关着没有中间态可谈。absent 就保持 null，写入校验
+        // 退化成只校验正数，也就是本 port 要消灭的那个缺陷原样留着，所以**必须说出来**：
+        // 静默退化正是「大客户谈判价没生效而双方都不报错」的原形（取舍见 MemberDirectory 的 KDoc）。
+        MemberDirectory.port = ctx.getOrNull(MemberDirectoryPort::class)
+        if (MemberDirectory.port == null) {
+            ctx.get(LoggerFactory::class).get("init.gateway-bootstrap").warn(
+                "member directory: no MemberDirectoryPort bound, so admin writes to " +
+                    "gateway_group_overrides cannot check that userId exists — a mistyped id leaves " +
+                    "the customer on the default billing group with no error on either side"
             )
         }
     }

@@ -1,6 +1,7 @@
 package controller.admin.group
 
 import kotlinx.serialization.Serializable
+import logic.MemberDirectory
 import model.GatewayGroup
 import model.GroupOverride
 import neton.core.annotations.*
@@ -34,12 +35,10 @@ data class SaveGroupOverrideRequest(
  * ⚠️ 这些路由**只能挂在 admin 组**，绝不能出现在 app 侧：自助用户能设自己的计费组，
  * 就等于自己给自己打折。harness 里有一条专门断言 app 组下这些路径是 404。
  *
- * ⚠️ 已知边界：`userId` 的**存在性无法校验**。module-gateway 编译期不认识 member
- * （跨模块协作一律走装配层的 port，见 [logic.MemberGroupPort]），所以这里拿不到会员表。
- * 后果不是崩溃，而是更难发现的那类：把 10001 打成 100001，例外照样写成功、接口照样 200，
- * 而那位客户仍按 `default` 组计价 —— 谈判价没生效，双方都不会报错。
- * 缓解要靠装配层再加一个 port（与 [logic.MemberGroupPort] 同一套路），见 backlog
- * GROUP-OVERRIDE-ADMIN-CRUD-P1；在没有它之前，运营侧的对策是写完立刻用 `/list` 回读核对。
+ * `userId` 的存在性由 [logic.MemberDirectoryPort] 校验（装配层实现并 bind）：写错一位数字
+ * 得到的是 400 与一句说清后果的话，而不是「例外静静躺着、客户仍按 `default` 组计价、
+ * 双方都不报错」。port 未绑定时退化成只校验正数，[init.GatewayRuntimeBootstrap] 会 warn，
+ * 取舍见 [logic.MemberDirectory]。只有 [create] 校验，理由见 [requireChargeableMember]。
  *
  * 权限串按 rbac-spec §3.1 用下划线连接复合词（`group_override`）。动词拆成
  * list / get / create / update / delete，为的是能把「查谈判价」与「改谈判价」分给不同角色 ——
@@ -60,6 +59,7 @@ class GroupOverrideController {
     @Permission("gateway:group_override:create")
     suspend fun create(@Body request: SaveGroupOverrideRequest): Long {
         val userId = requireUserId(request.userId)
+        requireChargeableMember(userId)
         val remark = normalizeRemark(request.remark)
         val code = requireLiveGroupCode(request.groupCode)
         // 插入前先查重，为的是给出可读原因；并发下真正挡得住的只有主键 user_id。
@@ -118,6 +118,30 @@ class GroupOverrideController {
     private fun requireUserId(userId: Long): Long {
         if (userId <= 0) badRequest("userId must be a positive number")
         return userId
+    }
+
+    /**
+     * 校验这个 userId 现在是一个能挂例外的会员。判据本身与「port 未绑定时怎么办」都写在
+     * [logic.MemberDirectoryPort] / [logic.MemberDirectory]，这里只负责把结果变成 400。
+     *
+     * **只有 [create] 调它，[update] 与 [delete] 不调** —— 那两个操作的是既成事实：行已经在了，
+     * 它的 userId 当初就该校验过。更要紧的是它们必须能操作「会员后来注销了」的那一行：
+     * 注销之后运营要的正是删掉这条例外，而按当前 status 拦 delete 会让它删不掉，
+     * 于是谈判价永久留在表里、指向一个不再存在的客户。拦写入、不拦清理。
+     *
+     * 400 而不是 404：与 [requireLiveGroupCode] 对悬空组码的处置一致 —— 两者都是
+     * **入参指向了一个不存在的东西**，不是「资源当前状态不允许这个操作」。
+     * 消息点名两种可能（id 打错 / 账号不可用）而不合并成一句「无效」，是因为「无效」
+     * 读起来像格式错了，运营会去改格式而不是去核对数字。
+     */
+    private suspend fun requireChargeableMember(userId: Long) {
+        val port = MemberDirectory.port ?: return // 未绑定 → 退化，bootstrap 已 warn
+        if (!port.isChargeableMember(userId)) badRequest(
+            "no chargeable member with userId=$userId; either the id is mistyped or that member is " +
+                "disabled / has closed their account. Refusing to write the override: it would sit in " +
+                "the table, the resolver would never reach it, and the customer would keep being " +
+                "priced at the default group with no error on either side",
+        )
     }
 
     /**
