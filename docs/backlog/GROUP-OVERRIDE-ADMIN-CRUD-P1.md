@@ -94,8 +94,8 @@ What actually ran, not what was planned:
 
 ## Follow-ups
 
-Found while closing this item. The first and the third shipped and are kept here as the record of
-what each took; the second is still open.
+Found while closing this item. All three shipped and are kept here as the record of what each took;
+the second left a narrower gap behind, which is item 4.
 
 1. ~~**`userId` existence cannot be validated.**~~ **CLOSED.** The original complaint: `module-gateway`
    does not see `member` at compile time, so `create` accepted any positive number — typing 100001
@@ -133,14 +133,54 @@ what each took; the second is still open.
    Unbound port degrades to the old behaviour (positive-number check only) with a `warn` line at
    startup, rather than failing to boot or refusing all writes — the trade-off is recorded in
    `MemberDirectory`'s KDoc. NanoGate's assembly layer always binds it.
-2. **Revoking loses the audit trail, and the ledger cannot fully replace it.** The delete is hard,
-   so the negotiated price and the contract number in `remark` leave no trace in this table.
+2. ~~**Revoking loses the audit trail, and the ledger cannot fully replace it.**~~ **CLOSED for the
+   attribution half.** The original complaint: the delete is hard, so the negotiated price and the
+   contract number in `remark` leave no trace in this table.
    `gateway_settlements.pricing_snapshot` freezes the `ratio` used per settlement, so "how much was
    charged at what multiplier" survives — but the snapshot records **neither the billing group code
    nor which resolution layer produced it** (token override / per-user override / member group /
    default), so "why this multiplier" does not. `gateway_usage_logs` has no group or ratio column
    at all. Either give this table a soft-delete column (same shape as `gateway_groups`) or write
    `GroupSource` into the snapshot.
+
+   Opening it showed the gap was worse than described, and that it was never a missing feature — it
+   was a half-finished one. `GroupSource`'s own KDoc opens with "goes into the log: source is the
+   first thing a wrong-bill investigation asks for", and `resolve` returns it from all four layers.
+   It was dropped at the single place that consumed the result: `RelayEngine` wrote
+   `is GroupResolution.Resolved -> r.group`. The group *code* fared worse — it was threaded through
+   four signatures (`execute` / `streamWithPreflight` / `bill` / `recordLog`) and used by none of
+   them. `recordLog` took `group: String` and built `UsageLog` without it, because the table had no
+   such column. **Kotlin does not warn on unused function parameters** (only unused locals), so
+   neither ever fired. The unused parameter is the evidence: someone meant to log attribution and
+   stopped halfway.
+
+   Shipped as `V007__billing_attribution.sql` — `group_code` + `group_source` on **both**
+   `gateway_settlements` and `gateway_usage_logs`. Harness S55 (four blocks). Three decisions worth
+   keeping, because each rejects something that looks simpler:
+
+   - **New columns, not the snapshot this item suggested.** `snapshotPrice` validates strictly: any
+     missing track field returns null, and `bill` then routes the settlement to `MANUAL_REVIEW`
+     **keeping the reserved funds** (V004 §7.1, billing is not allowed to guess a price). Adding a
+     required field to the snapshot JSON would have made every in-flight old snapshot unparseable at
+     the moment of upgrade and parked real money in manual review. Nullable columns never touch that
+     path. They also survive T2: `markUpstreamStarted` rewrites the snapshot to fold in the channel
+     discount and must not have to restate attribution, because the group is resolved once at the
+     entry and does not change across channel retries.
+   - **Both tables, because `finalize` reads only the settlement row.** It builds the entire
+     usage_log from `s` — deliberately, since a worker replay may be another process with nothing in
+     memory. Attribution that is not on the settlement row does not survive replay. S55 asserts both
+     sides so a break names which half of the chain died: mutations M3 (finalize stops transcribing)
+     and M4 (reserve stops persisting) both land on 100 / 3, for different reasons, and only the
+     settlements-side assertion tells them apart.
+   - **Nullable, and not backfilled.** An old row's group is unrecoverable — the group may have been
+     renamed or deleted, the ratio may have changed since. Filling `'default'` would turn "unknown"
+     into "it went through the default group", exactly the silent fallback V002 removed when it
+     deleted `?: "default"` and `?: "1.0"`.
+
+   The operational payoff lands in `bill`'s margin-inversion warning, which printed `ratio` and
+   `costDiscount` but not the group: "ratio=3.0 inverted" could not distinguish a mis-set negotiated
+   price from a mis-set standard price. It now carries `group=$group/${groupSource.name}`. What
+   remains of the original complaint is item 4.
 3. **CLOSED — the five `gateway:group_override:*` permissions had no `system_menus` seed**, so per
    rbac-spec section 1.4 they could not be granted to any role; only `super_admin`'s `*:*:*`
    passed. Not specific to this feature: 17 gateway permissions were in the same state.
@@ -175,3 +215,12 @@ what each took; the second is still open.
 
    Mutation-verified: dropping one lvl3 seed, one manifest key, and flipping the three lvl2 menus to
    `status=0` turned exactly S49's three assertions red (74 / 3), each naming the thing it lost.
+4. **OPEN (narrow, spun out of item 2): the hard delete still loses `remark`.** Attribution means a
+   revoked exception no longer erases *what the customer was billed at and why* — every settlement
+   and usage row from that period now carries the group and the layer that produced it. What it does
+   not preserve is `remark`, where the contract number lives. After a revocation, "which agreement
+   gave this customer this price" is still unanswerable from the database: the rows say
+   `vip55 / USER_OVERRIDE` and nothing about the deal behind it. The fix item 2 originally proposed
+   still stands — a `deleted` column here, same shape as `gateway_groups`. Ranked below the
+   attribution work because it is a records question, not a billing one: nothing is charged
+   incorrectly while it stays open.

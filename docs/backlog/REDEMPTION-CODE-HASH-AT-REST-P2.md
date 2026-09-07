@@ -51,20 +51,23 @@ false, and the same sentence in `model/RedemptionCode.kt` was corrected when `re
   `DEPLOY.md` §升级 for the mechanism and for why re-stamping the checksum is worse than the abort.
 
   Consequence for whoever implements this: the correction has to go in the header comment of the
-  new V007 script, stating that it supersedes V004 note ②. A reader following the migration chain
+  new V008 script, stating that it supersedes V004 note ②. A reader following the migration chain
   will otherwise take V004's word for it, and V004 is the only place the original reasoning is
   written down in full.
 
 ## Plan
 
-**1. `sql/postgresql/V007__redemption_code_hash.sql`** (postgresql only — `DEPLOY.md:254` declares
+**1. `sql/postgresql/V008__redemption_code_hash.sql`** (postgresql only — `DEPLOY.md:254` declares
 PostgreSQL the sole supported dialect, and `sql/mysql/` and `sql/sqlite/` are historical leftovers
 that must not be extended).
 
-The slot number moved: this item was written when V006 was free, and `V006__quota_revoke_menu.sql`
-has since taken it. Check `sql/postgresql/` for the next free slot before writing the file — the
-migrator orders by version, and two scripts claiming the same one is exactly the kind of collision
-that only surfaces on a database that already applied one of them.
+The slot number has moved twice, and it will probably move again. This item was written when V006
+was free; `V006__quota_revoke_menu.sql` took it, and then `V007__billing_attribution.sql` took the
+slot this item was next pointing at. That one shipped ahead of this item on purpose: it fixes a
+live defect in the billing path (attribution was computed and then dropped), while this one hardens
+a table that is already masked on every read path. Check `sql/postgresql/` for the next free slot
+before writing the file — the migrator orders by version, and two scripts claiming the same one is
+exactly the kind of collision that only surfaces on a database that already applied one of them.
 
 - `ALTER TABLE gateway_redemption_codes ADD COLUMN code_hash CHAR(64);`
 - Backfill: `UPDATE gateway_redemption_codes SET code_hash = encode(sha256(code::bytea), 'hex');`
@@ -120,7 +123,7 @@ note has to say "export every unused batch first" ahead of the schema change, no
   `code_hash` equals the SHA-256 of the bare code `/generate` handed back.
 - The `/generate` plaintext redeems; the `/page` string does not — 404, balance unmoved, no
   `type='redeem'` ledger row. That is S50 and it must stay green through the change.
-- **The one that actually matters**: insert a code the old way as plaintext, run V007, then redeem
+- **The one that actually matters**: insert a code the old way as plaintext, run V008, then redeem
   it. A wrong backfill surfaces here and nowhere else, because everything written after the
   migration is hashed by the new code path.
 - Cross-check the two implementations in the same run: `Sha256.hex(x)` in Kotlin against
