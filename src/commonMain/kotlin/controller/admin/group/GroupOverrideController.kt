@@ -101,11 +101,17 @@ class GroupOverrideController {
      * ⚠️ 这是**硬删**：`gateway_group_overrides` 没有 `deleted` 列、[GroupOverride] 也没有
      * `@SoftDelete`（与 [GatewayGroup] 不同），所以 `destroy()` 直接 DELETE 掉这一行。
      * 代价说清楚：撤销之后「这位客户曾经谈过什么价、remark 里写的合同号」在本表里就没有痕迹了。
-     * 账务侧能补上一半 —— `gateway_settlements.pricing_snapshot` 逐笔冻结了当时用的 `ratio`，
-     * 所以「收了多少、按什么倍率收的」查得出来；但快照**不记计费组 code、也不记是哪一层解析出的**
-     * （令牌覆盖 / 用户例外 / 会员组 / default），所以「为什么是这个倍率」答不上来。
-     * 要补齐归因，要么给本表加软删列（与 gateway_groups 同形），要么把 [logic.GroupSource] 写进快照 ——
-     * 两条都记在 backlog GROUP-OVERRIDE-ADMIN-CRUD-P1 的后续项里，本增量不顺手扩 schema。
+     *
+     * 账务侧现在补得上归因（V007）：`gateway_settlements` 与 `gateway_usage_logs` 各有
+     * `group_code` / `group_source` 两列 —— reserve 时固化进结算行，finalize 再转写进日志。所以
+     * 撤销之后，「那段时间这位客户按哪个组计价、那个组是令牌覆盖 / 用户例外 / 会员组 / default
+     * 哪一层给的」逐笔都还在。光有 `pricing_snapshot` 里的 `ratio` 是分不出来的：四层能给出同一个
+     * 倍率，而它们的含义完全不同（口子 / 谈判价 / 套餐 / 标准价）。
+     *
+     * 仍然查不到的是 `remark`：合同号是本表独有的信息，硬删之后只剩「vip55/USER_OVERRIDE」这个
+     * 结果、没有「凭什么谈成这个价」的依据。补齐它要给本表加软删列（与 [GatewayGroup] 同形），
+     * 记在 backlog GROUP-OVERRIDE-ADMIN-CRUD-P1 的后续项 4 —— 那是记录问题不是计价问题，
+     * 开着不会算错钱。
      */
     @Delete("/delete/{userId}")
     @Permission("gateway:group_override:delete")

@@ -94,7 +94,7 @@ class RelayEngine(
         // 计费组：解析一次，路由与计价共用同一个结果（此前路由按名字匹配、计价再查一次，
         // 中间夹着 `?: "default"` 与 `?: "1.0"` 两级静默回落 —— 组被改名/删除时请求照常放行、
         // 倍率悄悄变 1.0，钱少收而日志里一行痕迹都没有）。
-        val billingGroup = when (val r = BillingGroupResolver.resolve(userId, token.groupOverride)) {
+        val resolution = when (val r = BillingGroupResolver.resolve(userId, token.groupOverride)) {
             is GroupResolution.Rejected -> {
                 val detail = "relay billing group rejected user=$userId token=$tokenId " +
                     "reason=${r.reason} detail=${r.message}"
@@ -104,11 +104,18 @@ class RelayEngine(
                 if (r.reason.httpStatus >= 500) log.error(detail) else log.warn(detail)
                 return respondError(ctx, inbound, r.reason.httpStatus, r.reason.code, r.message)
             }
-            is GroupResolution.Resolved -> r.group
+            is GroupResolution.Resolved -> r
         }
+        val billingGroup = resolution.group
         // 往下 execute/recordLog/bill 一路传的都是这个字符串：必须是稳定 code，不能是可改的显示名，
         // 否则管理员改个显示名就能让渠道匹配静默失配。
         val group = billingGroup.code
+        // 归因（V007）：这个组是哪一层给的。上面那个 when 此前写的是 `-> r.group`，source 当场
+        // 被扔掉 —— 而 GroupSource 的 KDoc 第一句就是「进日志：错账排查第一个要问的就是来源」。
+        // 它跟着 group 走到三处：reserve（固化进结算行）、recordLog（落进 usage_log）、bill
+        // （毛利倒挂告警）。那三处此前都只拿得到倍率、拿不到来源，于是「ratio=3.0」到底是
+        // 谈判价配错了还是标准价配错了，无从判断。
+        val groupSource = resolution.source
         val requestModel = runCatching { RequestRewriter.rewrite(rawBody, DUMMY).requestModel }.getOrElse {
             return respondError(ctx, inbound, 400, "invalid_request_error", "request body is not valid JSON")
         }
@@ -170,6 +177,7 @@ class RelayEngine(
             userId = userId, tokenId = tokenId, requestModel = requestModel, endpoint = path,
             reserveAmount = reserveAmount.amount,
             pricingSnapshot = pricingSnapshot(salePrice, officialPrice, ratio),
+            groupCode = group, groupSource = groupSource.name,
             estimated = reserveAmount.estimated,
             clientIdemKey = idem,
             requestFingerprint = idem?.let { requestFingerprint(ctx, path, rawBody) },
@@ -212,7 +220,7 @@ class RelayEngine(
 
             val rewritten = transform.rewritten
             val outcome: RelayOutcome? = try {
-                execute(ctx, channel, key.id, key.apiKey, transform, path, token, group, startMs)
+                execute(ctx, channel, key.id, key.apiKey, transform, path, token, group, groupSource, startMs)
             } catch (e: HttpClientException) {
                 val err = e.error
                 val retryable = when (err) {
@@ -223,7 +231,7 @@ class RelayEngine(
                 if (!retryable && err is HttpClientError.Http) {
                     // 上游认证错（401/403）归咎于 Key；其它 4xx 是客户端问题，不计 Key 失败
                     if (err.statusCode == 401 || err.statusCode == 403) channelLogic.recordKeyFailure(key.id, "upstream_${err.statusCode}")
-                    recordLog(token, channel, rewritten, Usage(), group, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
+                    recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
                     respondRaw(ctx, err.statusCode, err.body ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
                     return
                 }
@@ -331,6 +339,7 @@ class RelayEngine(
         path: String,
         token: GatewayToken,
         group: String,
+        groupSource: GroupSource,
         startMs: Long,
     ): RelayOutcome {
         val rewritten = transform.rewritten
@@ -351,14 +360,14 @@ class RelayEngine(
             if (res.statusCode !in 200..299) {
                 // 401/403 = 凭证级失败，计 Key 失败（与流式/外层分类统一）；其它 4xx 是客户端问题
                 if (res.statusCode == 401 || res.statusCode == 403) channelLogic.recordKeyFailure(keyId, "upstream_${res.statusCode}")
-                recordLog(token, channel, rewritten, Usage(), group, startMs, "error", "upstream_${res.statusCode}", null)
+                recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, "error", "upstream_${res.statusCode}", null)
                 respondRaw(ctx, res.statusCode, res.body)  // 上游错误 body 原样（擦除 headers）
                 return RelayOutcome.PARTIAL  // 上游语义错误：终态，不当 Key 成功
             }
             val ttfb = now() - startMs
             val usage = upstream.extractUsage(res.body)          // usage 从上游原生响应提取
             respondRaw(ctx, 200, transform.transformResponseBody(res.body))  // body 按需转协议
-            bill(token, channel, rewritten, usage, group, startMs, ttfb)
+            bill(token, channel, rewritten, usage, group, groupSource, startMs, ttfb)
             return RelayOutcome.SUCCESS
         }
 
@@ -366,14 +375,15 @@ class RelayEngine(
         // 首字节前上游失败时无法换渠道重试（会撞 ResponseAlreadyCommitted）。
         val accumulator = upstream.streamUsageAccumulator(rewritten.body)
         val streamTransformer = transform.streamTransformerFactory?.invoke()
-        return streamWithPreflight(ctx, client, request, accumulator, streamTransformer, token, channel, keyId, rewritten, group, startMs)
+        return streamWithPreflight(ctx, client, request, accumulator, streamTransformer, token, channel, keyId, rewritten, group, groupSource, startMs)
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private suspend fun streamWithPreflight(
         ctx: HttpContext, client: HttpClient, request: HttpClientRequest,
         accumulator: logic.protocol.StreamUsageAccumulator, streamTransformer: StreamTransformer?,
-        token: GatewayToken, channel: Channel, keyId: Long, rewritten: Rewritten, group: String, startMs: Long,
+        token: GatewayToken, channel: Channel, keyId: Long, rewritten: Rewritten, group: String,
+        groupSource: GroupSource, startMs: Long,
     ): RelayOutcome = kotlinx.coroutines.coroutineScope {
         // producer 捕获上游异常存入 openError（不外抛，避免 cancel scope 抢占我们的重试异常）
         var openError: Throwable? = null
@@ -443,7 +453,7 @@ class RelayEngine(
                 billed = true
                 kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                     kotlinx.coroutines.withTimeoutOrNull(5000) {
-                        bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs, status = "partial")
+                        bill(token, channel, rewritten, accumulator.usage(), group, groupSource, startMs, ttfbMs, status = "partial")
                     } ?: log.warn("relay partial-bill timed out on disconnect channel=${channel.id}")
                 }
             }
@@ -464,7 +474,7 @@ class RelayEngine(
         // 首字节后不重试渠道（外层对 PARTIAL 直接 return），只累计失败用于自动禁用/轮转。
         if (aborted) channelLogic.recordKeyFailure(keyId, "stream_truncated")
         if (!billed) {
-            bill(token, channel, rewritten, accumulator.usage(), group, startMs, ttfbMs,
+            bill(token, channel, rewritten, accumulator.usage(), group, groupSource, startMs, ttfbMs,
                  status = if (aborted) "partial" else if (accumulator.usage() != null) "ok" else "partial")
         }
         if (aborted) RelayOutcome.PARTIAL else RelayOutcome.SUCCESS
@@ -499,6 +509,7 @@ class RelayEngine(
         rewritten: Rewritten,
         usage: Usage?,
         group: String,
+        groupSource: GroupSource,
         startMs: Long,
         ttfbMs: Long?,
         status: String = if (usage != null) "ok" else "partial",
@@ -532,8 +543,11 @@ class RelayEngine(
         val cost = PricingCalc.cost(effectiveUsage, snapped.official, snapped.costDiscount)
         // 毛利倒挂：发布闸门挡的是「配错价」，折扣 >1 的渠道与倍率 <1 的用户组仍可能压穿成本，必须可观测。
         if (cost > charged) {
+            // 带上组与来源（V007）：同样是 ratio=3.0 倒挂，「谈判价配错了」与「标准价本身
+            // 配错了」是两件完全不同的事，而此前这条告警只有倍率、区分不了。
             log.warn("margin inversion sid=${s.settlementId} model=${rewritten.requestModel} " +
-                "charged=$charged cost=$cost ratio=${snapped.ratio} costDiscount=${snapped.costDiscount}")
+                "group=$group/${groupSource.name} charged=$charged cost=$cost " +
+                "ratio=${snapped.ratio} costDiscount=${snapped.costDiscount}")
         }
 
         // T3：先把 usage payload 落库转入 durable 重试态。这一步失败且随后崩溃 = C3′（usage 永久丢失），
@@ -689,7 +703,7 @@ class RelayEngine(
 
     private suspend fun recordLog(
         token: GatewayToken, channel: Channel, rewritten: Rewritten, usage: Usage,
-        group: String, startMs: Long, status: String, errorCode: String?, ttfbMs: Long?,
+        group: String, groupSource: GroupSource, startMs: Long, status: String, errorCode: String?, ttfbMs: Long?,
         charged: Long = 0, cost: Long = 0,
     ): Long = UsageLogTable.insert(
         UsageLog(
@@ -698,6 +712,12 @@ class RelayEngine(
             promptTokens = usage.promptTokens, completionTokens = usage.completionTokens,
             cacheReadTokens = usage.cacheReadTokens, cacheWriteTokens = usage.cacheWriteTokens,
             charged = charged, cost = cost,
+            // group 参数从 V001 起就在签名里，却一直没被写进 UsageLog —— 表里没有那两列，
+            // 而 Kotlin 不对未使用的函数参数报警告，于是它静默白传了很久（V007 补齐）。
+            // 这条路径记的是上游语义错误（charged=0），归因照样要写：成功行由 finalize 落、
+            // 失败行由这里落，两者进的是同一张表 —— 失败行缺归因，这张表就只能按组统计成功量，
+            // 「某个组的客户是不是在集中撞某个上游」问不出来。
+            groupCode = group, groupSource = groupSource.name,
             ttfbMs = ttfbMs, latencyMs = now() - startMs,
             stream = if (rewritten.stream) 1 else 0,
             status = status, errorCode = errorCode,

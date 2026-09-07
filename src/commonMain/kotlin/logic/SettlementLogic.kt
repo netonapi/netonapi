@@ -55,6 +55,8 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
         endpoint: String,
         reserveAmount: Long,
         pricingSnapshot: String,
+        groupCode: String?,
+        groupSource: String?,
         estimated: Boolean,
         clientIdemKey: String? = null,
         requestFingerprint: String? = null,
@@ -116,6 +118,8 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
                     status = Settlement.RESERVED,
                     reservedAmount = reserveAmount,
                     pricingSnapshot = pricingSnapshot,
+                    groupCode = groupCode,
+                    groupSource = groupSource,
                     estimated = if (estimated) 1 else 0,
                 )
             )
@@ -311,6 +315,9 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
                     promptTokens = s.promptTokens, completionTokens = s.completionTokens,
                     cacheReadTokens = s.cacheReadTokens, cacheWriteTokens = s.cacheWriteTokens,
                     charged = charged, cost = s.cost,
+                    // 归因取自结算行、不重新解析一次：worker 重放时组配置可能已经改了，
+                    // 而这笔钱是按 reserve 当时的组算的，日志必须说清**当时**的归属。
+                    groupCode = s.groupCode, groupSource = s.groupSource,
                     ttfbMs = s.ttfbMs, latencyMs = s.latencyMs, stream = s.stream,
                     status = s.outcome ?: Settlement.OUTCOME_OK,
                 )
