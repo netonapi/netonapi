@@ -3,7 +3,7 @@
 ## Status
 
 **CLOSED.** Admin CRUD shipped, and the resolver's step 2 finally has end-to-end coverage.
-What was found while closing it is listed under Follow-ups — two of those are still open.
+What was found while closing it is listed under Follow-ups — one of those is still open.
 
 ## Standard
 
@@ -94,14 +94,45 @@ What actually ran, not what was planned:
 
 ## Follow-ups
 
-Found while closing this item. The first two are open; the third shipped and is kept here as the
-record of what it took.
+Found while closing this item. The first and the third shipped and are kept here as the record of
+what each took; the second is still open.
 
-1. **`userId` existence cannot be validated.** `module-gateway` does not see `member` at compile
-   time, so `create` accepts any positive number. Typing 100001 instead of 10001 returns 200, the
-   customer keeps being priced at `default`, and **neither side reports an error**. The only
-   mitigation today is operational: read the row back via `/list` after writing. A real fix needs
-   an assembly-layer port, the same shape as `MemberGroupPort`.
+1. ~~**`userId` existence cannot be validated.**~~ **CLOSED.** The original complaint: `module-gateway`
+   does not see `member` at compile time, so `create` accepted any positive number — typing 100001
+   instead of 10001 returned 200, the customer kept being priced at `default`, and **neither side
+   reported an error**. The only mitigation was operational (read the row back via `/list`).
+
+   Shipped as `logic.MemberDirectoryPort` + the `MemberDirectory` binding point, wired in
+   `GatewayRuntimeBootstrap` and implemented in the assembly layer's `Main.kt` — the same shape as
+   `MemberGroupPort`, exactly as this item predicted. `create` now returns 400 naming the id.
+   Harness S54 holds it (five blocks). Three things learned while closing it, all of which would
+   have let a plausible-looking implementation pass:
+
+   - **"The row is there" is not "an override may hang on it".** member's self-service deletion
+     (`MemberAuthLogic.deleteOwnAccount`) sets `status = DELETED` and **does not touch the `deleted`
+     column** — its own KDoc says the record is kept so the admin console can still see that this
+     person closed their account. So `MemberTable.get(id) != null` is true for a deleted member.
+     The judgement has to be `status == NORMAL`, which is also what member's `MemberStatus` KDoc
+     demands in red ink (a negative test like `!= DELETED` silently admits whatever state gets
+     added next — that is how `DELETED` was missed in the first place). S54 block C asserts the row
+     really is retrievable with `deleted=0` before asserting the 400, so the block cannot pass by
+     accident; block D covers `DISABLED`.
+   - **Validation hangs on `create` only.** `update` and `delete` operate on a row that already
+     exists, and they must keep working after that member closes their account: deleting the
+     override is precisely what an operator wants to do then. Gating `delete` on current status
+     would make the row undeletable forever. S54 block E pins this (a hand-inserted override for a
+     deleted member still deletes with 200).
+   - **It silently ate S48's coverage, and only reading the code showed it.** Three of S48's
+     write-validation shots used `userId: 2`, which did not exist in `member_users`. They still
+     returned 400 with zero rows written — but the reason moved from "dangling/blank/overlong group
+     code" to "no such member", and the status code and row count are identical. Same shape as the
+     S28 false green. Fixed two ways: S48's seed now inserts `member_users(2)` with `status=1`
+     (explicitly, because the DDL default is 0=DISABLED while the Kotlin model default is
+     1=NORMAL), and its assertion now requires the message to name `ghost48`.
+
+   Unbound port degrades to the old behaviour (positive-number check only) with a `warn` line at
+   startup, rather than failing to boot or refusing all writes — the trade-off is recorded in
+   `MemberDirectory`'s KDoc. NanoGate's assembly layer always binds it.
 2. **Revoking loses the audit trail, and the ledger cannot fully replace it.** The delete is hard,
    so the negotiated price and the contract number in `remark` leave no trace in this table.
    `gateway_settlements.pricing_snapshot` freezes the `ratio` used per settlement, so "how much was
