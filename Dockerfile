@@ -45,11 +45,10 @@ EXPOSE 7080
 #   NETON_DATABASE__DEFAULT__URI       PostgreSQL 连接串
 #   NETON_SECURITY__JWT__SECRETKEY     管理台 JWT 签名密钥（必须改）
 #   NEWGATE_CHANNEL_KEY_ENC_KEY        渠道 Key 加密主密钥（base64 32 字节，强烈建议配置）
-# 不用 -f：`/` 上没注册任何路由（gateway 组挂在 `/` 且 requireAuth = true），带 -f 会把
-# 「进程活着、但这个路由不存在」误判成不健康，容器永远 unhealthy。这里要探的是 HTTP
-# 服务是否在应答（任何状态码都算活），与 harness/run.sh 的就绪探针同一语义。
-# TODO：真正的健康端点（含 DB/Redis 依赖探测）还没做，做了就换成它。
+# /health 是匿名端点（gateway 组其余路由都要 Bearer sk-）：进程活着且数据库能应答 SELECT 1 才 200，
+# 数据库不可达返回 503。带 -f 让 503 判成不健康——网关每个请求都要落库，DB 挂了就不该接流量。
+# compose 里 caddy / 前端对本服务的 depends_on 用 service_healthy，靠的就是这条。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -sS --max-time 3 -o /dev/null http://127.0.0.1:7080/ || exit 1
+    CMD curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:7080/health || exit 1
 
 ENTRYPOINT ["/app/newgate"]
