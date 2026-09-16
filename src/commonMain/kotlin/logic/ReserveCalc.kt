@@ -58,6 +58,7 @@ object ReserveCalc {
         val o = Json { ignoreUnknownKeys = true }.parseToJsonElement(body).jsonObject
         o["max_tokens"]?.jsonPrimitive?.intOrNull
             ?: o["max_completion_tokens"]?.jsonPrimitive?.intOrNull
+            ?: o["max_output_tokens"]?.jsonPrimitive?.intOrNull  // Responses API
             ?: (o["generationConfig"] as? JsonObject)?.get("maxOutputTokens")?.jsonPrimitive?.intOrNull
     }.getOrNull()
 }

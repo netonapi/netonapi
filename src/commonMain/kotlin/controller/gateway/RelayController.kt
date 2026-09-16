@@ -32,6 +32,11 @@ class RelayController(
     suspend fun chatCompletions(ctx: HttpContext, identity: Identity) =
         relay(ctx, identity, OpenAiAdapter, "/v1/chat/completions")
 
+    /** OpenAI Responses API：同协议透传到 OpenAI 兼容 / Azure 上游；其它类型渠道不参与路由。 */
+    @Post("/responses")
+    suspend fun responses(ctx: HttpContext, identity: Identity) =
+        relay(ctx, identity, OpenAiAdapter, "/v1/responses")
+
     @Post("/embeddings")
     suspend fun embeddings(ctx: HttpContext, identity: Identity) =
         relay(ctx, identity, OpenAiAdapter, "/v1/embeddings")

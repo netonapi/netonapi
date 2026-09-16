@@ -17,6 +17,8 @@ object AzureOpenAiAdapter : ProtocolAdapter by OpenAiAdapter {
     )
 
     fun path(inboundPath: String, deployment: String, apiVersion: String?): String {
+        // Responses API 只在 Azure 的 v1 面上有，部署名走 body 的 model，路径不带 deployments
+        if (inboundPath == "/v1/responses") return "/openai/v1/responses?api-version=preview"
         val op = when {
             inboundPath.endsWith("/embeddings") -> "/embeddings"
             inboundPath == "/v1/completions" -> "/completions"

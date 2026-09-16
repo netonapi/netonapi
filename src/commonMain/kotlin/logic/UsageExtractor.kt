@@ -12,11 +12,15 @@ object UsageExtractor {
         return fromUsageObject(obj["usage"] as? JsonObject ?: return null)
     }
 
+    /**
+     * 两种 OpenAI usage 形状：Chat Completions 的 prompt_/completion_tokens，
+     * Responses API 的 input_/output_tokens（缓存命中在 input_tokens_details.cached_tokens）。
+     */
     fun fromUsageObject(usage: JsonObject): Usage {
-        val details = usage["prompt_tokens_details"] as? JsonObject
+        val details = (usage["prompt_tokens_details"] ?: usage["input_tokens_details"]) as? JsonObject
         return Usage(
-            promptTokens = usage["prompt_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            completionTokens = usage["completion_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
+            promptTokens = (usage["prompt_tokens"] ?: usage["input_tokens"])?.jsonPrimitive?.intOrNull ?: 0,
+            completionTokens = (usage["completion_tokens"] ?: usage["output_tokens"])?.jsonPrimitive?.intOrNull ?: 0,
             cacheReadTokens = details?.get("cached_tokens")?.jsonPrimitive?.intOrNull ?: 0,
             cacheWriteTokens = 0,
         )
@@ -40,6 +44,16 @@ class SseUsageAccumulator(private val expectedChoices: Int = 1) {
             if (data.isEmpty()) continue
             if (data == "[DONE]") { doneSeen = true; continue }
             val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
+            // Responses API 的流：终态事件 response.completed / incomplete / failed 带完整 usage；error 事件也是终态
+            val type = obj["type"]?.jsonPrimitive?.contentOrNull
+            if (type != null && type.startsWith("response.")) {
+                if (type == "response.completed" || type == "response.incomplete" || type == "response.failed") {
+                    ((obj["response"] as? JsonObject)?.get("usage") as? JsonObject)?.let { last = UsageExtractor.fromUsageObject(it) }
+                    doneSeen = true
+                }
+                continue
+            }
+            if (type == "error") { doneSeen = true; continue }
             (obj["usage"] as? JsonObject)?.let { last = UsageExtractor.fromUsageObject(it) }
             (obj["choices"] as? JsonArray)?.forEach { c ->
                 val co = c as? JsonObject ?: return@forEach

@@ -210,6 +210,11 @@ class RelayEngine(
                 lastError = "unknown channel type ${channel.type}"
                 return@repeat
             }
+            // Responses API 没有到 hub 的转码（它的 input/output 结构与 Chat 不同构），只能打 OpenAI 系上游
+            if (path == RESPONSES_PATH && upstream.id != "openai") {
+                lastError = "channel ${channel.id} (${channel.type}) does not serve /v1/responses"
+                return@repeat
+            }
             val transform = buildTransform(inbound, upstream, rawBody, channel, path)
             val key = channelLogic.pickKey(channel.id)
             if (key == null) { lastError = "channel ${channel.id} has no available key"; return@repeat }
@@ -278,7 +283,9 @@ class RelayEngine(
     ): RelayTransform {
         // 同协议：模型映射 + 协议原生改写，响应恒等透传
         if (inbound.id == upstream.id) {
-            val rw = upstream.rewrite(rawBody, channel)
+            // Responses API 不认 stream_options（会 400），它的流本来就在终态事件里带 usage
+            val rw = if (path == RESPONSES_PATH) RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
+                     else upstream.rewrite(rawBody, channel)
             val up = upstreamPathFor(upstream, channel, path, rw.upstreamModel, rw.stream)
             // 映射过模型名的，响应里的 model 改回客户端请求的名字（见 ModelRename）；没映射的保持恒等透传
             val renamed = rw.upstreamModel != rw.requestModel
@@ -758,6 +765,7 @@ class RelayEngine(
     private fun now(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 
     companion object {
+        const val RESPONSES_PATH = "/v1/responses"
         /** 渠道类型 → 上游协议适配器；null = 未知类型（渠道配置错了，不当路由候选）。 */
         fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {
             "openai_compatible" -> OpenAiAdapter
