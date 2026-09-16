@@ -59,6 +59,18 @@ class TokenLogic(private val log: Logger) {
 
     suspend fun delete(id: Long) { GatewayTokenTable.destroy(id) }
 
+    /**
+     * 用户自助可改的字段。groupOverride / status / userId / 三个限流上限不在其列：计价组是运营给的
+     * （S29 守着这条），限流上限由运营设定、用户不能自行放宽，状态走独立接口，归属永远不变。
+     */
+    suspend fun updateSelf(id: Long, name: String, quotaBudget: Long?, expiresAt: Long?, allowedModels: String, allowedIps: String) {
+        val current = GatewayTokenTable.get(id) ?: return
+        GatewayTokenTable.update(current.copy(
+            name = name, quotaBudget = quotaBudget, expiresAt = expiresAt,
+            allowedModels = allowedModels, allowedIps = allowedIps,
+        ))
+    }
+
     companion object {
         private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 

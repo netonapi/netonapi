@@ -28,7 +28,12 @@ data class MyBalanceVO(
  * 否则任何人都能翻别人的账单。
  */
 @Controller("/gateway/usage")
-class MyUsageController(private val quotaLogic: QuotaLogic) {
+class MyUsageController(private val quotaLogic: QuotaLogic, private val statsLogic: logic.UsageStatsLogic) {
+
+    /** 用量汇总：今日 / 近 N 天、按日、按模型、按 Key。 */
+    @Get("/stats")
+    suspend fun stats(identity: Identity, @Query days: Int = 7): logic.MyUsageStatsVO =
+        statsLogic.forUser(identity.id.toLong(), days)
 
     @Get("/balance")
     suspend fun balance(identity: Identity): MyBalanceVO {

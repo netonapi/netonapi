@@ -18,6 +18,17 @@ data class CreateMyTokenRequest(
     val allowedIps: String = "",
 )
 
+/** 与 [CreateMyTokenRequest] 同一组字段 + id；刻意没有 groupOverride / status / 限流上限。 */
+@Serializable
+data class UpdateMyTokenRequest(
+    val id: Long,
+    val name: String,
+    val quotaBudget: Long? = null,
+    val expiresAt: Long? = null,
+    val allowedModels: String = "",
+    val allowedIps: String = "",
+)
+
 @Serializable
 data class MyTokenVO(
     val id: Long,
@@ -64,8 +75,7 @@ class MyTokenController(private val tokenLogic: TokenLogic) {
     /** 创建后明文只在本次响应出现一次（后端仅存哈希）。 */
     @Post("/create")
     suspend fun create(identity: Identity, @Body request: CreateMyTokenRequest): IssuedMyTokenVO {
-        if (request.name.isBlank()) invalid("name", "name is required")
-        request.quotaBudget?.let { if (it <= 0) invalid("quotaBudget", "must be positive") }
+        validate(request.name, request.quotaBudget, request.expiresAt)
         val issued = tokenLogic.issue(
             userId = identity.id.toLong(),
             name = request.name.trim().take(128),
@@ -76,6 +86,23 @@ class MyTokenController(private val tokenLogic: TokenLogic) {
             // 限流上限由运营在管理台设定，用户不能自行放宽
         )
         return IssuedMyTokenVO(issued.record.id, issued.plaintext, issued.record.keyDisplay)
+    }
+
+    @Put("/update")
+    suspend fun update(identity: Identity, @Body request: UpdateMyTokenRequest) {
+        requireOwned(identity, request.id)
+        validate(request.name, request.quotaBudget, request.expiresAt)
+        tokenLogic.updateSelf(
+            id = request.id, name = request.name.trim().take(128),
+            quotaBudget = request.quotaBudget, expiresAt = request.expiresAt,
+            allowedModels = request.allowedModels.trim(), allowedIps = request.allowedIps.trim(),
+        )
+    }
+
+    private fun validate(name: String, quotaBudget: Long?, expiresAt: Long?) {
+        if (name.isBlank()) invalid("name", "name is required")
+        quotaBudget?.let { if (it <= 0) invalid("quotaBudget", "must be positive") }
+        expiresAt?.let { if (it <= TokenLogic.nowMillis()) invalid("expiresAt", "must be in the future") }
     }
 
     @Put("/update-status")
