@@ -55,6 +55,7 @@ class ChannelController(
             proxyUrl = request.proxyUrl, apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
             remark = request.remark,
         ))
+        request.status?.let { if (it != current.status) channelLogic.updateStatus(request.id, it) }
     }
 
     @Put("/update-status")

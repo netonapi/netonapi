@@ -41,6 +41,8 @@ data class UpdateChannelRequest(
     val apiVersion: String? = null,
     val costDiscount: String = "1.0",
     val remark: String? = null,
+    /** 表单里的状态列一起提交；null = 不动。走 updateStatus 以复用其副作用（恢复挂起等）。 */
+    val status: Int? = null,
 )
 
 @Serializable

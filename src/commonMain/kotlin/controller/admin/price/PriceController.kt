@@ -15,6 +15,8 @@ data class SavePriceRequest(
     val cacheReadPrice: String = "0",
     val cacheWritePrice: String = "0",
     val perRequestPrice: Long? = null,
+    /** 按 token 计价的模型没配它、请求又不带 max_tokens 时会被拒（output_cap_required）。 */
+    val defaultMaxOutputTokens: Int? = null,
     val saleOverride: String? = null,
 )
 
@@ -59,7 +61,8 @@ class PriceController {
             model = price.model,
             inputPrice = price.inputPrice, outputPrice = price.outputPrice,
             cacheReadPrice = price.cacheReadPrice, cacheWritePrice = price.cacheWritePrice,
-            perRequestPrice = price.perRequestPrice, saleOverride = price.saleOverride,
+            perRequestPrice = price.perRequestPrice, defaultMaxOutputTokens = price.defaultMaxOutputTokens,
+            saleOverride = price.saleOverride,
         ))
     }
 
@@ -91,6 +94,7 @@ class PriceController {
                         inputPrice = price.inputPrice, outputPrice = price.outputPrice,
                         cacheReadPrice = price.cacheReadPrice, cacheWritePrice = price.cacheWritePrice,
                         perRequestPrice = price.perRequestPrice ?: current.perRequestPrice,
+                        defaultMaxOutputTokens = price.defaultMaxOutputTokens ?: current.defaultMaxOutputTokens,
                         saleOverride = price.saleOverride ?: current.saleOverride,
                         source = "import",
                     ))
@@ -108,6 +112,7 @@ class PriceController {
         cacheReadPrice = logic.PricingCalc.requirePrice(request.cacheReadPrice, "cacheReadPrice"),
         cacheWritePrice = logic.PricingCalc.requirePrice(request.cacheWritePrice, "cacheWritePrice"),
         perRequestPrice = request.perRequestPrice, saleOverride = request.saleOverride,
+        defaultMaxOutputTokens = request.defaultMaxOutputTokens?.takeIf { it > 0 },
     )
 
     @Delete("/delete/{id}")
