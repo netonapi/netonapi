@@ -261,6 +261,15 @@ jobs:
           PGHOST: localhost
         run: bash harness/run.sh
 
+      # Outbox store contract against the real PostgreSQL service above（上游 c365c14 的
+      # macOS+brew job 移植为本 job 的一步：同一 PG 服务、同一 checkout，不另起 runner）。
+      # postgresContractTest 需要一个有 CREATEDB 的角色；官方镜像的 POSTGRES_USER 是超级用户。
+      - name: Outbox store contract (real PostgreSQL)
+        working-directory: NewGate/newgate
+        env:
+          EVENT_DB_URI: postgresql://newgate:newgate@localhost:5432/postgres
+        run: ./gradlew :module-infra:postgresContractTest --no-daemon
+
       - name: Upload harness logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

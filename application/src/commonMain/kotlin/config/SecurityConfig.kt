@@ -64,7 +64,16 @@ class SecurityConfig : NetonConfigurer<SecurityBuilder> {
             headerName = jwtConfig.headerName,
             tokenPrefix = jwtConfig.tokenPrefix,
         )
-        target.registerAuthenticator(CoreAuthenticatorBridge(dispatcher))
+        // bridge 顺带把 HttpOnly 会话 Cookie 补成 Authorization 头（浏览器端后台用），
+        // 显式 Authorization 优先，移动端与服务间调用行为不变。
+        target.registerAuthenticator(
+            CoreAuthenticatorBridge(
+                delegate = dispatcher,
+                headerName = jwtConfig.headerName,
+                tokenPrefix = jwtConfig.tokenPrefix,
+                sessionCookieName = config.SessionCookie.name(ctx),
+            ),
+        )
 
         target.bindDefaultGuard()
         // super_admin 角色拥有所有权限

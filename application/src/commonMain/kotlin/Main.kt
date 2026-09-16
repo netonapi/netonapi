@@ -289,7 +289,9 @@ fun main(args: Array<String>) {
         // @RateLimit 注解标注的接口将自动生效
         routing { }
 
-        modules(*GeneratedApplicationModules.modules.toTypedArray())
+        // 业务模块 + 应用自身的 @Controller（如 HomeController）；后者由 KSP 生成的
+        // GeneratedInitializer 注册，必须显式传入，框架不再隐式调用它。
+        modules(*GeneratedApplicationModules.modules.toTypedArray(), neton.core.generated.GeneratedInitializer)
     }
 }
 

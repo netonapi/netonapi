@@ -28,6 +28,9 @@ import neton.security.identity.AuthenticationException
  */
 public class CoreAuthenticatorBridge(
     private val delegate: SecurityAuthenticator,
+    private val headerName: String = "Authorization",
+    private val tokenPrefix: String = "Bearer ",
+    private val sessionCookieName: String = "neton_session",
 ) : CoreAuthenticator {
 
     override val name: String = delegate.name
@@ -36,7 +39,7 @@ public class CoreAuthenticatorBridge(
         val sec = object : SecurityRequestContext {
             override val path = context.path
             override val method = context.method
-            override val headers = context.headers
+            override val headers = withCookieSession(context.headers)
             override val routeGroup = context.routeGroup
             override fun getQueryParameter(name: String): String? = null
             override fun getQueryParameters(): Map<String, List<String>> = emptyMap()
@@ -49,5 +52,37 @@ public class CoreAuthenticatorBridge(
         } catch (_: AuthenticationException) {
             null
         }
+    }
+
+    /**
+     * 没有 `Authorization` 头但带了会话 Cookie 时，把 Cookie 里的 token 补成那个头。
+     *
+     * 后台是纯前端应用，token 存 localStorage 意味着一次 XSS 就能带走整个会话；
+     * 改用 HttpOnly Cookie 后脚本读不到，但浏览器只会把它放在 `Cookie` 头里。
+     *
+     * 补在这里而不是改框架的 [neton.security.jwt.JwtAuthenticator]：后者按
+     * Neton-JWT-Authenticator-Spec-v1 冻结成「只读某个请求头」，凭据放哪儿是应用层的
+     * 传输选择，不该反向去改框架契约。放在 bridge 上还有个好处 —— legacy 与 unified
+     * 两条验证链都在 delegate 之下，两边同时生效。
+     *
+     * 显式的 `Authorization` 头**优先**：移动端、服务间调用和 curl 的行为完全不变。
+     */
+    private fun withCookieSession(headers: Map<String, String>): Map<String, String> {
+        if (headers.keys.any { it.equals(headerName, ignoreCase = true) }) return headers
+        val cookieHeader = headers.entries.firstOrNull { it.key.equals("Cookie", ignoreCase = true) }?.value
+        val token = readCookie(cookieHeader, sessionCookieName) ?: return headers
+        return headers + (headerName to "$tokenPrefix$token")
+    }
+
+    private fun readCookie(cookieHeader: String?, name: String): String? {
+        if (cookieHeader.isNullOrBlank()) return null
+        for (part in cookieHeader.split(';')) {
+            val pair = part.trim()
+            val eq = pair.indexOf('=')
+            if (eq <= 0) continue
+            if (pair.substring(0, eq).trim() != name) continue
+            return pair.substring(eq + 1).trim().takeIf { it.isNotEmpty() }
+        }
+        return null
     }
 }
