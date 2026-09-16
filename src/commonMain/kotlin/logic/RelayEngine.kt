@@ -267,13 +267,6 @@ class RelayEngine(
     /** 单次转发结果：SUCCESS=完整成功；PARTIAL=已响应但非完整成功（中断/上游语义错误），不改 Key 状态。 */
     private enum class RelayOutcome { SUCCESS, PARTIAL }
 
-    private fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {
-        "openai_compatible" -> OpenAiAdapter
-        "azure_openai" -> AzureOpenAiAdapter
-        "anthropic" -> AnthropicAdapter
-        "gemini" -> GeminiAdapter
-        else -> null
-    }
 
     /**
      * 组装转发变换（枢纽模型：OpenAI ChatCompletions 为内部规范）。
@@ -522,14 +515,6 @@ class RelayEngine(
 
     /** 上游端点路径：openai 保留入站路径（含 embeddings），anthropic 固定 /v1/messages，
      *  gemini 用上游模型名 + action 重建。 */
-    private fun upstreamPathFor(upstream: ProtocolAdapter, channel: Channel, inboundPath: String, upstreamModel: String, stream: Boolean): String =
-        when {
-            upstream === AzureOpenAiAdapter -> AzureOpenAiAdapter.path(inboundPath, upstreamModel, channel.apiVersion)
-            upstream.id == "anthropic" -> "/v1/messages"
-            upstream.id == "gemini" -> "/v1beta/models/$upstreamModel:" + if (stream) "streamGenerateContent?alt=sse" else "generateContent"
-            else -> if (inboundPath.startsWith("/v1/")) inboundPath else "/v1/chat/completions"
-        }
-
     interface StreamTransformer {
         fun feed(chunk: String): String
         fun finish(): String
@@ -773,6 +758,23 @@ class RelayEngine(
     private fun now(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 
     companion object {
+        /** 渠道类型 → 上游协议适配器；null = 未知类型（渠道配置错了，不当路由候选）。 */
+        fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {
+            "openai_compatible" -> OpenAiAdapter
+            "azure_openai" -> AzureOpenAiAdapter
+            "anthropic" -> AnthropicAdapter
+            "gemini" -> GeminiAdapter
+            else -> null
+        }
+
+    fun upstreamPathFor(upstream: ProtocolAdapter, channel: Channel, inboundPath: String, upstreamModel: String, stream: Boolean): String =
+        when {
+            upstream === AzureOpenAiAdapter -> AzureOpenAiAdapter.path(inboundPath, upstreamModel, channel.apiVersion)
+            upstream.id == "anthropic" -> "/v1/messages"
+            upstream.id == "gemini" -> "/v1beta/models/$upstreamModel:" + if (stream) "streamGenerateContent?alt=sse" else "generateContent"
+            else -> if (inboundPath.startsWith("/v1/")) inboundPath else "/v1/chat/completions"
+        }
+
         /** JSON 解析用的哑渠道（rewrite 首过只取 model/stream）。 */
         private val DUMMY = Channel(id = 0, name = "", type = "", baseUrl = "")
 

@@ -55,3 +55,6 @@ data class ChannelKeyVO(
 
 @Serializable
 data class AddKeyRequest(val apiKey: String)
+
+@Serializable
+data class ProbeChannelRequest(val model: String? = null)

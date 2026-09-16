@@ -10,6 +10,7 @@ import neton.logging.Logger
 class ChannelController(
     private val log: Logger,
     private val channelLogic: ChannelLogic,
+    private val probeLogic: logic.ChannelProbeLogic,
 ) {
 
     @Get("/list")
@@ -65,6 +66,14 @@ class ChannelController(
     @Put("/revive/{id}")
     @Permission("gateway:channel:update")
     suspend fun revive(@PathVariable id: Long) = channelLogic.reviveChannel(id)
+
+    /** 连通性探测：按渠道自己的协议/代理/Key 打一条最小请求，不计费不记日志不动 Key 状态。 */
+    @Post("/probe/{id}")
+    @Permission("gateway:channel:update")
+    suspend fun probe(@PathVariable id: Long, @Body request: ProbeChannelRequest): logic.ChannelProbeResult {
+        val channel = channelLogic.get(id) ?: throw IllegalArgumentException("gateway channel id=$id not found")
+        return probeLogic.probe(channel, request.model)
+    }
 
     @Delete("/delete/{id}")
     @Permission("gateway:channel:delete")
