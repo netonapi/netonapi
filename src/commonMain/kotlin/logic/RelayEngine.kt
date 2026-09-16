@@ -210,9 +210,9 @@ class RelayEngine(
                 lastError = "unknown channel type ${channel.type}"
                 return@repeat
             }
-            // Responses API 没有到 hub 的转码（它的 input/output 结构与 Chat 不同构），只能打 OpenAI 系上游
-            if (path == RESPONSES_PATH && upstream.id != "openai") {
-                lastError = "channel ${channel.id} (${channel.type}) does not serve /v1/responses"
+            // Responses / Images 没有到 hub 的转码（结构与 Chat 不同构），只能打 OpenAI 系上游
+            if (path in OPENAI_ONLY_PATHS && upstream.id != "openai") {
+                lastError = "channel ${channel.id} (${channel.type}) does not serve $path"
                 return@repeat
             }
             val transform = buildTransform(inbound, upstream, rawBody, channel, path)
@@ -283,8 +283,8 @@ class RelayEngine(
     ): RelayTransform {
         // 同协议：模型映射 + 协议原生改写，响应恒等透传
         if (inbound.id == upstream.id) {
-            // Responses API 不认 stream_options（会 400），它的流本来就在终态事件里带 usage
-            val rw = if (path == RESPONSES_PATH) RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
+            // Responses / Images 不认 stream_options（会 400）；Responses 的流本来就在终态事件里带 usage
+            val rw = if (path in OPENAI_ONLY_PATHS) RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
                      else upstream.rewrite(rawBody, channel)
             val up = upstreamPathFor(upstream, channel, path, rw.upstreamModel, rw.stream)
             // 映射过模型名的，响应里的 model 改回客户端请求的名字（见 ModelRename）；没映射的保持恒等透传
@@ -536,7 +536,8 @@ class RelayEngine(
         groupSource: GroupSource,
         startMs: Long,
         ttfbMs: Long?,
-        status: String = if (usage != null) "ok" else "partial",
+        /** null = 由 bill 自己判定（非流式 2xx 走这条）；流式调用方按 terminalSeen/aborted 显式给。 */
+        status: String? = null,
     ) {
         val s = settlement ?: run {
             log.error("relay bill without reservation model=${rewritten.requestModel}（不应发生）")
@@ -561,6 +562,12 @@ class RelayEngine(
             return
         }
         val effectiveUsage = usage ?: Usage()
+        // 按次计价的模型（图片生成等）响应里本来就没有 usage：非流式 2xx + 完整 body 就是完整成功，
+        // 不能因为「没拿到 usage」记成 partial —— 那会把每一张图都算成半截请求、Key 永远清不了零。
+        // 只对没显式给 status 的调用（非流式）生效：流式被截断时调用方明确传 partial，按次计价也不能洗白。
+        val perRequest = snapped.sale.perRequestPrice != null
+        val outcome = status ?: if (usage != null || perRequest) "ok" else "partial"
+        val terminal = usage != null || (status == null && perRequest)
         // 收入 = 售价轨 × 分组倍率；成本 = 官方价（成本轨）× 渠道折扣。四要素全部取自快照，
         // 结算时不重查任何定价表——改价、改折扣、改倍率只影响后续请求，不影响在途与重放。
         val charged = PricingCalc.charge(effectiveUsage, snapped.sale, snapped.ratio)
@@ -584,7 +591,7 @@ class RelayEngine(
                         settlementId = s.settlementId,
                         usageJson = usageJson(effectiveUsage),
                         charged = charged, cost = cost,
-                        outcome = status, terminalSeen = usage != null,
+                        outcome = outcome, terminalSeen = terminal,
                         channelId = channel.id,
                         upstreamModel = rewritten.upstreamModel,
                         ttfbMs = ttfbMs, latencyMs = now() - startMs,
@@ -766,6 +773,8 @@ class RelayEngine(
 
     companion object {
         const val RESPONSES_PATH = "/v1/responses"
+        const val IMAGES_PATH = "/v1/images/generations"
+        val OPENAI_ONLY_PATHS = setOf(RESPONSES_PATH, IMAGES_PATH)
         /** 渠道类型 → 上游协议适配器；null = 未知类型（渠道配置错了，不当路由候选）。 */
         fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {
             "openai_compatible" -> OpenAiAdapter

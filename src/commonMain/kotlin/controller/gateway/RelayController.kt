@@ -37,6 +37,11 @@ class RelayController(
     suspend fun responses(ctx: HttpContext, identity: Identity) =
         relay(ctx, identity, OpenAiAdapter, "/v1/responses")
 
+    /** 图片生成：同协议透传到 OpenAI 兼容 / Azure 上游；渠道要声明 images 能力。 */
+    @Post("/images/generations")
+    suspend fun images(ctx: HttpContext, identity: Identity) =
+        relay(ctx, identity, OpenAiAdapter, "/v1/images/generations")
+
     @Post("/embeddings")
     suspend fun embeddings(ctx: HttpContext, identity: Identity) =
         relay(ctx, identity, OpenAiAdapter, "/v1/embeddings")

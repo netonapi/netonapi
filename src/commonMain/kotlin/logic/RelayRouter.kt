@@ -13,7 +13,10 @@ object RelayRouter {
     const val CAP_EMBEDDINGS = "embeddings"
 
     /** 已知能力全集：管理端写渠道时按它校验——拼错的能力名等于悄悄关掉一条端点。 */
-    val KNOWN_CAPABILITIES = setOf(CAP_CHAT, CAP_EMBEDDINGS)
+    /** 图片生成：/v1/images/generations。按次计价的模型（DALL·E）没有 usage，靠定价里的「按次」收费。 */
+    const val CAP_IMAGES = "images"
+
+    val KNOWN_CAPABILITIES = setOf(CAP_CHAT, CAP_EMBEDDINGS, CAP_IMAGES)
 
     /**
      * 入站端点 → 需要的上游能力。只看模型清单会把 embeddings 路由到只会 chat 的渠道，
@@ -21,6 +24,7 @@ object RelayRouter {
      */
     fun capabilityFor(path: String): String = when {
         path == "/v1/embeddings" -> CAP_EMBEDDINGS
+        path == "/v1/images/generations" -> CAP_IMAGES
         // Gemini 原生面：/v1beta/models/{model}:{action}，能力由 action 决定
         path.startsWith("/v1beta/models/") ->
             if (path.contains(":embedContent") || path.contains(":batchEmbedContents")) CAP_EMBEDDINGS

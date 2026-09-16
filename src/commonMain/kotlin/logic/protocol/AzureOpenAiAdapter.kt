@@ -21,6 +21,7 @@ object AzureOpenAiAdapter : ProtocolAdapter by OpenAiAdapter {
         if (inboundPath == "/v1/responses") return "/openai/v1/responses?api-version=preview"
         val op = when {
             inboundPath.endsWith("/embeddings") -> "/embeddings"
+            inboundPath.endsWith("/images/generations") -> "/images/generations"
             inboundPath == "/v1/completions" -> "/completions"
             else -> "/chat/completions"
         }
