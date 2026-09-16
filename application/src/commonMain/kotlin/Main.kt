@@ -84,6 +84,16 @@ fun main(args: Array<String>) {
         // 这里只负责关掉应用自己持有的那一个。
         bind(HttpClientProvider::class, HttpClientProvider { HttpClient.create(it) })
 
+        // 会员注册策略：member 的默认策略只开短信注册（PHONE_SMS），而 NanoGate 的控制台是
+        // 用户名 + 密码自助注册（/register），不绑这条就会 REGISTER_MODE_DISABLED。短信保留为可选。
+        bind(
+            port.MemberAuthPolicy::class,
+            port.MemberAuthPolicy(
+                registerModes = listOf(port.MemberAuthPolicy.MODE_USERNAME_PASSWORD, port.MemberAuthPolicy.MODE_PHONE_SMS),
+                defaultRegisterMode = port.MemberAuthPolicy.MODE_USERNAME_PASSWORD,
+            ),
+        )
+
         // ====== 网关额度充值下单（module-gateway 的 SPI 由装配层实现）======
         // 与下面的 MemberGroupPort 同理：gateway 编译期对 payment 零依赖，payment 也不认识
         // 网关额度语义（它自己的 WalletRechargePaidListener 只管 `wallet:recharge:`）。
