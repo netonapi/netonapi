@@ -75,6 +75,14 @@ class ChannelController(
         return probeLogic.probe(channel, request.model)
     }
 
+    /** 拉取上游模型清单（不写库；由前端决定是否并入渠道的 models）。 */
+    @Post("/models/{id}")
+    @Permission("gateway:channel:update")
+    suspend fun upstreamModels(@PathVariable id: Long): logic.ChannelModelsResult {
+        val channel = channelLogic.get(id) ?: throw IllegalArgumentException("gateway channel id=$id not found")
+        return probeLogic.listModels(channel)
+    }
+
     @Delete("/delete/{id}")
     @Permission("gateway:channel:delete")
     suspend fun delete(@PathVariable id: Long) = channelLogic.delete(id)

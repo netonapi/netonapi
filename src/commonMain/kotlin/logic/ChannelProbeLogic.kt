@@ -1,11 +1,23 @@
 package logic
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import logic.protocol.ProtocolCodecs
 import model.Channel
 import neton.core.http.HttpHeaders
 import neton.http.client.*
 import neton.logging.Logger
+
+@Serializable
+data class ChannelModelsResult(
+    val ok: Boolean,
+    val status: Int? = null,
+    val models: List<String> = emptyList(),
+    val error: String? = null,
+)
 
 @Serializable
 data class ChannelProbeResult(
@@ -73,4 +85,48 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
             )
         }
     }
+
+    /**
+     * 拉取上游的模型清单，给运营填「模型清单」用：四种类型各有各的列表端点与字段，
+     * 这里统一成裸的模型 id 列表。Azure 列的是 deployment 名（那正是映射目标要填的东西）。
+     * 拉不到不算错误配置 —— 很多 OpenAI 兼容站根本不实现 /v1/models，此时返回 ok=false 与上游原话。
+     */
+    suspend fun listModels(channel: Channel): ChannelModelsResult {
+        val upstream = RelayEngine.adapterForChannel(channel.type)
+            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "未知渠道类型 ${channel.type}")
+        val key = channelLogic.pickKey(channel.id)
+            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "渠道没有可用的 Key")
+        val base = channel.baseUrl.trimEnd('/')
+        val (url, extract) = when (channel.type) {
+            "azure_openai" -> {
+                val v = channel.apiVersion?.trim().takeUnless { it.isNullOrEmpty() } ?: "2023-03-15-preview"
+                "$base/openai/deployments?api-version=$v" to ::openAiIds
+            }
+            "gemini" -> "$base/v1beta/models?pageSize=1000" to ::geminiNames
+            else -> "$base/v1/models" to ::openAiIds
+        }
+        val headers = upstream.upstreamHeaders(key.apiKey).filterKeys { !it.equals("Content-Type", ignoreCase = true) }
+        val request = HttpClientRequest(method = HttpClientMethod.Get, url = url, headers = HttpHeaders.from(headers))
+        return try {
+            val res = RelayEngine.clientFor(channel).request(request)
+            if (res.statusCode !in 200..299) {
+                ChannelModelsResult(ok = false, status = res.statusCode, error = res.body.take(500))
+            } else {
+                val ids = runCatching { extract(res.body) }.getOrNull()
+                if (ids == null) ChannelModelsResult(ok = false, status = res.statusCode, error = "无法解析模型列表：" + res.body.take(200))
+                else ChannelModelsResult(ok = true, status = res.statusCode, models = ids.distinct().sorted())
+            }
+        } catch (e: HttpClientException) {
+            val err = e.error
+            ChannelModelsResult(ok = false, status = (err as? HttpClientError.Http)?.statusCode, error = ((err as? HttpClientError.Http)?.body ?: err.toString()).take(500))
+        }
+    }
+
+    private fun openAiIds(body: String): List<String> =
+        kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject["data"]!!.jsonArray
+            .mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.contentOrNull }
+
+    private fun geminiNames(body: String): List<String> =
+        kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject["models"]!!.jsonArray
+            .mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull?.removePrefix("models/") }
 }
