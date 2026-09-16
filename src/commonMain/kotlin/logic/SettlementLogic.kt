@@ -342,7 +342,21 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
                 "UPDATE gateway_settlements SET status = :fin, outcome = :o WHERE settlement_id = :sid AND status = :pending",
                 mapOf("fin" to Settlement.FINALIZED, "o" to outcome, "sid" to settlementId, "pending" to Settlement.FINALIZE_PENDING),
             )
-            if (n == 0L) TransitionResult.Conflict("race") else TransitionResult.Applied
+            if (n == 0L) TransitionResult.Conflict("race") else {
+                // 每次中转一条结构化结算摘要——运营看收入/成本曲线、渠道故障率、单用户消耗的唯一来源
+                // （DEPLOY.md「可观测性」）。worker 重放的结算同样经过这里，与账本一一对应。
+                // 打在最后一条 UPDATE 之后、事务提交之前：提交失败会抛出并由调用方按 error 记录。
+                log.info("settlement.finalized", mapOf(
+                    "sid" to settlementId, "userId" to s.userId, "tokenId" to s.tokenId, "channelId" to s.channelId,
+                    "model" to s.requestModel, "upstreamModel" to s.upstreamModel, "group" to s.groupCode,
+                    "promptTokens" to s.promptTokens, "completionTokens" to s.completionTokens,
+                    "cacheReadTokens" to s.cacheReadTokens, "cacheWriteTokens" to s.cacheWriteTokens,
+                    "charged" to charged, "cost" to s.cost, "reserved" to r,
+                    "ttfbMs" to s.ttfbMs, "latencyMs" to s.latencyMs, "stream" to s.stream,
+                    "outcome" to outcome, "estimated" to s.estimated,
+                ))
+                TransitionResult.Applied
+            }
         }
     }
 
@@ -378,7 +392,14 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
                 "UPDATE gateway_settlements SET status = :rel WHERE settlement_id = :sid AND status = :pending",
                 mapOf("rel" to Settlement.RELEASED, "sid" to settlementId, "pending" to Settlement.RELEASE_PENDING),
             )
-            if (n == 0L) TransitionResult.Conflict("race") else TransitionResult.Applied
+            if (n == 0L) TransitionResult.Conflict("race") else {
+                // 预留被释放（首字节前失败 / 取消 / TTL）：不计费，但要能看到"占了多少、为何没成"
+                log.info("settlement.released", mapOf(
+                    "sid" to settlementId, "userId" to s.userId, "tokenId" to s.tokenId,
+                    "model" to s.requestModel, "reserved" to r, "outcome" to s.outcome,
+                ))
+                TransitionResult.Applied
+            }
         }
     }
 
