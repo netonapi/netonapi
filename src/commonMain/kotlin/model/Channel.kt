@@ -34,6 +34,8 @@ data class Channel(
     /** 流式块间空闲超时 ms */
     val idleTimeoutMs: Long = 90_000,
     val proxyUrl: String? = null,
+    /** Azure OpenAI 的 api-version（V008）；其它类型忽略。空 = 代码默认值。 */
+    val apiVersion: String? = null,
     /** 429 冷却截止（epoch ms）：此刻之前该渠道不参与候选，避免立即重试被限流的上游 */
     val cooldownUntil: Long = 0,
     /** 成本折扣（如 "0.6" = 官方价 6 折），DECIMAL 字符串，毛利核算用（spec 决策 B2） */

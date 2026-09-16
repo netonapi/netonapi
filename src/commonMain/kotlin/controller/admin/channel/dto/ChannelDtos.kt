@@ -16,6 +16,7 @@ data class CreateChannelRequest(
     val priority: Int = 0,
     val weight: Int = 1,
     val proxyUrl: String? = null,
+    val apiVersion: String? = null,
     val costDiscount: String = "1.0",
     val remark: String? = null,
     /** 初始 Key 列表（可批量粘贴） */
@@ -37,6 +38,7 @@ data class UpdateChannelRequest(
     val priority: Int = 0,
     val weight: Int = 1,
     val proxyUrl: String? = null,
+    val apiVersion: String? = null,
     val costDiscount: String = "1.0",
     val remark: String? = null,
 )

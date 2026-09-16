@@ -11,6 +11,8 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import model.Channel
 import model.GatewayToken
@@ -24,6 +26,8 @@ import table.ModelPriceTable
 import table.UsageLogTable
 import logic.protocol.ProtocolAdapter
 import logic.protocol.OpenAiAdapter
+import logic.protocol.AzureOpenAiAdapter
+import logic.protocol.ModelRename
 import logic.protocol.AnthropicAdapter
 import logic.protocol.GeminiAdapter
 import logic.protocol.ProtocolCodecs
@@ -232,7 +236,7 @@ class RelayEngine(
                     // 上游认证错（401/403）归咎于 Key；其它 4xx 是客户端问题，不计 Key 失败
                     if (err.statusCode == 401 || err.statusCode == 403) channelLogic.recordKeyFailure(key.id, "upstream_${err.statusCode}")
                     recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
-                    respondRaw(ctx, err.statusCode, err.body ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
+                    respondRaw(ctx, err.statusCode, err.body?.let { transform.errorBodyFor(it) } ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
                     return
                 }
                 lastError = err.toString().replace("\n", " ").take(160)
@@ -264,7 +268,8 @@ class RelayEngine(
     private enum class RelayOutcome { SUCCESS, PARTIAL }
 
     private fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {
-        "openai_compatible", "azure_openai" -> OpenAiAdapter
+        "openai_compatible" -> OpenAiAdapter
+        "azure_openai" -> AzureOpenAiAdapter
         "anthropic" -> AnthropicAdapter
         "gemini" -> GeminiAdapter
         else -> null
@@ -281,8 +286,16 @@ class RelayEngine(
         // 同协议：模型映射 + 协议原生改写，响应恒等透传
         if (inbound.id == upstream.id) {
             val rw = upstream.rewrite(rawBody, channel)
-            val up = upstreamPathFor(upstream, path, rw.upstreamModel, rw.stream)
-            return RelayTransform(rw, upstream, up, { it }, null)
+            val up = upstreamPathFor(upstream, channel, path, rw.upstreamModel, rw.stream)
+            // 映射过模型名的，响应里的 model 改回客户端请求的名字（见 ModelRename）；没映射的保持恒等透传
+            val renamed = rw.upstreamModel != rw.requestModel
+            return RelayTransform(
+                rewritten = rw, upstream = upstream, inbound = inbound, upstreamPath = up,
+                transformResponseBody = if (renamed) { b -> ModelRename.json(b, rw.upstreamModel, rw.requestModel) } else { b -> b },
+                streamTransformerFactory = if (renamed) {
+                    { ChainedStreamTransformer(listOf(ModelRename.stage(rw.upstreamModel, rw.requestModel))) }
+                } else null,
+            )
         }
         // 跨协议：inbound → hub(OpenAI) → upstream
         val mapped = RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
@@ -296,15 +309,17 @@ class RelayEngine(
         return RelayTransform(
             rewritten = Rewritten(upstreamBody, mapped.requestModel, mapped.upstreamModel, mapped.stream),
             upstream = upstream,
-            upstreamPath = upstreamPathFor(upstream, path, mapped.upstreamModel, mapped.stream),
+            inbound = inbound,
+            upstreamPath = upstreamPathFor(upstream, channel, path, mapped.upstreamModel, mapped.stream),
             transformResponseBody = { upstreamNative ->
                 val hub = ProtocolCodecs.responseToHub(upstream.id)(upstreamNative)
-                ProtocolCodecs.responseFromHub(inbound.id)(hub)
+                ProtocolCodecs.responseFromHub(inbound.id)(ModelRename.json(hub, mapped.upstreamModel, mapped.requestModel))
             },
             streamTransformerFactory = {
                 val toHub = ProtocolCodecs.streamToHub(upstream.id, mapped.requestModel)
+                val rename = if (mapped.upstreamModel != mapped.requestModel) ModelRename.stage(mapped.upstreamModel, mapped.requestModel) else null
                 val fromHub = ProtocolCodecs.streamFromHub(inbound.id, mapped.requestModel)
-                ChainedStreamTransformer(listOfNotNull(toHub, fromHub))
+                ChainedStreamTransformer(listOfNotNull(toHub, rename, fromHub))
             },
         )
     }
@@ -361,7 +376,7 @@ class RelayEngine(
                 // 401/403 = 凭证级失败，计 Key 失败（与流式/外层分类统一）；其它 4xx 是客户端问题
                 if (res.statusCode == 401 || res.statusCode == 403) channelLogic.recordKeyFailure(keyId, "upstream_${res.statusCode}")
                 recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, "error", "upstream_${res.statusCode}", null)
-                respondRaw(ctx, res.statusCode, res.body)  // 上游错误 body 原样（擦除 headers）
+                respondRaw(ctx, res.statusCode, transform.errorBodyFor(res.body))  // 同协议原样、跨协议改写（擦除 headers）
                 return RelayOutcome.PARTIAL  // 上游语义错误：终态，不当 Key 成功
             }
             val ttfb = now() - startMs
@@ -484,17 +499,34 @@ class RelayEngine(
     class RelayTransform(
         val rewritten: Rewritten,
         val upstream: ProtocolAdapter,
+        val inbound: ProtocolAdapter,
         val upstreamPath: String,
         val transformResponseBody: (String) -> String,
         val streamTransformerFactory: (() -> StreamTransformer)?,
-    )
+    ) {
+        /**
+         * 上游 4xx 的错误体：同协议原样透传；跨协议改写成客户端协议的错误格式。
+         * 原样透传给 Anthropic SDK 一个 OpenAI 形状的 `{"error":{"message":…}}`，SDK 解析不出
+         * `type` 就只剩一句 "unknown error"，用户看不到上游到底说了什么。三家的错误体都有
+         * `error.message`，拿到它按 inbound 重新包一层，拿不到就把原文当 message。
+         */
+        fun errorBodyFor(upstreamBody: String): String {
+            if (inbound.id == upstream.id) return upstreamBody
+            val message = runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(upstreamBody)
+                    .jsonObject["error"]?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: upstreamBody.take(500)
+            return inbound.errorBody("upstream_error", message)
+        }
+    }
 
     /** 上游端点路径：openai 保留入站路径（含 embeddings），anthropic 固定 /v1/messages，
      *  gemini 用上游模型名 + action 重建。 */
-    private fun upstreamPathFor(upstream: ProtocolAdapter, inboundPath: String, upstreamModel: String, stream: Boolean): String =
-        when (upstream.id) {
-            "anthropic" -> "/v1/messages"
-            "gemini" -> "/v1beta/models/$upstreamModel:" + if (stream) "streamGenerateContent?alt=sse" else "generateContent"
+    private fun upstreamPathFor(upstream: ProtocolAdapter, channel: Channel, inboundPath: String, upstreamModel: String, stream: Boolean): String =
+        when {
+            upstream === AzureOpenAiAdapter -> AzureOpenAiAdapter.path(inboundPath, upstreamModel, channel.apiVersion)
+            upstream.id == "anthropic" -> "/v1/messages"
+            upstream.id == "gemini" -> "/v1beta/models/$upstreamModel:" + if (stream) "streamGenerateContent?alt=sse" else "generateContent"
             else -> if (inboundPath.startsWith("/v1/")) inboundPath else "/v1/chat/completions"
         }
 
