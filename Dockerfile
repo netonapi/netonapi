@@ -39,7 +39,7 @@ COPY --from=build /src/NewGate/newgate/application/build/bin/linuxX64/releaseExe
 COPY --from=build /src/NewGate/newgate/application/config /app/config
 
 USER newgate
-EXPOSE 7080
+EXPOSE 8800
 
 # 配置一律用环境变量覆盖（镜像内的默认值只适用于本地起步）：
 #   NETON_DATABASE__DEFAULT__URI       PostgreSQL 连接串
@@ -49,6 +49,6 @@ EXPOSE 7080
 # 数据库不可达返回 503。带 -f 让 503 判成不健康——网关每个请求都要落库，DB 挂了就不该接流量。
 # compose 里 caddy / 前端对本服务的 depends_on 用 service_healthy，靠的就是这条。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:7080/health || exit 1
+    CMD curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8800/health || exit 1
 
 ENTRYPOINT ["/app/newgate"]
