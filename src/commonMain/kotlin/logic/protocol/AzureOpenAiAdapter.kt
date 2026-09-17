@@ -28,6 +28,7 @@ object AzureOpenAiAdapter : ProtocolAdapter by OpenAiAdapter {
         val op = when {
             inboundPath.endsWith("/embeddings") -> "/embeddings"
             inboundPath.endsWith("/images/generations") -> "/images/generations"
+            inboundPath.startsWith("/v1/audio/") -> inboundPath.removePrefix("/v1")
             inboundPath == "/v1/completions" -> "/completions"
             else -> "/chat/completions"
         }

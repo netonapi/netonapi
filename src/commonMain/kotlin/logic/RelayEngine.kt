@@ -59,7 +59,22 @@ class RelayEngine(
      * 中转入口。并发额度一旦占用就必须归还——用 finally 覆盖所有 return / 异常路径，
      * 否则额度会随失败请求泄漏，最终把令牌永久卡死在「并发已满」。
      */
-    suspend fun relay(ctx: HttpContext, userId: Long, tokenId: Long, inbound: ProtocolAdapter, path: String, rawBodyOverride: String? = null) {
+    /**
+     * 非 JSON 进出的端点（音频）用的附加信息：
+     * [bodyBytes]/[contentType] = 原样转发的 multipart 请求体（此时 rawBody 只是给路由/计费看的合成 JSON）；
+     * [binaryResponse] = 上游回二进制（TTS 音频），走字节流收下来原样回；
+     * [requestUsage] = 上游不给 usage 时按请求侧算的用量（TTS 按输入字符数计）。
+     */
+    class RelayExtras(
+        val bodyBytes: ByteArray? = null,
+        val contentType: String? = null,
+        val binaryResponse: Boolean = false,
+        val requestUsage: Usage? = null,
+    )
+    private var extras: RelayExtras = RelayExtras()
+
+    suspend fun relay(ctx: HttpContext, userId: Long, tokenId: Long, inbound: ProtocolAdapter, path: String, rawBodyOverride: String? = null, extras: RelayExtras = RelayExtras()) {
+        this.extras = extras
         try {
             relayInner(ctx, userId, tokenId, inbound, path, rawBodyOverride)
         } finally {
@@ -164,7 +179,8 @@ class RelayEngine(
                 )
             }
         }
-        val reserveAmount = when (val rc = ReserveCalc.compute(rawBody, salePrice, ratio)) {
+        val audio = path.startsWith("/v1/audio/")
+        val reserveAmount = when (val rc = ReserveCalc.compute(rawBody, salePrice, ratio, inputUpperBytes = extras.bodyBytes?.size, noOutput = audio)) {
             is ReserveCalc.Result.NoPrice ->
                 return respondError(ctx, inbound, 400, "model_not_priced", "model '$requestModel' has no pricing configured")
             is ReserveCalc.Result.NoOutputCap ->
@@ -371,12 +387,44 @@ class RelayEngine(
         val authHeaders = try { upstream.requestHeaders(apiKey, "POST", upstreamUrl, upstreamBody, channel) } catch (e: IllegalArgumentException) {
             throw HttpClientException(HttpClientError.Http(401, e.message ?: "credential error", upstream.errorBody("authentication_error", e.message ?: "credential error")))
         }
-        val request = HttpClientRequest(
+        val multipart = extras.bodyBytes
+        val request = if (multipart != null) {
+            // multipart 原样转发：只把 model 字段换成映射后的上游名；Content-Type 必须是客户端那个（带 boundary）
+            val boundary = logic.protocol.MultipartForm.boundary(extras.contentType)
+            val bytes = if (boundary != null && rewritten.upstreamModel != rewritten.requestModel)
+                logic.protocol.MultipartForm.replaceField(multipart, boundary, "model", rewritten.upstreamModel) else multipart
+            HttpClientRequest(
+                method = HttpClientMethod.Post, url = upstreamUrl,
+                headers = HttpHeaders.from(authHeaders.filterKeys { !it.equals("Content-Type", ignoreCase = true) } + betaHeaders),
+                body = HttpClientBody.Bytes(bytes, extras.contentType ?: "multipart/form-data"),
+            )
+        } else HttpClientRequest(
             method = HttpClientMethod.Post,
             url = upstreamUrl,
             headers = HttpHeaders.from(authHeaders + betaHeaders),
             body = HttpClientBody.Json(upstreamBody),
         )
+
+        if (extras.binaryResponse) {
+            // 二进制响应（TTS）：非 2xx 由 stream() 抛带 body 的异常，外层按状态分类；2xx 收齐字节原样回
+            var contentType: String? = null
+            val chunks = ArrayList<ByteArray>()
+            client.stream(request).collect { chunk ->
+                when (chunk) {
+                    is HttpClientStreamChunk.Bytes -> chunks += chunk.bytes
+                    is HttpClientStreamChunk.Text -> chunks += chunk.text.encodeToByteArray()
+                    is HttpClientStreamChunk.End -> contentType = chunk.finalHeaders["Content-Type"] ?: chunk.finalHeaders["content-type"]
+                }
+            }
+            val total = ByteArray(chunks.sumOf { it.size }); var off = 0
+            for (c in chunks) { c.copyInto(total, off); off += c.size }
+            val ttfb = now() - startMs
+            ctx.response.status = HttpStatus.OK
+            ctx.response.contentType = contentType ?: "application/octet-stream"
+            ctx.response.write(total)
+            bill(token, channel, rewritten, extras.requestUsage, group, groupSource, startMs, ttfb)
+            return RelayOutcome.SUCCESS
+        }
 
         if (!rewritten.stream) {
             val res = client.request(request)
@@ -391,8 +439,13 @@ class RelayEngine(
                 return RelayOutcome.PARTIAL  // 上游语义错误：终态，不当 Key 成功
             }
             val ttfb = now() - startMs
-            val usage = upstream.extractUsage(res.body)          // usage 从上游原生响应提取
-            respondRaw(ctx, 200, transform.transformResponseBody(res.body))  // body 按需转协议
+            val usage = upstream.extractUsage(res.body) ?: extras.requestUsage  // usage 从上游原生响应提取；没有就用请求侧估的
+            if (multipart != null) {
+                // 转写结果按上游的内容类型回（response_format=text 时是纯文本，不是 JSON）
+                respondRaw(ctx, 200, res.body, res.headers["Content-Type"] ?: res.headers["content-type"])
+            } else {
+                respondRaw(ctx, 200, transform.transformResponseBody(res.body))  // body 按需转协议
+            }
             bill(token, channel, rewritten, usage, group, groupSource, startMs, ttfb)
             return RelayOutcome.SUCCESS
         }
@@ -775,14 +828,14 @@ class RelayEngine(
         respondRaw(ctx, status, inbound.errorBody(code, message))
     }
 
-    private suspend fun respondRaw(ctx: HttpContext, status: Int, body: String) {
+    private suspend fun respondRaw(ctx: HttpContext, status: Int, body: String, contentType: String? = null) {
         val mapped = HttpStatus.fromCode(status)
         if (mapped == null) {
             // 静默回落成 502 会把「余额不足(402)」这类语义错误伪装成上游故障——必须显式告警
             log.error("relay respond: unmapped HTTP status $status; falling back to 502 (add it to HttpStatus)")
         }
         ctx.response.status = mapped ?: HttpStatus.BAD_GATEWAY
-        ctx.response.json(body)
+        if (contentType != null) ctx.response.text(body, contentType) else ctx.response.json(body)
     }
 
     private fun now(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
@@ -791,7 +844,8 @@ class RelayEngine(
         const val RESPONSES_PATH = "/v1/responses"
         const val IMAGES_PATH = "/v1/images/generations"
         const val RERANK_PATH = "/v1/rerank"
-        val OPENAI_ONLY_PATHS = setOf(RESPONSES_PATH, IMAGES_PATH, RERANK_PATH)
+        val AUDIO_PATHS = setOf("/v1/audio/speech", "/v1/audio/transcriptions", "/v1/audio/translations")
+        val OPENAI_ONLY_PATHS = setOf(RESPONSES_PATH, IMAGES_PATH, RERANK_PATH) + AUDIO_PATHS
         /** 渠道类型 → 上游协议适配器；null = 未知类型（渠道配置错了，不当路由候选）。 */
         fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {
             "openai_compatible" -> OpenAiAdapter

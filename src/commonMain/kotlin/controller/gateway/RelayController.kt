@@ -11,6 +11,9 @@ import neton.core.annotations.Post
 import logic.protocol.OpenAiAdapter
 import logic.protocol.AnthropicAdapter
 import logic.protocol.ProtocolAdapter
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import neton.core.http.HttpContext
 import neton.core.interfaces.Identity
 import neton.logging.Logger
@@ -47,6 +50,43 @@ class RelayController(
     suspend fun rerank(ctx: HttpContext, identity: Identity) =
         relay(ctx, identity, OpenAiAdapter, "/v1/rerank")
 
+    /**
+     * 文本转语音：JSON 进、音频字节出。上游不给 usage，按 `input` 的字符数计输入 token
+     * （OpenAI 的 TTS 就是按字符收费，定价表里把「输入价」填成每百万字符的价即可）。
+     */
+    @Post("/audio/speech")
+    suspend fun speech(ctx: HttpContext, identity: Identity) {
+        val body = ctx.request.text()
+        val chars = runCatching {
+            kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject["input"]?.jsonPrimitive?.contentOrNull?.length
+        }.getOrNull() ?: 0
+        relay(ctx, identity, OpenAiAdapter, "/v1/audio/speech", rawBody = body,
+            extras = RelayEngine.RelayExtras(binaryResponse = true, requestUsage = logic.Usage(promptTokens = chars)))
+    }
+
+    /** 语音转文字 / 翻译：multipart 原样透传（只改写 model 字段），响应按上游的内容类型回。 */
+    @Post("/audio/transcriptions")
+    suspend fun transcriptions(ctx: HttpContext, identity: Identity) = relayMultipart(ctx, identity, "/v1/audio/transcriptions")
+
+    @Post("/audio/translations")
+    suspend fun translations(ctx: HttpContext, identity: Identity) = relayMultipart(ctx, identity, "/v1/audio/translations")
+
+    private suspend fun relayMultipart(ctx: HttpContext, identity: Identity, path: String) {
+        val contentType = ctx.request.contentType
+        val boundary = logic.protocol.MultipartForm.boundary(contentType)
+        if (boundary == null) {
+            ctx.response.status = neton.core.http.HttpStatus.BAD_REQUEST
+            ctx.response.json(OpenAiAdapter.errorBody("invalid_request_error", "multipart/form-data with a boundary is required"))
+            return
+        }
+        val bytes = ctx.request.body()
+        val model = logic.protocol.MultipartForm.field(bytes, boundary, "model")?.trim() ?: ""
+        // 路由与计费只需要 model；真正发给上游的是原始字节
+        val synthetic = """{"model":${kotlinx.serialization.json.JsonPrimitive(model)}}"""
+        relay(ctx, identity, OpenAiAdapter, path, rawBody = synthetic,
+            extras = RelayEngine.RelayExtras(bodyBytes = bytes, contentType = contentType))
+    }
+
     @Post("/embeddings")
     suspend fun embeddings(ctx: HttpContext, identity: Identity) =
         relay(ctx, identity, OpenAiAdapter, "/v1/embeddings")
@@ -55,7 +95,10 @@ class RelayController(
     suspend fun messages(ctx: HttpContext, identity: Identity) =
         relay(ctx, identity, AnthropicAdapter, "/v1/messages")
 
-    private suspend fun relay(ctx: HttpContext, identity: Identity, inbound: ProtocolAdapter, path: String) {
+    private suspend fun relay(
+        ctx: HttpContext, identity: Identity, inbound: ProtocolAdapter, path: String,
+        rawBody: String? = null, extras: RelayEngine.RelayExtras = RelayEngine.RelayExtras(),
+    ) {
         val tokenId = (identity as? GatewayTokenIdentity)?.tokenId
         val userId = identity.id.toLongOrNull()
         if (tokenId == null || userId == null) {
@@ -63,6 +106,6 @@ class RelayController(
             ctx.response.json("""{"error":{"message":"invalid identity","type":"invalid_token","code":"invalid_token"}}""")
             return
         }
-        engine.relay(ctx, userId, tokenId, inbound, path)
+        engine.relay(ctx, userId, tokenId, inbound, path, rawBody, extras)
     }
 }

@@ -25,13 +25,22 @@ object ReserveCalc {
      * @param price       模型定价；null = 未定价
      * @param groupRatio  分组倍率（decimal 串）
      */
-    fun compute(requestBody: String, price: ModelPrice?, groupRatio: String): Result {
+    /**
+     * @param inputUpperBytes 输入上界（字节）；null = 用 requestBody 的字节数
+     * @param noOutput 没有输出侧 token 的端点（音频）：不要求输出上限，只按输入预留
+     */
+    fun compute(requestBody: String, price: ModelPrice?, groupRatio: String, inputUpperBytes: Int? = null, noOutput: Boolean = false): Result {
         if (price == null) return Result.NoPrice
 
         // 按次计价：直接是上界
         price.perRequestPrice?.let { per ->
             val amount = mulRatio(per, groupRatio)
             return Result.Ok(amount, estimated = false)
+        }
+
+        if (noOutput) {
+            val inputUpper = inputUpperBytes ?: requestBody.encodeToByteArray().size
+            return Result.Ok(mulRatio(PricingCalc.tokenCost(inputUpper, PricingCalc.parseMicro(price.inputPrice)), groupRatio), estimated = true)
         }
 
         val outputCap = outputCapOf(requestBody) ?: price.defaultMaxOutputTokens ?: return Result.NoOutputCap
