@@ -24,6 +24,8 @@ COPY Neton/neton-application-module-gateway  /src/Neton/neton-application-module
 COPY NewGate/newgate                         /src/NewGate/newgate
 
 WORKDIR /src/NewGate/newgate
+# libcurl 头文件：SMTP 发信（smtps / STARTTLS）通过 cinterop 调系统 libcurl；运行镜像的 curl 包自带 libcurl4
+RUN apt-get update && apt-get install -y --no-install-recommends libcurl4-openssl-dev && rm -rf /var/lib/apt/lists/*
 RUN ./gradlew :application:linkReleaseExecutableLinuxX64 --no-daemon
 
 FROM debian:bookworm-slim AS runtime

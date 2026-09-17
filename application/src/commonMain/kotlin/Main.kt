@@ -84,7 +84,7 @@ fun main(args: Array<String>) {
         // 这里只负责关掉应用自己持有的那一个。
         bind(HttpClientProvider::class, HttpClientProvider { HttpClient.create(it) })
         // SMTP 发信（module-system 的 EmailProvider 用）：socket + TLS 的实现在引擎适配层
-        bind(neton.http.mail.SmtpTransport::class, neton.http.mail.KtorSmtpTransport())
+        bind(neton.http.mail.SmtpTransport::class, neton.http.mail.defaultSmtpTransport())
 
         // 会员注册策略：member 的默认策略只开短信注册（PHONE_SMS），而 NanoGate 的控制台是
         // 用户名 + 密码自助注册（/register），不绑这条就会 REGISTER_MODE_DISABLED。短信保留为可选。
