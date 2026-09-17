@@ -19,7 +19,7 @@ logic lives in the module repositories, not here.
 | Build | Gradle 8.14.4 + KSP 2.3.10 |
 | Runtime | Kotlin/Native static executable (`application.kexe`), no JVM |
 | Datastores | PostgreSQL (billing, ledger, channels) · Redis (optional: shared rate limits) |
-| Default port | `7080` |
+| Default port | `8800` |
 | License | [Apache-2.0](./LICENSE) |
 
 Companion repositories: **nanogate-admin** (operator console) and **nanogate-client**
@@ -85,7 +85,7 @@ Declared targets: `macosArm64`, `linuxX64`, `linuxArm64`, `mingwX64`. Verified i
 
 ```bash
 ./application.kexe migrate up     # apply migrations; also accepts `status` / `verify`
-./application.kexe                # serve on :7080
+./application.kexe                # serve on :8800
 ```
 
 Serving **never auto-migrates**: startup runs a precheck and aborts (exit 1) if migrations
@@ -121,7 +121,7 @@ module is a two-line change (a dependency plus an id) and cannot drift out of sy
 
 The behavioural test suite is the harness in the
 [`nanogate` repository](https://github.com/zoujiaqing/nanogate) (`harness/run.sh`): it starts
-the real gateway on `:7080` against a throwaway PostgreSQL database and an isolated
+the real gateway on `:8800` against a throwaway PostgreSQL database and an isolated
 `redis-server`, drives 25 scenarios with Python fake upstreams, and asserts 37 properties —
 billing snapshots, dual-track pricing, margin gates, capability routing, channel failover and
 cool-down, atomic rate limits, and the XFF trust boundary. It never touches a Redis instance
@@ -147,14 +147,15 @@ NEWGATE_TARGET=linuxX64 bash harness/run.sh  # Linux
 
 Deliberately listed rather than hidden:
 
-- No health endpoint. The container `HEALTHCHECK` probes `/` without `-f` (any HTTP response
-  counts as alive); there is no readiness check that covers the database or Redis.
 - CORS `Access-Control-Allow-Origin` is **hardcoded to `*`** in `Main.kt` and is not a config
   value — Neton's TOML parser cannot parse arrays. `allowCredentials = false`, so browsers
-  send no cookies cross-origin, but tightening the allowlist means editing code and rebuilding.
+  send no cookies cross-origin; the admin UI therefore shares the API origin through Caddy
+  (production) or Next dev rewrites (local). Tightening the allowlist means editing code.
 - `security.unified_token.enabled` must stay `false`: no module in this distribution binds a
   `UnifiedTokenAuthenticator`. The startup error says so explicitly.
 - The Docker/compose build path has not been executed on a real Docker host yet.
+- SMTP with TLS relies on the system libcurl (present on macOS and in the Debian image);
+  the Windows build only supports plaintext SMTP and should use a vendor HTTP mail API.
 
 ## License
 
