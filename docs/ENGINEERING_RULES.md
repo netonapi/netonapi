@@ -218,6 +218,16 @@
 - 初始化 SQL 中的状态注释必须明确写清：
   - `0=正常, 1=停用`
   - `0=否, 1=是`
+- **带 id 播种之后必须 `setval` 收尾**。`INSERT INTO t (id, ...) VALUES (1, ...)` 不会推进 BIGSERIAL 序列，
+  全新库里第一次走接口新增就撞主键，而且报的是 `500 Internal Server Error`，运维从信封上看不出是序列问题。
+  凡是显式 id 的种子，同一个迁移末尾补
+  `SELECT setval(pg_get_serial_sequence('t','id'), COALESCE((SELECT MAX(id) FROM t), 1));`。
+  这条是代价换来的：baseline 有五张表漏了它（users / roles / user_roles / dict_types / dict_data），
+  后果是全新部署**建不了第二个管理员账号**，直到 `module-infra` V003 才收口。
+- **跨模块调整别人种下的数据，必须在 `@Module(dependsOn = [...])` 里如实声明依赖**。
+  迁移按 dependsOn 拓扑排序，不按 `neton.modules` 的声明顺序。漏声明时 `UPDATE` 会在目标行还没插入前执行，
+  **匹配 0 行且不报错** —— 迁移显示成功，效果却少了一半。判断依据是「我这条 SQL 读/改了谁种的行」，
+  不是「我运行时用不用它的 Logic」。
 
 ---
 
@@ -240,6 +250,14 @@
 - `neton-application-admin` 必须以当前后端能力为准做裁剪。
 - 对当前后端未提供的模块，优先删除目录、API、菜单和依赖，而不是只隐藏入口。
 - 禁止长期保留与当前产品无关的大型模板残留。
+- **「删除」针对代码与依赖，不针对菜单行**。前端模块从发行版的装配清单里摘掉（`front.modules.ts` +
+  `package.json`），这是删除；而 `system_menus` 里对应的行用 `status = 0` 停用，不 `DELETE`。
+  两者的区别是：模板残留是死代码，删了没人找得回来也不需要找回来；菜单行是运营数据，运营在
+  「菜单管理」页面上看得见、可以自己打开。RBAC spec §5.3 保证 `status ≠ 1` 的菜单不进树、
+  其 permission 不进权限集、子菜单整体丢弃 —— 语义上与不存在等价，但可逆。
+- 停用一整个目录时，**子页面要一并显式停用**。只停目录的话菜单树是干净的，但 `PermissionLogic`
+  收集权限时只看菜单行自己的 `status`，已经授过的子页面 permission 仍会进权限集 ——
+  那就是「侧栏看不见入口，接口却调得通」。
 
 ---
 
