@@ -360,10 +360,15 @@ class RelayEngine(
         val rewritten = transform.rewritten
         val upstream = transform.upstream
         val client = clientFor(channel)
+        // 同协议时把客户端的 beta 头带给上游：Claude Code 靠 anthropic-beta 开 interleaved-thinking、
+        // 1M 上下文、细粒度工具流等能力，丢了它请求会以另一种形状被服务。跨协议没有对应物，不带。
+        val betaHeaders = if (transform.inbound.id == upstream.id) {
+            listOf("anthropic-beta", "OpenAI-Beta").mapNotNull { h -> ctx.request.header(h)?.let { h to it } }.toMap()
+        } else emptyMap()
         val request = HttpClientRequest(
             method = HttpClientMethod.Post,
             url = channel.baseUrl.trimEnd('/') + transform.upstreamPath,
-            headers = HttpHeaders.from(upstream.upstreamHeaders(apiKey)),
+            headers = HttpHeaders.from(upstream.upstreamHeaders(apiKey) + betaHeaders),
             body = HttpClientBody.Json(rewritten.body),
         )
 

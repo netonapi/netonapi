@@ -2,15 +2,15 @@ package logic.protocol.codec
 
 import kotlinx.serialization.json.*
 
-/** Gemini streamGenerateContent SSE → OpenAI chunk 流。 */
+/** Gemini streamGenerateContent SSE → OpenAI chunk 流。thought → reasoning_content；functionCall → tool_calls 增量。 */
 class GeminiToOpenAiStream(private val model: String) {
     private val json = Json { }
     private val framer = logic.protocol.SseEventFramer()
     private var roleSent = false
     private var finished = false
     private var finishReason = "stop"
-    private var promptTokens = 0
-    private var completionTokens = 0
+    private var toolIndex = 0
+    private var usage: JsonObject? = null
     private val id = "chatcmpl_gemini_stream"
 
     fun feed(chunk: String): String {
@@ -25,21 +25,34 @@ class GeminiToOpenAiStream(private val model: String) {
     }
 
     private fun process(ev: JsonObject, out: StringBuilder) {
-        (ev["usageMetadata"] as? JsonObject)?.let { u ->
-            u["promptTokenCount"]?.jsonPrimitive?.intOrNull?.let { promptTokens = it }
-            u["candidatesTokenCount"]?.jsonPrimitive?.intOrNull?.let { completionTokens = it }
-        }
+        (ev["usageMetadata"] as? JsonObject)?.let { usage = it }
         val cand = (ev["candidates"] as? JsonArray)?.firstOrNull()?.jsonObject ?: return
         cand["finishReason"]?.jsonPrimitive?.contentOrNull?.let { finishReason = GeminiToOpenAiResponse.mapFinish(it) }
         val parts = cand["content"]?.jsonObject?.get("parts") as? JsonArray ?: return
-        val text = parts.mapNotNull { it.jsonObject["text"]?.jsonPrimitive?.contentOrNull }.joinToString("")
-        if (text.isNotEmpty()) {
-            emitChunk(out, buildJsonObject {
-                if (!roleSent) { put("role", "assistant"); roleSent = true }
-                put("content", text)
-            })
+        for (p in parts) {
+            val part = p.jsonObject
+            when {
+                part["thought"]?.jsonPrimitive?.booleanOrNull == true -> part["text"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }?.let {
+                    emitChunk(out, buildJsonObject { role(); put("reasoning_content", it) })
+                }
+                part.containsKey("text") -> part["text"]!!.jsonPrimitive.contentOrNull?.takeIf { it.isNotEmpty() }?.let {
+                    emitChunk(out, buildJsonObject { role(); put("content", it) })
+                }
+                part.containsKey("functionCall") -> {
+                    // Gemini 一次给完整 functionCall，映射成「开始 + 全量参数」一个 chunk
+                    val call = GeminiToOpenAiResponse.functionCallToToolCall(part["functionCall"]!!.jsonObject, toolIndex)
+                    emitChunk(out, buildJsonObject {
+                        role()
+                        put("tool_calls", buildJsonArray { add(buildJsonObject { put("index", toolIndex); call.forEach { (k, v) -> put(k, v) } }) })
+                    })
+                    toolIndex++
+                    finishReason = "tool_calls"
+                }
+            }
         }
     }
+
+    private fun JsonObjectBuilder.role() { if (!roleSent) { put("role", "assistant"); roleSent = true } }
 
     fun finish(): String {
         if (finished) return ""; finished = true
@@ -47,7 +60,7 @@ class GeminiToOpenAiStream(private val model: String) {
         out.append("data: ").append(buildJsonObject {
             put("id", id); put("object", "chat.completion.chunk"); put("model", model)
             put("choices", buildJsonArray { add(buildJsonObject { put("index", 0); put("delta", buildJsonObject {}); put("finish_reason", finishReason) }) })
-            put("usage", buildJsonObject { put("prompt_tokens", promptTokens); put("completion_tokens", completionTokens); put("total_tokens", promptTokens + completionTokens) })
+            put("usage", GeminiToOpenAiResponse.mapUsage(usage))
         }.toString()).append("\n\n").append("data: [DONE]\n\n")
         return out.toString()
     }

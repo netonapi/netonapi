@@ -4,27 +4,21 @@ import kotlinx.serialization.json.*
 
 /**
  * OpenAI SSE chunk 流 → Anthropic Messages 事件序列（状态机）。
- * feed(chunk) 增量喂入 OpenAI SSE 文本，返回该批产生的 Anthropic 事件文本；结束调 finish() 补收尾。
- * 输出序列：message_start → content_block_start(text) → content_block_delta* →
- *   [tool_use 块...] → content_block_stop → message_delta → message_stop。
+ * 输出：message_start → [thinking 块] → [text 块] → [tool_use 块...] → message_delta → message_stop。
+ * reasoning_content 增量进 thinking 块（收尾补一个空 signature_delta，SDK 累加器需要它）；
+ * 块之间严格先关后开，Anthropic 客户端按 index 累加，乱序会拼坏。
  */
 class OpenAiToAnthropicStream(private val model: String) {
-
     private val json = Json { }
     private val framer = logic.protocol.SseEventFramer()
-
     private var started = false
-    private var textBlockOpen = false
-    private var textBlockIndex = -1
+    private var openKind: String? = null   // "thinking" | "text" | null
+    private var openIndex = -1
     private var nextIndex = 0
     private var finished = false
-
-    // tool_use 块：OpenAI tool_calls[].index → 已分配的 Anthropic block index
     private val toolBlockIndex = mutableMapOf<Int, Int>()
-
     private var stopReason: String = "end_turn"
-    private var inputTokens = 0
-    private var outputTokens = 0
+    private var usage: JsonObject? = null
 
     fun feed(chunk: String): String {
         val out = StringBuilder()
@@ -43,7 +37,7 @@ class OpenAiToAnthropicStream(private val model: String) {
             emit(out, "message_start", buildJsonObject {
                 put("type", "message_start")
                 put("message", buildJsonObject {
-                    put("id", "msg_stream")
+                    put("id", chunk["id"]?.takeIf { it is JsonPrimitive } ?: JsonPrimitive("msg_stream"))
                     put("type", "message"); put("role", "assistant")
                     put("model", model)
                     put("content", buildJsonArray {})
@@ -52,46 +46,41 @@ class OpenAiToAnthropicStream(private val model: String) {
                 })
             })
         }
-        (chunk["usage"] as? JsonObject)?.let { u ->
-            u["prompt_tokens"]?.jsonPrimitive?.intOrNull?.let { inputTokens = it }
-            u["completion_tokens"]?.jsonPrimitive?.intOrNull?.let { outputTokens = it }
-        }
+        (chunk["usage"] as? JsonObject)?.let { usage = it }
         val choice = (chunk["choices"] as? JsonArray)?.firstOrNull()?.jsonObject ?: return
         val delta = choice["delta"]?.jsonObject
         choice["finish_reason"]?.jsonPrimitive?.contentOrNull?.let {
             stopReason = OpenAiToAnthropicResponse.mapStopReason(it)
         }
-
-        val text = delta?.get("content")?.jsonPrimitive?.contentOrNull
-        if (!text.isNullOrEmpty()) {
-            if (!textBlockOpen) {
-                textBlockIndex = nextIndex++
-                textBlockOpen = true
-                emit(out, "content_block_start", buildJsonObject {
-                    put("type", "content_block_start"); put("index", textBlockIndex)
-                    put("content_block", buildJsonObject { put("type", "text"); put("text", "") })
-                })
-            }
+        val thought = delta?.get("reasoning_content")?.jsonPrimitive?.contentOrNull
+        if (!thought.isNullOrEmpty()) {
+            ensureOpen(out, "thinking")
             emit(out, "content_block_delta", buildJsonObject {
-                put("type", "content_block_delta"); put("index", textBlockIndex)
+                put("type", "content_block_delta"); put("index", openIndex)
+                put("delta", buildJsonObject { put("type", "thinking_delta"); put("thinking", thought) })
+            })
+        }
+        val text = CodecSupport.openAiParts(delta?.get("content")).texts.joinToString("")
+        if (text.isNotEmpty()) {
+            ensureOpen(out, "text")
+            emit(out, "content_block_delta", buildJsonObject {
+                put("type", "content_block_delta"); put("index", openIndex)
                 put("delta", buildJsonObject { put("type", "text_delta"); put("text", text) })
             })
         }
-
         (delta?.get("tool_calls") as? JsonArray)?.forEach { tc ->
             val call = tc.jsonObject
             val oaIndex = call["index"]?.jsonPrimitive?.intOrNull ?: 0
             val fn = call["function"]?.jsonObject
             if (oaIndex !in toolBlockIndex) {
-                // 关掉正在开的 text 块
-                if (textBlockOpen) { closeBlock(out, textBlockIndex); textBlockOpen = false }
+                closeOpen(out)
                 val bi = nextIndex++
                 toolBlockIndex[oaIndex] = bi
                 emit(out, "content_block_start", buildJsonObject {
                     put("type", "content_block_start"); put("index", bi)
                     put("content_block", buildJsonObject {
                         put("type", "tool_use")
-                        put("id", call["id"] ?: JsonPrimitive(""))
+                        put("id", call["id"] ?: JsonPrimitive("call_$bi"))
                         put("name", fn?.get("name") ?: JsonPrimitive(""))
                         put("input", buildJsonObject {})
                     })
@@ -107,18 +96,42 @@ class OpenAiToAnthropicStream(private val model: String) {
         }
     }
 
+    private fun ensureOpen(out: StringBuilder, kind: String) {
+        if (openKind == kind) return
+        closeOpen(out)
+        openIndex = nextIndex++
+        openKind = kind
+        emit(out, "content_block_start", buildJsonObject {
+            put("type", "content_block_start"); put("index", openIndex)
+            put("content_block", if (kind == "thinking") buildJsonObject { put("type", "thinking"); put("thinking", "") }
+                else buildJsonObject { put("type", "text"); put("text", "") })
+        })
+    }
+
+    private fun closeOpen(out: StringBuilder) {
+        val kind = openKind ?: return
+        if (kind == "thinking") {
+            emit(out, "content_block_delta", buildJsonObject {
+                put("type", "content_block_delta"); put("index", openIndex)
+                put("delta", buildJsonObject { put("type", "signature_delta"); put("signature", "") })
+            })
+        }
+        closeBlock(out, openIndex)
+        openKind = null
+    }
+
     fun finish(): String {
         if (finished) return ""
         finished = true
         val out = StringBuilder()
         if (!started) return ""  // 无内容流：不产出（上游首字节前已失败走重试路径）
-        if (textBlockOpen) { closeBlock(out, textBlockIndex); textBlockOpen = false }
-        toolBlockIndex.values.forEach { closeBlock(out, it) }
+        closeOpen(out)
+        toolBlockIndex.values.sorted().forEach { closeBlock(out, it) }
         toolBlockIndex.clear()
         emit(out, "message_delta", buildJsonObject {
             put("type", "message_delta")
             put("delta", buildJsonObject { put("stop_reason", stopReason); put("stop_sequence", JsonNull) })
-            put("usage", buildJsonObject { put("input_tokens", inputTokens); put("output_tokens", outputTokens) })
+            put("usage", OpenAiToAnthropicResponse.mapUsage(usage))
         })
         emit(out, "message_stop", buildJsonObject { put("type", "message_stop") })
         return out.toString()
