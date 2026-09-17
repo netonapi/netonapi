@@ -42,6 +42,11 @@ class RelayController(
     suspend fun images(ctx: HttpContext, identity: Identity) =
         relay(ctx, identity, OpenAiAdapter, "/v1/images/generations")
 
+    /** 重排序：同协议透传到 OpenAI 兼容上游；渠道要声明 rerank 能力。 */
+    @Post("/rerank")
+    suspend fun rerank(ctx: HttpContext, identity: Identity) =
+        relay(ctx, identity, OpenAiAdapter, "/v1/rerank")
+
     @Post("/embeddings")
     suspend fun embeddings(ctx: HttpContext, identity: Identity) =
         relay(ctx, identity, OpenAiAdapter, "/v1/embeddings")

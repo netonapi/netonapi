@@ -25,7 +25,10 @@ data class ModelStat(val model: String, val requests: Long, val charged: Long, v
 data class UserStat(val userId: Long, val requests: Long, val charged: Long)
 
 @Serializable
-data class ChannelStat(val channelId: Long, val name: String, val status: Int, val requests: Long, val errors: Long, val cost: Long)
+data class ChannelStat(
+    val channelId: Long, val name: String, val status: Int, val requests: Long, val errors: Long, val cost: Long,
+    val lastProbeAt: Long? = null, val lastProbeMs: Long? = null, val lastProbeOk: Int? = null, val lastProbeError: String? = null,
+)
 
 @Serializable
 data class OverviewVO(
@@ -103,13 +106,15 @@ class OverviewLogic(private val log: Logger) {
 
         val channels = db.fetchAll(
             """SELECT c.id AS id, c.name AS name, c.status AS st,
+                      c.last_probe_at AS pat, c.last_probe_ms AS pms, c.last_probe_ok AS pok, c.last_probe_error AS perr,
                       COUNT(l.id) AS n, COUNT(l.id) FILTER (WHERE l.status <> 'ok') AS e, COALESCE(SUM(l.cost),0)::BIGINT AS co
                  FROM gateway_channels c
                  LEFT JOIN gateway_usage_logs l ON l.channel_id = c.id AND l.created_at >= :from
                 WHERE c.deleted = 0
-                GROUP BY c.id, c.name, c.status ORDER BY n DESC, c.id""",
+                GROUP BY c.id, c.name, c.status, c.last_probe_at, c.last_probe_ms, c.last_probe_ok, c.last_probe_error ORDER BY n DESC, c.id""",
             mapOf("from" to periodStart),
-        ).map { ChannelStat(it.longOrNull("id") ?: 0, it.stringOrNull("name") ?: "", it.intOrNull("st") ?: 0, it.longOrNull("n") ?: 0, it.longOrNull("e") ?: 0, it.longOrNull("co") ?: 0) }
+        ).map { ChannelStat(it.longOrNull("id") ?: 0, it.stringOrNull("name") ?: "", it.intOrNull("st") ?: 0, it.longOrNull("n") ?: 0, it.longOrNull("e") ?: 0, it.longOrNull("co") ?: 0,
+            it.longOrNull("pat"), it.longOrNull("pms"), it.intOrNull("pok"), it.stringOrNull("perr")) }
 
         val manual = db.fetchAll("SELECT COUNT(*) AS n FROM gateway_settlements WHERE status = 'MANUAL_REVIEW'", emptyMap())
             .firstOrNull()?.longOrNull("n") ?: 0

@@ -134,4 +134,15 @@ class AnthropicOpenAiCodecTest {
         assertTrue(text.endsWith("data: [DONE]\n\n"))
         assertFalse(text.contains("\"finish_reason\":\"stop\"}}]}\n\ndata: {"), "finish 块只能在最后")
     }
+
+    @Test
+    fun anthropicRequest_adaptiveThinkingUsesOutputConfigEffort() {
+        val body = """{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"hi"},{"role":"system","content":"mid"}],"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}"""
+        val o = obj(AnthropicToOpenAiRequest.convert(body))
+        assertEquals("high", o["reasoning_effort"]!!.jsonPrimitive.content)
+        // mid-conversation system（Claude Code 的 beta）原样保留为 OpenAI 的 system 消息
+        assertEquals("system", o["messages"]!!.jsonArray[1].jsonObject["role"]!!.jsonPrimitive.content)
+        val adaptiveOnly = obj(AnthropicToOpenAiRequest.convert("""{"model":"m","max_tokens":1,"messages":[],"thinking":{"type":"adaptive"}}"""))
+        assertEquals("medium", adaptiveOnly["reasoning_effort"]!!.jsonPrimitive.content)
+    }
 }

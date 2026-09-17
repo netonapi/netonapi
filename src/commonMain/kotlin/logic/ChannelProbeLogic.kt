@@ -45,6 +45,28 @@ data class ChannelProbeResult(
 @neton.core.annotations.Logic(logger = "logic.gateway-channel-probe")
 class ChannelProbeLogic(private val log: Logger, private val channelLogic: ChannelLogic) {
 
+    /** 探测并把结果记到渠道行上（手动探测与定时任务共用）。 */
+    suspend fun probeAndRecord(channel: Channel, requestedModel: String? = null): ChannelProbeResult {
+        val r = runCatching { probe(channel, requestedModel) }.getOrElse { e ->
+            ChannelProbeResult(ok = false, status = null, latencyMs = 0, model = requestedModel ?: "", upstreamModel = "", upstreamPath = "", error = (e.message ?: e::class.simpleName ?: "error").take(500))
+        }
+        channelLogic.get(channel.id)?.let { fresh ->
+            channelLogic.update(fresh.copy(
+                lastProbeAt = kotlin.time.Clock.System.now().toEpochMilliseconds(),
+                lastProbeMs = r.latencyMs, lastProbeOk = if (r.ok) 1 else 0,
+                lastProbeError = r.error?.take(512),
+            ))
+        }
+        return r
+    }
+
+    /** 定时任务入口：探测全部启用中的渠道。 */
+    suspend fun probeAllEnabled(): Int {
+        var n = 0
+        for (ch in channelLogic.listEnabled()) { probeAndRecord(ch); n++ }
+        return n
+    }
+
     suspend fun probe(channel: Channel, requestedModel: String?): ChannelProbeResult {
         val model = requestedModel?.trim()?.takeIf { it.isNotEmpty() }
             ?: channel.models.split(',').map { it.trim() }.firstOrNull { it.isNotEmpty() }

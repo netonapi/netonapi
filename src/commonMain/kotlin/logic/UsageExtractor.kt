@@ -18,8 +18,10 @@ object UsageExtractor {
      */
     fun fromUsageObject(usage: JsonObject): Usage {
         val details = (usage["prompt_tokens_details"] ?: usage["input_tokens_details"]) as? JsonObject
+        // rerank / 部分 embeddings 只给 total_tokens：全算输入
+        val totalOnly = if (usage["prompt_tokens"] == null && usage["input_tokens"] == null) usage["total_tokens"]?.jsonPrimitive?.intOrNull else null
         return Usage(
-            promptTokens = (usage["prompt_tokens"] ?: usage["input_tokens"])?.jsonPrimitive?.intOrNull ?: 0,
+            promptTokens = (usage["prompt_tokens"] ?: usage["input_tokens"])?.jsonPrimitive?.intOrNull ?: totalOnly ?: 0,
             completionTokens = (usage["completion_tokens"] ?: usage["output_tokens"])?.jsonPrimitive?.intOrNull ?: 0,
             cacheReadTokens = details?.get("cached_tokens")?.jsonPrimitive?.intOrNull ?: 0,
             cacheWriteTokens = 0,

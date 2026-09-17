@@ -31,9 +31,14 @@ object AnthropicToOpenAiRequest {
             }
             (src["stop_sequences"] as? JsonArray)?.let { put("stop", it) }
             (src["metadata"] as? JsonObject)?.get("user_id")?.let { put("user", it) }
+            // thinking：enabled 带预算 → 按预算折 effort；adaptive（Claude Code 2.1+ 默认）→ 看 output_config.effort，
+            // 没有就 medium。disabled / 缺失 → 不带 reasoning_effort，让上游按自己的默认来。
+            val effortHint = (src["output_config"] as? JsonObject)?.get("effort")?.jsonPrimitive?.contentOrNull
             (src["thinking"] as? JsonObject)?.let { th ->
-                if (th["type"]?.jsonPrimitive?.contentOrNull == "enabled") {
-                    CodecSupport.reasoningEffort(th["budget_tokens"]?.jsonPrimitive?.intOrNull)?.let { put("reasoning_effort", it) }
+                when (th["type"]?.jsonPrimitive?.contentOrNull) {
+                    "enabled" -> (effortHint ?: CodecSupport.reasoningEffort(th["budget_tokens"]?.jsonPrimitive?.intOrNull))?.let { put("reasoning_effort", it) }
+                    "adaptive" -> put("reasoning_effort", effortHint ?: "medium")
+                    else -> {}
                 }
             }
             put("messages", buildMessages(src))

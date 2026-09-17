@@ -36,6 +36,12 @@ data class Channel(
     val proxyUrl: String? = null,
     /** Azure OpenAI 的 api-version（V008）；其它类型忽略。空 = 代码默认值。 */
     val apiVersion: String? = null,
+    /** 最近一次测速（V010，定时任务 gateway-channel-probe 或手动探测写入） */
+    val lastProbeAt: Long? = null,
+    val lastProbeMs: Long? = null,
+    /** 1 = 通，0 = 不通，null = 没测过 */
+    val lastProbeOk: Int? = null,
+    val lastProbeError: String? = null,
     /** 429 冷却截止（epoch ms）：此刻之前该渠道不参与候选，避免立即重试被限流的上游 */
     val cooldownUntil: Long = 0,
     /** 成本折扣（如 "0.6" = 官方价 6 折），DECIMAL 字符串，毛利核算用（spec 决策 B2） */

@@ -73,7 +73,7 @@ class ChannelController(
     @Permission("gateway:channel:update")
     suspend fun probe(@PathVariable id: Long, @Body request: ProbeChannelRequest): logic.ChannelProbeResult {
         val channel = channelLogic.get(id) ?: throw IllegalArgumentException("gateway channel id=$id not found")
-        return probeLogic.probe(channel, request.model)
+        return probeLogic.probeAndRecord(channel, request.model)
     }
 
     /** 拉取上游模型清单（不写库；由前端决定是否并入渠道的 models）。 */

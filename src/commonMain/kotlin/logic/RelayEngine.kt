@@ -779,7 +779,8 @@ class RelayEngine(
     companion object {
         const val RESPONSES_PATH = "/v1/responses"
         const val IMAGES_PATH = "/v1/images/generations"
-        val OPENAI_ONLY_PATHS = setOf(RESPONSES_PATH, IMAGES_PATH)
+        const val RERANK_PATH = "/v1/rerank"
+        val OPENAI_ONLY_PATHS = setOf(RESPONSES_PATH, IMAGES_PATH, RERANK_PATH)
         /** 渠道类型 → 上游协议适配器；null = 未知类型（渠道配置错了，不当路由候选）。 */
         fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {
             "openai_compatible" -> OpenAiAdapter

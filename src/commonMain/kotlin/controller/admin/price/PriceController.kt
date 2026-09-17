@@ -23,11 +23,8 @@ data class SavePriceRequest(
 @Serializable
 data class PriceImportRequest(val items: List<SavePriceRequest>, val overwrite: Boolean = true)
 
-@Serializable
-data class PriceImportResult(val created: Int, val updated: Int, val skipped: Int, val errors: List<String> = emptyList())
-
 @Controller("/gateway/price")
-class PriceController {
+class PriceController(private val importLogic: logic.PriceImportLogic) {
 
     @Get("/list")
     @Permission("gateway:price:list")
@@ -67,43 +64,23 @@ class PriceController {
     }
 
     /** 官方价（成本轨）+ 售价覆盖；售价低于毛利底线由 [logic.SalePricing.requireMargin] 拒绝。 */
-    /**
-     * 批量导入：按 model 去重后逐条 upsert。先把全部条目校验一遍，有一条不合法就整批不写 ——
-     * 运营贴进来一份 200 行的价目表，写到第 137 行报错停下，剩下的哪些写了哪些没写要对着列表数。
-     * [PriceImportRequest.overwrite] = false 时已存在的模型跳过（只补新模型，不动已经调过的价）。
-     */
+    /** 批量导入：见 [logic.PriceImportLogic]。 */
     @Post("/import")
     @Permission("gateway:price:create")
-    suspend fun import(@Body request: PriceImportRequest): PriceImportResult {
-        val errors = mutableListOf<String>()
-        val parsed = request.items.mapIndexedNotNull { i, item ->
-            if (item.model.isBlank()) { errors += "#${i + 1}: model 为空"; return@mapIndexedNotNull null }
-            runCatching { toModelPrice(item.copy(model = item.model.trim())).also { logic.SalePricing.requireMargin(it) } }
-                .onFailure { errors += "#${i + 1} ${item.model}: ${it.message ?: it::class.simpleName}" }
-                .getOrNull()
-        }
-        if (errors.isNotEmpty()) return PriceImportResult(0, 0, 0, errors)
-        var created = 0; var updated = 0; var skipped = 0
-        for (price in parsed.distinctBy { it.model }) {
-            val current = ModelPriceTable.oneWhere { ModelPrice::model eq price.model }
-            when {
-                current == null -> { ModelPriceTable.insert(price.copy(source = "import")); created++ }
-                !request.overwrite -> skipped++
-                else -> {
-                    ModelPriceTable.update(current.copy(
-                        inputPrice = price.inputPrice, outputPrice = price.outputPrice,
-                        cacheReadPrice = price.cacheReadPrice, cacheWritePrice = price.cacheWritePrice,
-                        perRequestPrice = price.perRequestPrice ?: current.perRequestPrice,
-                        defaultMaxOutputTokens = price.defaultMaxOutputTokens ?: current.defaultMaxOutputTokens,
-                        saleOverride = price.saleOverride ?: current.saleOverride,
-                        source = "import",
-                    ))
-                    updated++
-                }
-            }
-        }
-        return PriceImportResult(created, updated, skipped)
-    }
+    suspend fun import(@Body request: PriceImportRequest): logic.PriceImportResult =
+        importLogic.importItems(request.items.map { toItem(it) }, request.overwrite)
+
+    /** 立即从 NEWGATE_PRICE_SYNC_URL 拉一次价目表（定时任务 gateway-price-sync 每天也会做）。 */
+    @Post("/sync")
+    @Permission("gateway:price:create")
+    suspend fun sync(): logic.PriceImportResult = importLogic.syncFromEnv()
+        ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "未配置 NEWGATE_PRICE_SYNC_URL")
+
+    private fun toItem(r: SavePriceRequest) = logic.PriceImportItem(
+        model = r.model, inputPrice = r.inputPrice, outputPrice = r.outputPrice,
+        cacheReadPrice = r.cacheReadPrice, cacheWritePrice = r.cacheWritePrice,
+        perRequestPrice = r.perRequestPrice, defaultMaxOutputTokens = r.defaultMaxOutputTokens, saleOverride = r.saleOverride,
+    )
 
     private fun toModelPrice(request: SavePriceRequest): ModelPrice = ModelPrice(
         model = request.model,
