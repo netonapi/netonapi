@@ -24,6 +24,26 @@ interface ProtocolAdapter {
 
     /** 协议原生 error JSON。 */
     fun errorBody(code: String, message: String): String
+
+    // ── 下面三个钩子给「协议相同、但鉴权/路径/流帧不同」的托管上游用（Bedrock / Vertex / Azure）──
+
+    /** 上游路径；null = 由 RelayEngine 按协议默认规则决定。 */
+    fun upstreamPath(inboundPath: String, channel: Channel, upstreamModel: String, stream: Boolean): String? = null
+
+    /** 发给上游的 body（Bedrock 要去掉 model/stream、加 anthropic_version 等）。 */
+    fun upstreamBody(body: String, upstreamModel: String, stream: Boolean): String = body
+
+    /** 每请求的鉴权头（SigV4 要签 url + body，Vertex 要换 OAuth token）。默认退回静态头。 */
+    suspend fun requestHeaders(apiKey: String, method: String, url: String, body: String, channel: Channel): Map<String, String> = upstreamHeaders(apiKey)
+
+    /** 非 SSE 的流帧解码（Bedrock 的 AWS event-stream）：把上游字节转成 SSE 文本；null = 上游本来就是 SSE。 */
+    fun byteStreamDecoder(): ByteStreamDecoder? = null
+}
+
+/** 字节流 → SSE 文本的增量解码器；finish 返回残留（正常为空）。 */
+interface ByteStreamDecoder {
+    fun feed(bytes: ByteArray): String
+    fun finish(): String
 }
 
 /** 流式 usage 旁路累加器（协议无关接口）。 */

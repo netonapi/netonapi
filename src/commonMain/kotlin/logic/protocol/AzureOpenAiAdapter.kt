@@ -1,5 +1,7 @@
 package logic.protocol
 
+import model.Channel
+
 /**
  * Azure OpenAI：协议与 OpenAI 相同（请求/响应/流式/usage 全部复用 [OpenAiAdapter]，
  * 所以 id 仍是 "openai"，跨协议转码按 openai 走），只有两处不一样：
@@ -15,6 +17,10 @@ object AzureOpenAiAdapter : ProtocolAdapter by OpenAiAdapter {
         "api-key" to apiKey,
         "Content-Type" to "application/json",
     )
+
+    // `by OpenAiAdapter` 会把接口默认方法也委托出去，委托里的 this 是 OpenAiAdapter，
+    // 于是默认实现调到的是它的 Bearer 头。凡是默认实现里回调了本对象方法的钩子都要在这里显式覆盖。
+    override suspend fun requestHeaders(apiKey: String, method: String, url: String, body: String, channel: Channel): Map<String, String> = upstreamHeaders(apiKey)
 
     fun path(inboundPath: String, deployment: String, apiVersion: String?): String {
         // Responses API 只在 Azure 的 v1 面上有，部署名走 body 的 model，路径不带 deployments

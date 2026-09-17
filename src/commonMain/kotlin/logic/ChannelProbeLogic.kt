@@ -80,11 +80,16 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
         val mapped = RequestRewriter.rewrite(hub, channel, injectStreamOptions = false)
         val body = if (upstream.id == "openai") mapped.body else ProtocolCodecs.requestFromHub(upstream.id)(mapped.body)
         val path = RelayEngine.upstreamPathFor(upstream, channel, "/v1/chat/completions", mapped.upstreamModel, stream = false)
+        val url = channel.baseUrl.trimEnd('/') + path
+        val finalBody = upstream.upstreamBody(body, mapped.upstreamModel, false)
+        val headers = try { upstream.requestHeaders(key.apiKey, "POST", url, finalBody, channel) } catch (e: Exception) {
+            return ChannelProbeResult(ok = false, status = null, latencyMs = 0, model = model, upstreamModel = mapped.upstreamModel, upstreamPath = path, error = (e.message ?: "credential error").take(500))
+        }
         val request = HttpClientRequest(
             method = HttpClientMethod.Post,
-            url = channel.baseUrl.trimEnd('/') + path,
-            headers = HttpHeaders.from(upstream.upstreamHeaders(key.apiKey)),
-            body = HttpClientBody.Json(body),
+            url = url,
+            headers = HttpHeaders.from(headers),
+            body = HttpClientBody.Json(finalBody),
         )
         val start = kotlin.time.Clock.System.now().toEpochMilliseconds()
         fun elapsed() = kotlin.time.Clock.System.now().toEpochMilliseconds() - start
@@ -118,6 +123,9 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
             ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "未知渠道类型 ${channel.type}")
         val key = channelLogic.pickKey(channel.id)
             ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "渠道没有可用的 Key")
+        if (channel.type in setOf("bedrock", "vertex_anthropic", "vertex_gemini")) {
+            return ChannelModelsResult(ok = false, error = "该类型没有可用的模型列表接口，请手动填写模型清单（模型映射的目标名即厂商模型 id）")
+        }
         val base = channel.baseUrl.trimEnd('/')
         val (url, extract) = when (channel.type) {
             "azure_openai" -> {

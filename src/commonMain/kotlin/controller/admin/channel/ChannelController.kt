@@ -32,7 +32,7 @@ class ChannelController(
                 modelMapping = request.modelMapping, paramOverride = request.paramOverride,
                 priority = request.priority, weight = request.weight,
                 capabilities = logic.RelayRouter.requireCapabilities(request.capabilities),
-                proxyUrl = request.proxyUrl, apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
+                proxyUrl = request.proxyUrl, apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, providerConfig = request.providerConfig?.trim()?.takeIf { it.isNotEmpty() }, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
                 remark = request.remark,
             )
         )
@@ -52,7 +52,7 @@ class ChannelController(
             modelMapping = request.modelMapping, paramOverride = request.paramOverride,
             priority = request.priority, weight = request.weight,
             capabilities = logic.RelayRouter.requireCapabilities(request.capabilities),
-            proxyUrl = request.proxyUrl, apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
+            proxyUrl = request.proxyUrl, apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, providerConfig = request.providerConfig?.trim()?.takeIf { it.isNotEmpty() }, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
             remark = request.remark,
         ))
         request.status?.let { if (it != current.status) channelLogic.updateStatus(request.id, it) }

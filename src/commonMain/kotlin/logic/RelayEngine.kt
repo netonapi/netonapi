@@ -365,11 +365,17 @@ class RelayEngine(
         val betaHeaders = if (transform.inbound.id == upstream.id) {
             listOf("anthropic-beta", "OpenAI-Beta").mapNotNull { h -> ctx.request.header(h)?.let { h to it } }.toMap()
         } else emptyMap()
+        val upstreamUrl = channel.baseUrl.trimEnd('/') + transform.upstreamPath
+        val upstreamBody = upstream.upstreamBody(rewritten.body, rewritten.upstreamModel, rewritten.stream)
+        // 托管上游（Bedrock / Vertex）的鉴权头依赖 url 与 body（签名 / 换 token），所以在 body 定型之后才算
+        val authHeaders = try { upstream.requestHeaders(apiKey, "POST", upstreamUrl, upstreamBody, channel) } catch (e: IllegalArgumentException) {
+            throw HttpClientException(HttpClientError.Http(401, e.message ?: "credential error", upstream.errorBody("authentication_error", e.message ?: "credential error")))
+        }
         val request = HttpClientRequest(
             method = HttpClientMethod.Post,
-            url = channel.baseUrl.trimEnd('/') + transform.upstreamPath,
-            headers = HttpHeaders.from(upstream.upstreamHeaders(apiKey) + betaHeaders),
-            body = HttpClientBody.Json(rewritten.body),
+            url = upstreamUrl,
+            headers = HttpHeaders.from(authHeaders + betaHeaders),
+            body = HttpClientBody.Json(upstreamBody),
         )
 
         if (!rewritten.stream) {
@@ -395,7 +401,7 @@ class RelayEngine(
         // 首字节前上游失败时无法换渠道重试（会撞 ResponseAlreadyCommitted）。
         val accumulator = upstream.streamUsageAccumulator(rewritten.body)
         val streamTransformer = transform.streamTransformerFactory?.invoke()
-        return streamWithPreflight(ctx, client, request, accumulator, streamTransformer, token, channel, keyId, rewritten, group, groupSource, startMs)
+        return streamWithPreflight(ctx, client, request, accumulator, streamTransformer, token, channel, keyId, rewritten, group, groupSource, startMs, upstream)
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -403,22 +409,27 @@ class RelayEngine(
         ctx: HttpContext, client: HttpClient, request: HttpClientRequest,
         accumulator: logic.protocol.StreamUsageAccumulator, streamTransformer: StreamTransformer?,
         token: GatewayToken, channel: Channel, keyId: Long, rewritten: Rewritten, group: String,
-        groupSource: GroupSource, startMs: Long,
+        groupSource: GroupSource, startMs: Long, upstreamAdapter: ProtocolAdapter,
     ): RelayOutcome = kotlinx.coroutines.coroutineScope {
         // producer 捕获上游异常存入 openError（不外抛，避免 cancel scope 抢占我们的重试异常）
         var openError: Throwable? = null
         val chunks = this@coroutineScope.produce<String>(capacity = 1) {
             // 增量 UTF-8 解码：跨 chunk 被拆开的多字节字符（中文/emoji）不再逐块 decodeToString 产生替换字符。
             val utf8 = logic.protocol.Utf8StreamDecoder()
+            // Bedrock 之类非 SSE 帧：先由适配器的字节解码器还原成 SSE 文本再进后面的流水线
+            val frames = upstreamAdapter.byteStreamDecoder()
             try {
                 client.stream(request).collect { chunk ->
                     when (chunk) {
-                        is HttpClientStreamChunk.Bytes -> { val s = utf8.decode(chunk.bytes); if (s.isNotEmpty()) send(s) }
-                        is HttpClientStreamChunk.Text -> send(chunk.text)
+                        is HttpClientStreamChunk.Bytes -> {
+                            val s = if (frames != null) frames.feed(chunk.bytes) else utf8.decode(chunk.bytes)
+                            if (s.isNotEmpty()) send(s)
+                        }
+                        is HttpClientStreamChunk.Text -> { val s = if (frames != null) frames.feed(chunk.text.encodeToByteArray()) else chunk.text; if (s.isNotEmpty()) send(s) }
                         is HttpClientStreamChunk.End -> {}
                     }
                 }
-                val tail = utf8.flush(); if (tail.isNotEmpty()) send(tail)
+                val tail = if (frames != null) frames.finish() else utf8.flush(); if (tail.isNotEmpty()) send(tail)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -787,12 +798,16 @@ class RelayEngine(
             "azure_openai" -> AzureOpenAiAdapter
             "anthropic" -> AnthropicAdapter
             "gemini" -> GeminiAdapter
+            "bedrock" -> logic.protocol.aws.BedrockAdapter
+            "vertex_anthropic" -> logic.protocol.vertex.VertexAnthropicAdapter
+            "vertex_gemini" -> logic.protocol.vertex.VertexGeminiAdapter
             else -> null
         }
 
     fun upstreamPathFor(upstream: ProtocolAdapter, channel: Channel, inboundPath: String, upstreamModel: String, stream: Boolean): String =
         when {
             upstream === AzureOpenAiAdapter -> AzureOpenAiAdapter.path(inboundPath, upstreamModel, channel.apiVersion)
+            upstream.upstreamPath(inboundPath, channel, upstreamModel, stream) != null -> upstream.upstreamPath(inboundPath, channel, upstreamModel, stream)!!
             upstream.id == "anthropic" -> "/v1/messages"
             upstream.id == "gemini" -> "/v1beta/models/$upstreamModel:" + if (stream) "streamGenerateContent?alt=sse" else "generateContent"
             else -> if (inboundPath.startsWith("/v1/")) inboundPath else "/v1/chat/completions"

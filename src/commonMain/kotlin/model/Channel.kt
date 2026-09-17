@@ -36,6 +36,8 @@ data class Channel(
     val proxyUrl: String? = null,
     /** Azure OpenAI 的 api-version（V008）；其它类型忽略。空 = 代码默认值。 */
     val apiVersion: String? = null,
+    /** 托管上游的厂商参数 JSON（V011）：Vertex {"project","location"}，Bedrock 可选 {"region"} */
+    val providerConfig: String? = null,
     /** 最近一次测速（V010，定时任务 gateway-channel-probe 或手动探测写入） */
     val lastProbeAt: Long? = null,
     val lastProbeMs: Long? = null,
