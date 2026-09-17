@@ -144,7 +144,7 @@ class RedemptionCodeAdminController(
 
     /** 批次核销情况：总数 / 未用 / 已用 / 作废 / 过期 / 已核销总额。 */
     @Get("/stats/{batchId}")
-    @Permission("gateway:redemption:get")
+    @Permission("gateway:redemption:query")
     suspend fun stats(@PathVariable batchId: String): RedemptionBatchStatsVO {
         val s = redemptionLogic.stats(batchId)
         return RedemptionBatchStatsVO(

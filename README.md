@@ -16,7 +16,18 @@ moduleId `gateway`；路由组 `gateway`（`/v1`、`/v1beta`、`/health`、`/met
 | `logic/PricingCalc` `SalePricing` `ReserveCalc` | 计价、售价轨、预留额估算 |
 | `logic/OverviewLogic` `UsageStatsLogic` | 管理台概览与用户用量汇总（都从日志表现算） |
 | `job/` | 定时任务：渠道测速、价源同步 |
-| `sql/postgresql` | 迁移 V001–V011，编译期嵌入 |
+| `sql/postgresql` | 迁移 V001–V012，编译期嵌入 |
+
+## 管理台信息架构（V012）
+
+NanoGate 是唯一装配 gateway 的发行版（canonical 脚手架装的是 `cs`），所以「本产品的管理台长什么样」
+也是本模块的职责：V012 停用与中转站无关的继承页面、把 AI 网关排到第一组、补回没有入口的支付回调页、
+预置网关运营 / 财务 / 客服 / 只读四个角色。这些**不能**写进 module-system / infra / member ——
+那些是 canonical 模块，别的产品要用签到、提现、开放平台。
+
+因此本模块的 `@Module(dependsOn = ...)` 列了五个模块：不是运行时要用它们的 Logic（只用 system），
+而是迁移按 dependsOn 拓扑排序，V012 必须在它要调整的菜单行都插入之后才跑。漏声明时那批 UPDATE
+会匹配 0 行且不报错。
 
 ## 设计文档
 

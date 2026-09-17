@@ -48,7 +48,7 @@ data class RevokeQuotaResultVO(
 class QuotaController(private val quotaLogic: QuotaLogic) {
 
     @Get("/get-by-user/{userId}")
-    @Permission("gateway:quota:get")
+    @Permission("gateway:quota:query")
     suspend fun getByUser(@PathVariable userId: Long): QuotaAccount = quotaLogic.account(userId)
 
     @Post("/grant")
@@ -77,7 +77,7 @@ class QuotaController(private val quotaLogic: QuotaLogic) {
     }
 
     @Get("/transactions/{userId}")
-    @Permission("gateway:quota:get")
+    @Permission("gateway:quota:query")
     suspend fun transactions(@PathVariable userId: Long): List<QuotaTransaction> =
         quotaLogic.transactions(userId)
 }

@@ -31,11 +31,11 @@ class PriceController(private val importLogic: logic.PriceImportLogic) {
     suspend fun list(): List<ModelPrice> = ModelPriceTable.findAll()
 
     @Get("/get/{id}")
-    @Permission("gateway:price:get")
+    @Permission("gateway:price:query")
     suspend fun get(@PathVariable id: Long): ModelPrice? = ModelPriceTable.get(id)
 
     @Get("/get-by-model")
-    @Permission("gateway:price:get")
+    @Permission("gateway:price:query")
     suspend fun getByModel(@Query model: String): ModelPrice? =
         ModelPriceTable.oneWhere { ModelPrice::model eq model }
 

@@ -35,7 +35,7 @@ class GroupController {
     suspend fun list(): List<GatewayGroup> = GatewayGroupTable.findAll()
 
     @Get("/get/{id}")
-    @Permission("gateway:group:get")
+    @Permission("gateway:group:query")
     suspend fun get(@PathVariable id: Long): GatewayGroup? = GatewayGroupTable.get(id)
 
     @Post("/create")

@@ -52,7 +52,7 @@ class GroupOverrideController {
     suspend fun list(): List<GroupOverride> = GroupOverrideTable.findAll()
 
     @Get("/get/{userId}")
-    @Permission("gateway:group_override:get")
+    @Permission("gateway:group_override:query")
     suspend fun get(@PathVariable userId: Long): GroupOverride? = GroupOverrideTable.get(userId)
 
     @Post("/create")

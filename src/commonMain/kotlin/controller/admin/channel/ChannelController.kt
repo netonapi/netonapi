@@ -18,7 +18,7 @@ class ChannelController(
     suspend fun list(): List<Channel> = channelLogic.list()
 
     @Get("/get/{id}")
-    @Permission("gateway:channel:get")
+    @Permission("gateway:channel:query")
     suspend fun get(@PathVariable id: Long): Channel? = channelLogic.get(id)
 
     @Post("/create")
@@ -89,7 +89,7 @@ class ChannelController(
     suspend fun delete(@PathVariable id: Long) = channelLogic.delete(id)
 
     @Get("/keys/{id}")
-    @Permission("gateway:channel:get")
+    @Permission("gateway:channel:query")
     suspend fun keys(@PathVariable id: Long): List<ChannelKeyVO> =
         channelLogic.listKeys(id).map {
             ChannelKeyVO(
