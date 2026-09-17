@@ -15,7 +15,7 @@ class UsageLogController {
      * 用量表会持续增长，全量返回既拖垮接口也无法运营。
      */
     @Get("/page")
-    @Permission("gateway:log:list")
+    @Permission("gateway:log:query")
     suspend fun page(
         @Query pageNo: Int = 1,
         @Query pageSize: Int = 20,
@@ -41,12 +41,12 @@ class UsageLogController {
     }
 
     @Get("/list-by-user/{userId}")
-    @Permission("gateway:log:list")
+    @Permission("gateway:log:query")
     suspend fun listByUser(@PathVariable userId: Long): List<UsageLog> =
         UsageLogTable.query { where { UsageLog::userId eq userId } }.list()
 
     @Get("/list-by-channel/{channelId}")
-    @Permission("gateway:log:list")
+    @Permission("gateway:log:query")
     suspend fun listByChannel(@PathVariable channelId: Long): List<UsageLog> =
         UsageLogTable.query { where { UsageLog::channelId eq channelId } }.list()
 }

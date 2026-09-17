@@ -27,7 +27,7 @@ data class PriceImportRequest(val items: List<SavePriceRequest>, val overwrite: 
 class PriceController(private val importLogic: logic.PriceImportLogic) {
 
     @Get("/list")
-    @Permission("gateway:price:list")
+    @Permission("gateway:price:query")
     suspend fun list(): List<ModelPrice> = ModelPriceTable.findAll()
 
     @Get("/get/{id}")

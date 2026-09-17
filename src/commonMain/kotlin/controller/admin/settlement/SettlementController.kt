@@ -50,12 +50,12 @@ class SettlementController(
 
     /** 待人工处理的结算（预留仍被持有，需要人工判断上游是否已计费）。 */
     @Get("/manual-review")
-    @Permission("gateway:settlement:list")
+    @Permission("gateway:settlement:query")
     suspend fun manualReview(): List<Settlement> =
         SettlementTable.query { where { Settlement::status eq Settlement.MANUAL_REVIEW } }.list()
 
     @Get("/get/{settlementId}")
-    @Permission("gateway:settlement:list")
+    @Permission("gateway:settlement:query")
     suspend fun get(@PathVariable settlementId: String): Settlement? =
         settlementLogic.bySid(settlementId)
 }

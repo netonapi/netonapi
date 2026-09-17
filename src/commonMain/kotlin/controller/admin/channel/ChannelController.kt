@@ -14,7 +14,7 @@ class ChannelController(
 ) {
 
     @Get("/list")
-    @Permission("gateway:channel:list")
+    @Permission("gateway:channel:query")
     suspend fun list(): List<Channel> = channelLogic.list()
 
     @Get("/get/{id}")

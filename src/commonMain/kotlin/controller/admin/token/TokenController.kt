@@ -74,7 +74,7 @@ class TokenController(private val tokenLogic: TokenLogic) {
     }
 
     @Get("/list-by-user/{userId}")
-    @Permission("gateway:token:list")
+    @Permission("gateway:token:query")
     suspend fun listByUser(@PathVariable userId: Long): List<TokenVO> =
         tokenLogic.listByUser(userId).map { TokenVO.from(it) }
 

@@ -119,7 +119,7 @@ class RedemptionCodeAdminController(
 
     /** 分页查询。status 与 batchId 都可选；两个都不传时列全部（倒序）。码是脱敏形态。 */
     @Get("/page")
-    @Permission("gateway:redemption:list")
+    @Permission("gateway:redemption:query")
     suspend fun page(
         @Query pageNo: Int = 1,
         @Query pageSize: Int = 20,

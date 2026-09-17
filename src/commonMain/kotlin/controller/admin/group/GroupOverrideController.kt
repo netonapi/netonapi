@@ -48,15 +48,15 @@ data class SaveGroupOverrideRequest(
 class GroupOverrideController {
 
     @Get("/list")
-    @Permission("gateway:group_override:list")
+    @Permission("gateway:group-override:query")
     suspend fun list(): List<GroupOverride> = GroupOverrideTable.findAll()
 
     @Get("/get/{userId}")
-    @Permission("gateway:group_override:query")
+    @Permission("gateway:group-override:query")
     suspend fun get(@PathVariable userId: Long): GroupOverride? = GroupOverrideTable.get(userId)
 
     @Post("/create")
-    @Permission("gateway:group_override:create")
+    @Permission("gateway:group-override:create")
     suspend fun create(@Body request: SaveGroupOverrideRequest): Long {
         val userId = requireUserId(request.userId)
         requireChargeableMember(userId)
@@ -85,7 +85,7 @@ class GroupOverrideController {
      * 换用户不是更新，是删掉旧的再建一条 —— 静默改主键会让审计记录对不上原来那个人。
      */
     @Put("/update")
-    @Permission("gateway:group_override:update")
+    @Permission("gateway:group-override:update")
     suspend fun update(@Body request: SaveGroupOverrideRequest) {
         val userId = requireUserId(request.userId)
         val current = GroupOverrideTable.get(userId)
@@ -114,7 +114,7 @@ class GroupOverrideController {
      * 开着不会算错钱。
      */
     @Delete("/delete/{userId}")
-    @Permission("gateway:group_override:delete")
+    @Permission("gateway:group-override:delete")
     suspend fun delete(@PathVariable userId: Long) {
         GroupOverrideTable.get(userId)
             ?: notFound("per-user billing override for user=$userId not found")

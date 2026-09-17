@@ -31,7 +31,7 @@ data class SaveGroupRequest(
 class GroupController {
 
     @Get("/list")
-    @Permission("gateway:group:list")
+    @Permission("gateway:group:query")
     suspend fun list(): List<GatewayGroup> = GatewayGroupTable.findAll()
 
     @Get("/get/{id}")
