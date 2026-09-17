@@ -41,7 +41,8 @@
 | 项目 | 状态 |
 |------|------|
 | RBAC 数据模型字段（User/Role/Menu/关系表） | 冻结 |
-| `@Permission` 字符串格式语义（脚手架约定） | 冻结 |
+| `@Permission` 字符串格式语义（三段式 + 连字符） | 冻结 |
+| action 词汇表（读一律 `query`，写 create/update/delete） | 冻结（2026-09） |
 | 通配规则（`*:*:*` / `module:*:*` / `module:res:*`） | 冻结 |
 | 菜单 `type` 取值与语义（1/2/3） | 冻结 |
 | `PermissionInfo` 计算流程 | 冻结 |
@@ -118,42 +119,105 @@
 <module>:<resource>:<action>
 ```
 
-**强制三段式**，冒号分隔，全小写，下划线连接复合词。
+**强制三段式**，冒号分隔，全小写，**复合词用连字符 `-`**。
 
 | 段 | 含义 | 示例 |
 |----|------|------|
-| `module` | 业务模块 | `system` / `member` / `payment` / `platform` |
-| `resource` | 资源/聚合根 | `user` / `role` / `order` / `wallet_recharge` |
-| `action` | 操作类型 | `list` / `page` / `query` / `create` / `update` / `delete` / `export` / `import` |
+| `module` | 业务模块 | `system` / `infra` / `member` / `pay` / `platform` / `gateway` |
+| `resource` | 资源/聚合根，**必须与该资源的路由段逐字一致** | `user` / `mail-account` / `wallet-recharge-package` |
+| `action` | 操作类型，取自 §3.4 的冻结词汇表 | `query` / `create` / `update` / `delete` |
+
+> **分隔符为什么是连字符**：2026-09 全量核对时，代码里 26 个多词资源段**全部**用连字符
+> （`api-access-log`、`mail-account`、`wallet-recharge-package`…），且与路由段完全一致
+> （`/system/mail-account`、`/platform/charge-record`）；用下划线的只有一个孤例，已改正。
+> 规范此前写的是下划线，但没有一处代码遵守 —— 一条零遵守率的冻结规则不是标准。
+> 现按「资源段 = 路由段」对齐：开发者在控制器上看到 `@Controller("/system/mail-account")`，
+> 就知道权限串一定是 `system:mail-account:*`，不需要再记第二套拼写。
+
+**resource 段与路由段不一致是 bug**，CI 应当拦下来。真实案例：`ChargeRecordController` 的路由是
+`/platform/charge-record`，权限串却写成 `platform:charge:*`，导致菜单里种的 `platform:charge-record:query`
+永远匹配不上后端 —— 授了权也是 403。
 
 ### 3.2 示例
 
 ```
-system:user:page
+system:user:query            # 列表、下拉、详情——所有读都是它
 system:user:create
 system:user:update
 system:user:delete
-system:user:assign_role
-member:user:export
-payment:wallet:recharge
-platform:client:reset_secret
+system:user:update-password  # 业务动作，复合词用连字符
+pay:wallet-recharge-package:query
+platform:charge-record:delete
+gateway:group-override:query
 ```
 
 ### 3.3 禁止形式
 
 ```
-❌ user:list                 缺 module 段
-❌ system.user.list          错误分隔符
-❌ System:User:List          大写
-❌ system:user:list,update   多 action 合并
-❌ system::list              空段
-❌ system:user               缺 action 段（即使 action 是"读全部"也必须显式写 page/list/query）
+❌ user:query                  缺 module 段
+❌ system.user.query           错误分隔符
+❌ System:User:Query           大写
+❌ system:user:query,update    多 action 合并
+❌ system::query               空段
+❌ system:user                 缺 action 段（读也必须显式写 query）
+❌ system:user:page            page / list / detail / overview 一律并入 query（§3.4）
+❌ system:mail_account:query   复合词用连字符，不用下划线
+❌ pay:wallet-freeze:menu      menu 不是动作（真实出现过，见 §3.4 注）
+❌ platform:charge:query       resource 段与路由 /platform/charge-record 不一致
 ```
 
-### 3.4 推荐 action 词汇表（约定，非强制）
+### 3.4 action 词汇表（**冻结**）
 
 | Action | 用途 |
 |--------|------|
+| `query` | **一切读**：分页列表、不分页列表、下拉数据、单条详情、统计概览 |
+| `create` | 创建 |
+| `update` | 更新（含状态变更、排序等一切改动） |
+| `delete` | 删除 |
+| `export` / `import` | 导出 / 导入（有实际接口时才用） |
+| `<verb>` | 业务专属动作，复合词用连字符，如 `update-password` / `mark-paid` / `assign` |
+
+**读不分形状。** 这是本表最重要的一条：同一资源的分页、下拉、详情共用一个 `query`。
+脚手架的主流模块一直如此 —— `system:user:query` 同时挂在 `/page`、`/simple-list`、`/get/{id}`、
+`/get/{id}/with-roles` 四个接口上。
+
+为什么不保留 `page` / `list` 的区分：
+- **运营看不懂。** 角色授权页面上并排出现 `pay:order:page` 与 `pay:wallet:overview`，
+  没有人能判断它们是不是同一类权限。
+- **拆了也没人用对。** 菜单授的是「页面」，而一个列表页本来就要同时调列表接口和详情接口。
+  把它们拆成两个权限的实际后果是「列表能看、点进去 403」，没有任何场景需要这种粒度。
+- **它不是数据级权限。** 真要控制「只能看自己的单」，那是行级权限，本文 §1.3 明确不覆盖，
+  再多的 action 词也解决不了。
+
+2026-09 的全量统一把 27 个 `page` / `list` / `detail` / `overview` 并入了 `query`，
+涉及 payment（12）、platform（7）、gateway（8）。合并是**放宽**：原先只授了列表权限的角色
+现在也能看详情 —— 可以接受，理由见上。
+
+> **注**：`pay:wallet-freeze:menu` 曾经真实存在 —— 「这一行是个菜单」被写进了 action 段。
+> action 段只能是动作，不能是这一行在 UI 里的角色。
+
+### 3.5 一致性约束（CI 应当检查）
+
+除了格式，还有两条**存在性**约束。§9.4 已指出格式检查管不到它们，这里给出判定方法：
+
+1. **菜单里的 permission 必须在后端存在。** 否则运营勾了也没用 —— 权限集里多一个串，
+   没有任何接口认它。全量核对方法：
+   ```
+   后端：grep -rhoE '@Permission\("[^"]+"\)' <各模块>/src | sed 's/@Permission("//;s/")//' | sort -u
+   菜单：SELECT DISTINCT permission FROM system_menus WHERE permission <> '' AND status = 1
+   comm -13 后端 菜单   # 输出即死授权，必须为空
+   ```
+   2026-09 首次跑这条检查时查出 8 条，包括四个指向根本不存在的 `/infra/config` 控制器的按钮。
+
+2. **菜单指向的页面，后端必须真有接口。** 判断依据是后端有没有对应路由与 `@Permission`，
+   **不是前端有没有 `.tsx`**。前端模块里躺着一个页面文件，不代表它调得通 ——
+   `pay/notify/index` 与 `pay/app/index` 两页就是这样：前端页面齐全，
+   而 module-payment 根本没有 `/pay/notify`、`/pay/app` 控制器，实测 404。
+
+反方向（后端有 `@Permission`、菜单里没有）不是 bug 但是缺口：那个能力只有 super_admin 用得上，
+任何角色都授不了。新增受权限保护的接口时，同一个 PR 里补上菜单种子。
+
+--------|------|
 | `list` | 不分页列表（少量、字典级） |
 | `page` | 分页列表 |
 | `query` | 单条查询 / 详情 |
@@ -400,39 +464,6 @@ CI/lint 阶段应当检查：
 - `controller/app/**` 不出现 `@Permission`（出现即报错，提示改为 `@RequireAuth`）
 - `controller/platform/**` 不出现 `@Permission` 与 `@RequireAuth`
 
-### 9.4 存在性缺口：§9.3 只管格式，不管有没有
-
-§9.3 检查的是 `@Permission` 字符串**写得对不对**，没有检查 admin 路由**有没有** `@Permission`。
-两者的失效后果完全不同：格式错是显式的（匹配不上，或被 lint 抓住），**缺失是静默的** ——
-框架 `SecurityPreHandle` 里的条件是 `route.permission != null`，注解缺失时它根本不做授权检查，
-于是路由组成了唯一的门。而 `/admin` 路由组只保证「你是某个管理端账号」，
-不保证「你这个角色能做这件事」。任何能登进后台的账号都等于全权。
-
-缺失又不能一律靠句法检查补齐，因为有合法形态：
-
-| 形态 | 例子 | 判定 |
-|------|------|------|
-| 显式匿名 | `DictDataController.simple-list` 带 `@AllowAnonymous` | 合法：意图写在注解里，可机检 |
-| 处理器的唯一主体是调用者自己 | `UserProfileController` 的 get / update / update-password | 合法：自助改自己的资料与密码不该需要一个权限串；给它加权限反而把「每个管理员都能改自己密码」变成一个可被配错的开关 |
-| 健康检查 | `GatewayInfoController./ping` | 合法：无副作用 |
-| 作用于**任意目标数据**却无注解 | `RedemptionCodeAdminController`（曾如此，已修） | **这就是洞**：造兑换码等于造钱 |
-
-区分第二行与第四行的是**语义**（body / path 参数指向的是别人还是自己），不是句法 ——
-`UserProfileController.update` 同样收 `@Body`。所以 KSP 编译期守卫做不到不误伤，
-强制点落在 harness：
-
-- **S46** 造一个「能登录但零角色」的管理端账号（插 `system_users`、**不插** `system_user_roles`；
-  `resolvePermissions` 对无角色用户返回 `emptySet()`），断言它被 403 挡住且一行也没写；
-  同一接口换 super_admin 必须 200 —— 少了这半对照，403 可能来自任何原因（路由坏了、body 不合法），
-  场景会绿着放行一个已经谁都用不了的接口。
-- **S47** 把同一主体打到另外三个跨模块的钱端点（发额度 / 退款 / 建计价组），断言 403
-  **且响应体点名那条权限串**（`Permission denied: <permission>`，`code=10004`）。
-  只断 403 不够：路由写错打到别处的 403 与权限生效长得一模一样。
-
-变异验证：摘掉 `@Permission("gateway:redemption:create")` 与 `@Permission("gateway:quota:grant")`
-后 S46/S47 双双转红 —— 零权限账号造出 3 张码、给自己发了 100000 额度，其余 45 个场景仍绿；
-两个场景里**未被变异的那几发仍然 403**，说明红得精确。
-
 ---
 
 ## 十、与框架抽象的对接
@@ -476,11 +507,8 @@ CI/lint 阶段应当检查：
 
 ### P0（影响正确性）
 
-1. ~~**super_admin 通配实际不生效**~~ —— **已修，条目保留以免被当成新发现重做一遍**。
-   `WildcardPermissionEvaluator` 已在 `module-system/security/` 实现，并由
-   `newgate/application/Main.kt` 的 `security { setPermissionEvaluator(...) }` 注入。
-   实证：harness S46 用 super_admin 打带 `@Permission("gateway:redemption:create")` 的接口得到 200，
-   同一发换成零角色账号得到 403。
+1. **super_admin 通配实际不生效** —— 框架默认 `PermissionEvaluator` 是精确匹配，当前 `PermissionLogic` 给 super_admin 返回 `["*:*:*"]` 但**没有任何代码注入支持通配的 evaluator**。结果：super_admin 用户调用 `@Permission("system:user:list")` 接口会被拒。
+   - **修复**：在 `SystemModuleInitializer` 实现 `WildcardPermissionEvaluator`（按 §4.2 算法），通过 `SecurityBuilder.setPermissionEvaluator(...)` 注入
 2. **`SUPER_ADMIN_ROLE` 硬编码** —— 见 §7.1，需改为 SPI
 
 ### P1（影响可维护性）
@@ -491,12 +519,8 @@ CI/lint 阶段应当检查：
 
 ### P2（规范化补强）
 
-6. **缺少 lint/CI 检查** —— §9.3 约束目前靠人工 review。注意 §9.3 只管**格式**；
-   **存在性**（admin 路由到底有没有 `@Permission`）是另一回事，详见 §9.4，
-   它不能靠句法检查补齐，目前的强制点是 harness S46/S47。
-7. ~~**缺少权限串单元测试**~~ —— **已补**。`WildcardPermissionEvaluatorTest` 8 个用例覆盖
-   §4.2 全部分支，以及 §4.1/§4.3 的禁止形式（中间段通配不匹配、注解里写通配被拒、
-   非三段式 required 被拒）。
+6. **缺少 lint/CI 检查** —— §9.3 约束目前靠人工 review
+7. **缺少权限串单元测试** —— `WildcardPermissionEvaluator` 必须有契约测试覆盖 §4.2 全部分支
 8. **缺少缓存驱逐契约测试** —— §8.5 全部触发事件应有测试
 
 ---

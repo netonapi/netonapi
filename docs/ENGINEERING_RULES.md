@@ -218,16 +218,19 @@
 - 初始化 SQL 中的状态注释必须明确写清：
   - `0=正常, 1=停用`
   - `0=否, 1=是`
-- **带 id 播种之后必须 `setval` 收尾**。`INSERT INTO t (id, ...) VALUES (1, ...)` 不会推进 BIGSERIAL 序列，
-  全新库里第一次走接口新增就撞主键，而且报的是 `500 Internal Server Error`，运维从信封上看不出是序列问题。
+- **带 id 播种之后必须 `setval` 收尾**。`INSERT INTO t (id, ...) VALUES (1, ...)` 不推进 BIGSERIAL 序列，
+  全新库里第一次走接口新增就撞主键，报的还是 `500 Internal Server Error`，运维从信封上看不出是序列问题。
   凡是显式 id 的种子，同一个迁移末尾补
   `SELECT setval(pg_get_serial_sequence('t','id'), COALESCE((SELECT MAX(id) FROM t), 1));`。
   这条是代价换来的：baseline 有五张表漏了它（users / roles / user_roles / dict_types / dict_data），
   后果是全新部署**建不了第二个管理员账号**，直到 `module-infra` V003 才收口。
-- **跨模块调整别人种下的数据，必须在 `@Module(dependsOn = [...])` 里如实声明依赖**。
+- **跨模块改别人种下的数据，必须在 `@Module(dependsOn = [...])` 里如实声明依赖**。
   迁移按 dependsOn 拓扑排序，不按 `neton.modules` 的声明顺序。漏声明时 `UPDATE` 会在目标行还没插入前执行，
   **匹配 0 行且不报错** —— 迁移显示成功，效果却少了一半。判断依据是「我这条 SQL 读/改了谁种的行」，
   不是「我运行时用不用它的 Logic」。
+- **改完 `.sql` 必须重新编译**。迁移 SQL 在编译期被 `generateMigrationResources` 转成 Kotlin 常量嵌进二进制，
+  直接跑旧二进制会执行旧副本，而且 `neton_schema_history` 里记的是旧 checksum —— 现象是「我明明改了却不生效」。
+  排查方法：比对文件的 sha256 与 history 表里的 checksum。
 
 ---
 
@@ -236,6 +239,9 @@
 ### 6.1 前端 API 命名
 
 - 前端 API 层必须严格镜像后端接口语义。
+- 前端引用的权限串必须与后端 `@Permission` 逐字一致（格式见 [rbac-spec §3](./rbac-spec.md#三权限字符串格式)）。
+  前端页面存在 ≠ 后端接口存在：判断一个页面能不能进侧栏，看后端有没有对应路由与 `@Permission`，
+  不看前端有没有 `.tsx`。
 - 若后端改为 `/get/{id}`，前端必须同步改，不保留旧式兼容路径。
 - 前端不得自行发明与后端不一致的 CRUD 风格。
 
