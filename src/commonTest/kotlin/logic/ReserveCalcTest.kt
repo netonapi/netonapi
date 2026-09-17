@@ -86,3 +86,12 @@ class ReserveCalcTest {
             ReserveCalc.compute("""{"max_tokens":0}""", price(output = "3"), "1"))
     }
 }
+
+class Utf8LengthTest {
+    @kotlin.test.Test
+    fun matchesEncodeToByteArray() {
+        for (s in listOf("", "abc", "中文", "a中b", "emoji 😀 ok", "éè", "𝄞𝄞")) {
+            kotlin.test.assertEquals(s.encodeToByteArray().size, ReserveCalc.utf8Length(s), s)
+        }
+    }
+}

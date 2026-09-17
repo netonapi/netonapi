@@ -39,7 +39,7 @@ object ReserveCalc {
         }
 
         if (noOutput) {
-            val inputUpper = inputUpperBytes ?: requestBody.encodeToByteArray().size
+            val inputUpper = inputUpperBytes ?: utf8Length(requestBody)
             return Result.Ok(mulRatio(PricingCalc.tokenCost(inputUpper, PricingCalc.parseMicro(price.inputPrice)), groupRatio), estimated = true)
         }
 
@@ -47,11 +47,27 @@ object ReserveCalc {
         if (outputCap <= 0) return Result.NoOutputCap
 
         // 输入上界：无 tokenizer → 用 UTF-8 字节数（1 token 通常 ≥1 字节，故字节数是安全上界）
-        val inputUpper = requestBody.encodeToByteArray().size
+        val inputUpper = utf8Length(requestBody)
         // 保守：全部输入按最贵的 fresh input 价计（不假设有 cache 命中折扣）
         val raw = PricingCalc.tokenCost(inputUpper, PricingCalc.parseMicro(price.inputPrice)) +
             PricingCalc.tokenCost(outputCap, PricingCalc.parseMicro(price.outputPrice))
         return Result.Ok(mulRatio(raw, groupRatio), estimated = true)
+    }
+
+    /** UTF-8 字节数：只算不拷（请求体可能几十 KB，每个请求都为了数个数而复制一份不值）。 */
+    fun utf8Length(s: String): Int {
+        var n = 0; var i = 0
+        while (i < s.length) {
+            val c = s[i].code
+            n += when {
+                c < 0x80 -> 1
+                c < 0x800 -> 2
+                c in 0xD800..0xDBFF && i + 1 < s.length -> { i++; 4 }  // 代理对：一个 4 字节字符
+                else -> 3
+            }
+            i++
+        }
+        return n
     }
 
     private fun mulRatio(amount: Long, ratio: String): Long {

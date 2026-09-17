@@ -1,40 +1,39 @@
-# neton-application-module-template
+# neton-application-module-gateway
 
-Minimal Neton module template.
+NanoGate 的网关核心模块：LLM API 中转、协议转换、路由与容错、账务与结算、定价、用量、运营工具。
+moduleId `gateway`；路由组 `gateway`（`/v1`、`/v1beta`、`/health`、`/metrics`）、`app`（用户自助）、`admin`（管理台）。
 
-This project intentionally keeps only a `helloworld` example so it can be copied as:
+## 包结构
 
-- an internal module inside `neton-application`
-- an external standalone module repository
+| 包 | 内容 |
+|---|---|
+| `controller/gateway` | 中转入口：OpenAI（chat / responses / embeddings / images / rerank / audio）、Anthropic `/v1/messages`、Gemini `/v1beta`、`/v1/models`、`/health`、`/metrics` |
+| `controller/app` | 用户自助：Key、用量与汇总、充值、兑换码、模型广场、公开接入信息 |
+| `controller/admin` | 管理台：渠道（含探测、拉模型）、定价（含导入 / 价源同步）、令牌、日志、结算复核、计价组、兑换码、概览 |
+| `logic/RelayEngine` | 中转引擎：限流 → 计价组 → 路由候选 → 预留 → 上游执行（重试、流式预检）→ 结算 |
+| `logic/protocol` | 协议适配器（OpenAI / Azure / Anthropic / Gemini / Bedrock / Vertex）、编解码器、SSE 分帧、模型名反向改写、multipart |
+| `logic/SettlementLogic` `SettlementWorker` | 两阶段结算与崩溃恢复（见 docs/V004） |
+| `logic/PricingCalc` `SalePricing` `ReserveCalc` | 计价、售价轨、预留额估算 |
+| `logic/OverviewLogic` `UsageStatsLogic` | 管理台概览与用户用量汇总（都从日志表现算） |
+| `job/` | 定时任务：渠道测速、价源同步 |
+| `sql/postgresql` | 迁移 V001–V011，编译期嵌入 |
 
-It is not wired into composite build by default.
-Decide that only after the copied module has a real business boundary.
+## 设计文档
 
-Before expanding it, read the spec in:
+- `docs/V004-durable-settlement-design.md`：结算状态机与恢复
+- `docs/upstream-adapters-and-codecs.md`：上游适配器钩子、托管上游（Azure / Bedrock / Vertex）、跨协议保真矩阵、端点与计费规则、运维任务
 
-- `/Users/zoujiaqing/projects/Neton/neton-application/docs/module-template-spec.md`
+## 测试
 
-## What stays in this template
+```bash
+./gradlew :module-gateway:macosArm64Test -Pneton.database.driver=postgres   # 从 NewGate/newgate 目录
+```
 
-- minimal Gradle/KMP project structure
-- module initializer sample
-- hello world controller sample
-- one tiny test to keep the module shape stable
+单测覆盖编解码器（Anthropic / OpenAI / Gemini 三向）、SigV4、AWS event-stream 解帧、multipart、计价与预留、路由、限流。
+端到端行为由 `NewGate/harness/run.sh` 覆盖。
 
-## Current shape
+## 约定
 
-- `controller/admin/helloworld/HelloWorldController.kt`
-- `init/HelloWorldModuleInitializer.kt`
-
-This mirrors the real module layout without forcing the full Neton runtime
-dependency into the template baseline.
-
-## What does not stay here
-
-- CRUD tables
-- config samples
-- log samples
-- generated SQL
-- frontend pages
-
-Those belong in real modules, guided by the spec, not hardcoded into the template repository.
+- 本模块不带 HTTP 引擎：客户端来自应用绑定的 `HttpClientProvider`，SMTP 之类同理。
+- 账务只走 `SettlementLogic` / `QuotaLogic`，不直接改余额列。
+- 上游 usage 是计费真源；跨协议转换只改客户端看到的形状，不改账。

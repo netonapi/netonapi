@@ -9,6 +9,9 @@ import logic.protocol.ProtocolCodecs
 import model.Channel
 import neton.core.http.HttpHeaders
 import neton.http.client.*
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.withPermit
 import neton.logging.Logger
 
 @Serializable
@@ -62,9 +65,13 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
 
     /** 定时任务入口：探测全部启用中的渠道。 */
     suspend fun probeAllEnabled(): Int {
-        var n = 0
-        for (ch in channelLogic.listEnabled()) { probeAndRecord(ch); n++ }
-        return n
+        val channels = channelLogic.listEnabled()
+        // 并发 4：几十条渠道串行探测要几十秒，上游慢的还会拖住整轮；并发太高又会同时占用多条出网连接
+        val gate = kotlinx.coroutines.sync.Semaphore(4)
+        kotlinx.coroutines.coroutineScope {
+            channels.map { ch -> async { gate.withPermit { probeAndRecord(ch) } } }.awaitAll()
+        }
+        return channels.size
     }
 
     suspend fun probe(channel: Channel, requestedModel: String?): ChannelProbeResult {

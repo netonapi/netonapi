@@ -43,6 +43,11 @@ object ModelRename {
         )
     }
 
-    private fun pattern(upstreamModel: String) =
-        Regex("\"model\"\\s*:\\s*\"" + Regex.escape(upstreamModel) + "\"")
+    // 正则按上游模型名缓存：流式时每个 SSE 块都要过一遍，逐块编译正则的开销比替换本身还大。
+    // 渠道映射目标名的种类是运营配置决定的小集合，上限 256 只是防御性的。
+    private val patterns = HashMap<String, Regex>()
+    private fun pattern(upstreamModel: String): Regex = patterns[upstreamModel] ?: run {
+        if (patterns.size >= 256) patterns.clear()
+        Regex("\"model\"\\s*:\\s*\"" + Regex.escape(upstreamModel) + "\"").also { patterns[upstreamModel] = it }
+    }
 }

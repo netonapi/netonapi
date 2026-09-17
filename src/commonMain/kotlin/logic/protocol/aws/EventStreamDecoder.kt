@@ -11,24 +11,38 @@ import logic.protocol.ByteStreamDecoder
  * `event: <type>\ndata: <json>\n\n` 放出；异常帧（:exception-type）转成 error 事件。CRC 不校验：TCP 已保证完整性。
  */
 class EventStreamDecoder : ByteStreamDecoder {
-    private var buf = ByteArray(0)
+    // 增长式缓冲 + 读偏移：一条长回复有上千帧，按帧整体拷贝缓冲是 O(n²)；这里只在缓冲不够时扩容，
+    // 消费过的字节等到偏移越过一半再整体前移一次。
+    private var buf = ByteArray(8 * 1024)
+    private var start = 0
+    private var end = 0
     private val json = Json { ignoreUnknownKeys = true }
 
     override fun feed(bytes: ByteArray): String {
-        buf += bytes
+        append(bytes)
         val out = StringBuilder()
         while (true) {
-            if (buf.size < 12) break
-            val total = readInt(buf, 0)
-            if (total < 16 || total > 16 * 1024 * 1024) { buf = ByteArray(0); break }  // 帧头损坏：丢弃缓冲，不无限等
-            if (buf.size < total) break
-            val headersLen = readInt(buf, 4)
-            val headers = parseHeaders(buf, 12, headersLen)
-            val payload = buf.copyOfRange(12 + headersLen, total - 4)
-            buf = buf.copyOfRange(total, buf.size)
+            val avail = end - start
+            if (avail < 12) break
+            val total = readInt(buf, start)
+            if (total < 16 || total > 16 * 1024 * 1024) { start = 0; end = 0; break }  // 帧头损坏：丢弃缓冲，不无限等
+            if (avail < total) break
+            val headersLen = readInt(buf, start + 4)
+            val headers = parseHeaders(buf, start + 12, headersLen)
+            val payload = buf.copyOfRange(start + 12 + headersLen, start + total - 4)
+            start += total
             out.append(render(headers, payload))
         }
+        if (start > 0 && start >= buf.size / 2) { buf.copyInto(buf, 0, start, end); end -= start; start = 0 }
         return out.toString()
+    }
+
+    private fun append(bytes: ByteArray) {
+        if (end + bytes.size > buf.size) {
+            if (start > 0) { buf.copyInto(buf, 0, start, end); end -= start; start = 0 }
+            if (end + bytes.size > buf.size) buf = buf.copyOf(maxOf(buf.size * 2, end + bytes.size))
+        }
+        bytes.copyInto(buf, end); end += bytes.size
     }
 
     override fun finish(): String = ""

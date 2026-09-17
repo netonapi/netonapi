@@ -42,8 +42,10 @@ class PriceImportLogic(private val log: Logger) {
         }
         if (errors.isNotEmpty()) return PriceImportResult(0, 0, 0, errors)
         var created = 0; var updated = 0; var skipped = 0
+        // 价目表几百行，逐条查库是几百次往返；一次读全表建 model → 行的索引（定价表本身就是小表）
+        val existing = ModelPriceTable.findAll().associateBy { it.model }
         for (price in parsed.distinctBy { it.model }) {
-            val current = ModelPriceTable.oneWhere { ModelPrice::model eq price.model }
+            val current = existing[price.model]
             when {
                 current == null -> { ModelPriceTable.insert(price.copy(source = source)); created++ }
                 !overwrite -> skipped++
