@@ -218,6 +218,6 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
         fun visibleTo(recharge: GatewayQuotaRecharge?, userId: Long): GatewayQuotaRecharge? =
             recharge?.takeIf { it.userId == userId }
 
-        private const val RECHARGE_SUBJECT = "NanoGate 网关额度充值"
+        private const val RECHARGE_SUBJECT = "NetonAPI 网关额度充值"
     }
 }

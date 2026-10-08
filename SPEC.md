@@ -199,7 +199,7 @@
 - **分类统一（Codex #4）**：非流式 401/403 也计 Key 失败（此前只在流式/throw 路径计）；E2E：非流式 3×403 → failCount=3。
 - **Key 轮转（Codex #5）**：recordKeyFailure 也更新 lastUsedAt → LRU 轮转到其他 Key 不死磕坏 Key。
 - 删死代码 consume()（无调用方且非事务化）。token 中途删除：账户级三表照提交+warn（不回滚，避免已服务请求不计费=收入泄漏，此处推回 Codex #3）。
-- **可靠性 harness（已落地，本机 25 场景 / 37 断言全绿）**：`harness/run.sh`（NanoGate 仓）一条命令——隔离测试数据库 + 隔离 Redis 实例 +
+- **可靠性 harness（已落地，本机 25 场景 / 37 断言全绿）**：`harness/run.sh`（NetonAPI 仓）一条命令——隔离测试数据库 + 隔离 Redis 实例 +
   假上游（`fakes.py`，含 `/inflight` 在途计数、midabort/embok 模式）+ 真实网关。⚠️ S8 只测 DB 唯一索引（未走真实
   bill 重放路径）、S9 只验证收块+服务存活（未断言 partial/账务/Key 状态/无伪造终止）——见上"未闭环 P0"，需以稳定 settlementId
   经测试 seam 真实重放、并断言 midstream 的 partial 语义。场景：S1 20 并发四项不变量、

@@ -1,6 +1,6 @@
 # neton-application-module-gateway
 
-NanoGate 的网关核心模块：LLM API 中转、协议转换、路由与容错、账务与结算、定价、用量、运营工具。
+NetonAPI 的网关核心模块：LLM API 中转、协议转换、路由与容错、账务与结算、定价、用量、运营工具。
 moduleId `gateway`；路由组 `gateway`（`/v1`、`/v1beta`、`/health`、`/metrics`）、`app`（用户自助）、`admin`（管理台）。
 
 ## 包结构
@@ -20,7 +20,7 @@ moduleId `gateway`；路由组 `gateway`（`/v1`、`/v1beta`、`/health`、`/met
 
 ## 管理台信息架构（V012）
 
-NanoGate 是唯一装配 gateway 的发行版（canonical 脚手架装的是 `cs`），所以「本产品的管理台长什么样」
+NetonAPI 是唯一装配 gateway 的发行版（canonical 脚手架装的是 `cs`），所以「本产品的管理台长什么样」
 也是本模块的职责：V012 停用与中转站无关的继承页面、把 AI 网关排到第一组、补回没有入口的支付回调页、
 预置网关运营 / 财务 / 客服 / 只读四个角色。这些**不能**写进 module-system / infra / member ——
 那些是 canonical 模块，别的产品要用签到、提现、开放平台。
