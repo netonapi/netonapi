@@ -16,9 +16,16 @@ kotlin {
             }
         }
         val coreInterop = rootProject.file("../../Neton/neton/neton-core/build/nativeInterop/${target.name}").absolutePath
+        // 在 macOS 上交叉编译 Linux 时，链接器找不到目标机的 libcurl.so：把它从目标机拷到本地某目录，
+        // 用 -Pnewgate.linuxX64.libDir=<dir>（或 NEWGATE_LINUX_X64_LIBDIR）指过来。Linux 本机构建不需要。
+        val envName = target.name.replace(Regex("([a-z])([A-Z])"), "$1_$2").uppercase()
+        val extraLibDir = providers.gradleProperty("newgate.${target.name}.libDir")
+            .orElse(providers.environmentVariable("NEWGATE_${envName}_LIBDIR"))
+            .orNull
         target.binaries.forEach { binary ->
             binary.linkerOpts.add("-L$coreInterop")
             binary.linkerOpts.add("-lenv")
+            if (extraLibDir != null) binary.linkerOpts.add("-L${file(extraLibDir).absolutePath}")
         }
     }
 
