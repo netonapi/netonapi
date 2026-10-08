@@ -23,7 +23,7 @@ import security.CoreAuthenticatorBridge
  * [UnifiedTokenAuthenticator] 组进 dispatcher。没有这样的模块、或它未 enable 时
  * unified=null，dispatcher 退化为纯 legacy。
  *
- * ⚠️ NanoGate 当前装配的六个模块**没有任何一个** bind [UnifiedTokenAuthenticator]，
+ * ⚠️ NetonAPI 当前装配的六个模块**没有任何一个** bind [UnifiedTokenAuthenticator]，
  * 所以 `security.unified_token.enabled` 必须保持 false；要启用得先自己加一个提供它的模块。
  *
  * # 默认行为
@@ -49,7 +49,7 @@ class SecurityConfig : NetonConfigurer<SecurityBuilder> {
         if (unifiedConfig.enabled && unified == null) {
             error(
                 "security.unified_token.enabled=true 但 UnifiedTokenAuthenticator 未绑定到 NetonContext。" +
-                    "本发行版没有任何模块提供它（NanoGate 装配的六个模块都不 bind），" +
+                    "本发行版没有任何模块提供它（NetonAPI 装配的六个模块都不 bind），" +
                     "请把 security.unified_token.enabled 设回 false；若确实要启用，需自行加一个在 " +
                     "SecurityComponent.start (order=-10) 之前构造并 bind 该类型的模块 configurer。",
             )

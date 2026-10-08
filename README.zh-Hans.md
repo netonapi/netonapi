@@ -1,8 +1,8 @@
-# NanoGate 后端
+# NetonAPI 后端
 
 [English](./README.md) | **简体中文**
 
-NanoGate 是一个自托管的 LLM API 网关：自己签发一套 Key，背后对接三个上游协议族
+NetonAPI 是一个自托管的 LLM API 网关：自己签发一套 Key，背后对接三个上游协议族
 （OpenAI、Anthropic、Gemini）并**任意方向互转**，同时负责计费、配额与渠道容错。它是 Go 版
 [`new-api`](https://github.com/QuantumNous/new-api) 在 [Neton](https://github.com/netonframework/neton)
 框架上的重写，用 Kotlin/Native 编译成单个静态可执行文件：运行期没有 JVM，也没有需要随包分发的 SQL 文件。
@@ -38,7 +38,7 @@ projects/
 │   ├── neton-application-module-member/
 │   ├── neton-application-module-payment/
 │   ├── neton-application-module-platform/
-│   └── neton-application-module-gateway/   # NanoGate 的核心模块
+│   └── neton-application-module-gateway/   # NetonAPI 的核心模块
 └── <workspace>/                            # Gradle 不关心这层叫什么…
     └── newgate/                            # ← 本仓
 ```
@@ -126,7 +126,7 @@ NEWGATE_TARGET=linuxX64 bash harness/run.sh  # Linux
 - [`docs/rbac-spec.md`](./docs/rbac-spec.md) —— User/Role/Menu、权限串、通配
 - [`docs/module-template-spec.md`](./docs/module-template-spec.md) —— 怎么加一个模块
 - [`docs/SPEC.md`](./docs/SPEC.md) —— ⚠️ 继承自上游脚手架，**部分已过时**：仍写着 Kotlin 2.3、
-  把模块描述成 `includeBuild`、链了一个本仓不存在的文件，并把管理台说成 Vue（NanoGate 不用 Vue）。
+  把模块描述成 `includeBuild`、链了一个本仓不存在的文件，并把管理台说成 Vue（NetonAPI 不用 Vue）。
   以本 README 与 `DEPLOY.md` 为准。
 
 ## 已知缺口

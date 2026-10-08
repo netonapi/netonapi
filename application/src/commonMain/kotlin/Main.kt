@@ -86,7 +86,7 @@ fun main(args: Array<String>) {
         // SMTP 发信（module-system 的 EmailProvider 用）：socket + TLS 的实现在引擎适配层
         bind(neton.http.mail.SmtpTransport::class, neton.http.mail.defaultSmtpTransport())
 
-        // 会员注册策略：member 的默认策略只开短信注册（PHONE_SMS），而 NanoGate 的控制台是
+        // 会员注册策略：member 的默认策略只开短信注册（PHONE_SMS），而 NetonAPI 的控制台是
         // 用户名 + 密码自助注册（/register），不绑这条就会 REGISTER_MODE_DISABLED。短信保留为可选。
         bind(
             port.MemberAuthPolicy::class,
@@ -254,7 +254,7 @@ fun main(args: Array<String>) {
         // 里写 [cors] allowedOrigins = [...] 会被吞掉（详见 HttpComponent.kt:36），
         // 走 DSL 绕开 TOML。
         //
-        // **origin 一律放开为 `*`**：NanoGate 的两个前端（管理台、用户控制台）在开发期
+        // **origin 一律放开为 `*`**：NetonAPI 的两个前端（管理台、用户控制台）在开发期
         // 端口频繁变动，逐一维护 allowlist 会持续踩 CORS。allowCredentials=false 时 `*` 合法
         // （浏览器不发 cookie），跨站因此读不到需要登录态的响应。
         //

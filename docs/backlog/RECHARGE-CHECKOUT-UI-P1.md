@@ -4,7 +4,7 @@
 
 OPEN. P1, and now **frontend-only**. The backend contract for self-service checkout is complete and
 held by harness — including the order read-back that this item originally listed as the one missing
-backend piece (see Gap 3, closed). A production NanoGate deployment therefore still has **no way for
+backend piece (see Gap 3, closed). A production NetonAPI deployment therefore still has **no way for
 a user to pay**: quota reaches an account only through an operator's manual `gateway:quota:grant`, an
 offline-sold redemption code, or the mock endpoint that `docker-compose.yml` deliberately does not
 expose.

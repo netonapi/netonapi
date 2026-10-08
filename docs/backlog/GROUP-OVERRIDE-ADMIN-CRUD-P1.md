@@ -132,7 +132,7 @@ the second left a narrower gap behind, which is item 4.
 
    Unbound port degrades to the old behaviour (positive-number check only) with a `warn` line at
    startup, rather than failing to boot or refusing all writes — the trade-off is recorded in
-   `MemberDirectory`'s KDoc. NanoGate's assembly layer always binds it.
+   `MemberDirectory`'s KDoc. NetonAPI's assembly layer always binds it.
 2. ~~**Revoking loses the audit trail, and the ledger cannot fully replace it.**~~ **CLOSED for the
    attribution half.** The original complaint: the delete is hard, so the negotiated price and the
    contract number in `remark` leave no trace in this table.

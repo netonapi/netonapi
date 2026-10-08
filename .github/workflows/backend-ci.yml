@@ -161,7 +161,7 @@ jobs:
           --health-retries 10
 
     steps:
-      - name: Checkout NanoGate distribution repository
+      - name: Checkout NetonAPI distribution repository
         uses: actions/checkout@v4
         with:
           repository: zoujiaqing/nanogate

@@ -1,8 +1,8 @@
-# NanoGate Backend
+# NetonAPI Backend
 
 **English** | [简体中文](./README.zh-Hans.md)
 
-NanoGate is a self-hosted LLM API gateway. One set of issued keys serves three upstream
+NetonAPI is a self-hosted LLM API gateway. One set of issued keys serves three upstream
 protocol families — OpenAI, Anthropic, Gemini — relayed in any direction, with durable
 billing, quota enforcement and channel failover. It is a rewrite of the Go-based
 [`new-api`](https://github.com/QuantumNous/new-api) on the
@@ -42,7 +42,7 @@ projects/
 │   ├── neton-application-module-member/
 │   ├── neton-application-module-payment/
 │   ├── neton-application-module-platform/
-│   └── neton-application-module-gateway/   # the NanoGate core
+│   └── neton-application-module-gateway/   # the NetonAPI core
 └── <workspace>/                            # any name for Gradle…
     └── newgate/                            # ← this repository
 ```
@@ -141,7 +141,7 @@ NEWGATE_TARGET=linuxX64 bash harness/run.sh  # Linux
 - [`docs/module-template-spec.md`](./docs/module-template-spec.md) — how to add a module
 - [`docs/SPEC.md`](./docs/SPEC.md) — ⚠️ inherited scaffold, **partly stale**: it still says
   Kotlin 2.3, describes the modules as `includeBuild`, links a file that is not in this repo,
-  and names a Vue admin console that NanoGate does not use. Trust this README and `DEPLOY.md`.
+  and names a Vue admin console that NetonAPI does not use. Trust this README and `DEPLOY.md`.
 
 ## Known gaps
 
