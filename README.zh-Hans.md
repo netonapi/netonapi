@@ -12,7 +12,7 @@ NetonAPI 是一个自托管的 LLM API 网关：自己签发一套 Key，背后�
 
 | | |
 |---|---|
-| 语言 | Kotlin 2.4.0（Multiplatform） |
+| 语言 | Kotlin 2.4.20（Multiplatform） |
 | 构建 | Gradle 8.14.4 + KSP 2.3.10 |
 | 运行形态 | Kotlin/Native 静态可执行文件（`application.kexe`），无 JVM |
 | 存储 | PostgreSQL（计费、账本、渠道）· Redis（可选：跨实例共享限流） |

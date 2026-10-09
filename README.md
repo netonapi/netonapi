@@ -15,7 +15,7 @@ logic lives in the module repositories, not here.
 
 | | |
 |---|---|
-| Language | Kotlin 2.4.0 (Multiplatform) |
+| Language | Kotlin 2.4.20 (Multiplatform) |
 | Build | Gradle 8.14.4 + KSP 2.3.10 |
 | Runtime | Kotlin/Native static executable (`application.kexe`), no JVM |
 | Datastores | PostgreSQL (billing, ledger, channels) · Redis (optional: shared rate limits) |
