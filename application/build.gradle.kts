@@ -44,6 +44,7 @@ kotlin {
 
                 // 通用 base distribution 默认模块。产品专属模块（IM / game / assistant 等）不在
                 // base 里，由具体产品发行版 fork 自行加回。
+                implementation(project(":module-account"))
                 implementation(project(":module-member"))
                 implementation(project(":module-gateway"))
                 implementation(project(":module-payment"))
@@ -82,7 +83,7 @@ dependencies {
 // 子命令 / startup precheck / serve modules(...) 三处共用，不再手写模块列表。
 // 顺序 = 声明顺序（Neton.run 内部仍按 dependsOn 拓扑排序兜底）。
 ksp {
-    arg("neton.modules", "system,infra,member,payment,platform,gateway")
+    arg("neton.modules", "system,infra,account,member,payment,platform,gateway")
 }
 
 // Ensure Kotlin compilation sees KSP-generated commonMain sources.

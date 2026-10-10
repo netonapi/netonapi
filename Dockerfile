@@ -17,6 +17,7 @@ COPY Neton/neton                             /src/Neton/neton
 COPY Neton/geolite4k                         /src/Neton/geolite4k
 COPY Neton/neton-application-module-system   /src/Neton/neton-application-module-system
 COPY Neton/neton-application-module-infra    /src/Neton/neton-application-module-infra
+COPY Neton/neton-application-module-account  /src/Neton/neton-application-module-account
 COPY Neton/neton-application-module-member   /src/Neton/neton-application-module-member
 COPY Neton/neton-application-module-payment  /src/Neton/neton-application-module-payment
 COPY Neton/neton-application-module-platform /src/Neton/neton-application-module-platform

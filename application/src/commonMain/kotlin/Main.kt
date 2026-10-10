@@ -7,6 +7,7 @@ import neton.core.component.NetonLifecycle
 import neton.core.component.cors
 import neton.core.generated.GeneratedNetonConfigRegistry
 import neton.database.database
+import neton.database.dsl.eq
 import neton.jobs.JobScheduler
 import neton.jobs.jobs
 import neton.http.http
@@ -33,7 +34,8 @@ import port.MemberInviteRewardRegistry
 import neton.core.event.DomainEventBus
 import neton.logging.Logger
 import neton.logging.LoggerFactory
-import table.MemberTable
+import table.AccountTable
+import table.MemberProfileTable
 
 // MANIFEST-P2: 模块列表唯一来源是 application/build.gradle.kts 的
 // `ksp { arg("neton.modules", "...") }`。KSP 生成 GeneratedApplicationModules,
@@ -85,13 +87,13 @@ fun main(args: Array<String>) {
         // SMTP 发信（module-system 的 EmailProvider 用）：socket + TLS 的实现在引擎适配层
         bind(neton.http.mail.SmtpTransport::class, neton.http.mail.defaultSmtpTransport())
 
-        // 会员注册策略：member 的默认策略只开短信注册（PHONE_SMS），而 NetonAPI 的控制台是
+        // 账号注册策略：account 的默认策略只开短信注册（PHONE_SMS），而 NetonAPI 的控制台是
         // 用户名 + 密码自助注册（/register），不绑这条就会 REGISTER_MODE_DISABLED。短信保留为可选。
         bind(
-            port.MemberAuthPolicy::class,
-            port.MemberAuthPolicy(
-                registerModes = listOf(port.MemberAuthPolicy.MODE_USERNAME_PASSWORD, port.MemberAuthPolicy.MODE_PHONE_SMS),
-                defaultRegisterMode = port.MemberAuthPolicy.MODE_USERNAME_PASSWORD,
+            port.AccountAuthPolicy::class,
+            port.AccountAuthPolicy(
+                registerModes = listOf(port.AccountAuthPolicy.MODE_USERNAME_PASSWORD, port.AccountAuthPolicy.MODE_PHONE_SMS),
+                defaultRegisterMode = port.AccountAuthPolicy.MODE_USERNAME_PASSWORD,
             ),
         )
 
@@ -226,7 +228,9 @@ fun main(args: Array<String>) {
         // 会员会一律 403 billing_group_not_allowed。那是有意的 —— 宁可拒绝，也不要悄悄按
         // default 组计价（少收的差额不会在任何日志里留痕迹）。
         bind(MemberGroupPort::class, object : MemberGroupPort {
-            override suspend fun memberGroupId(userId: Long): Long? = MemberTable.get(userId)?.groupId
+            // 会员组属于会员档案（member），不在账号表上；没有档案 = 未分组。
+            override suspend fun memberGroupId(userId: Long): Long? =
+                MemberProfileTable.oneWhere { model.MemberProfile::userId eq userId }?.groupId
         })
 
         // ====== 会员名录（module-gateway 写用户级计费例外时校验 userId）======
@@ -234,19 +238,19 @@ fun main(args: Array<String>) {
         // 100001 会得到 200，例外静静躺在 gateway_group_overrides 里，客户仍按 default 组计价 ——
         // 谈判价没生效而**双方都不报错**（客户按标准价付了钱，运营以为给了折扣）。
         //
-        // 判据是 `status == NORMAL`，不是 `MemberTable.get(id) != null`：member 的自助注销
-        // （MemberAuthLogic.deleteOwnAccount）只把 status 置 DELETED、**不动 deleted 列** ——
+        // 判据是 `status == NORMAL`，不是 `AccountTable.get(id) != null`：account 的自助注销
+        // （AccountAuthLogic.deleteOwnAccount）只把 status 置 DELETED、**不动 deleted 列** ——
         // 它的 KDoc 明说「记录保留，后台账号管理仍看得到」，所以「查得到」对注销会员也成立。
-        // 写成白名单也是 member 自己要求的：MemberStatus 的 KDoc 用红字标了「判断能不能用这个
+        // 写成白名单也是 account 自己要求的：AccountStatus 的 KDoc 用红字标了「判断能不能用这个
         // 账号要写 status == NORMAL，不要写 status != DISABLED」，否定式在新增状态时会默默放行，
         // DELETED 当初就是这么被漏掉的。
         //
-        // DISABLED 一并拒绝是有意的：不自创第二套「账号可用性」判据，与 member 的登录/刷新
+        // DISABLED 一并拒绝是有意的：不自创第二套「账号可用性」判据，与 account 的登录/刷新
         // （`status != NORMAL` 即拒）保持一致。代价是「客户被禁用但合同已签」时要等解禁再配，
         // 那不是阻塞；而两套判据各自漂移，是这里最不想要的那种静默不一致。
         bind(MemberDirectoryPort::class, object : MemberDirectoryPort {
             override suspend fun isChargeableMember(userId: Long): Boolean =
-                MemberTable.get(userId)?.status == model.MemberStatus.NORMAL
+                AccountTable.get(userId)?.status == model.AccountStatus.NORMAL
         })
 
         // CORS via DSL —— neton 的 TomlParser 不支持 array 语法，application.conf

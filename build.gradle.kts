@@ -24,6 +24,7 @@ subprojects {
         resolutionStrategy.dependencySubstitution {
             substitute(module("com.netonstream.app:module-system")).using(project(":module-system"))
             substitute(module("com.netonstream.app:module-infra")).using(project(":module-infra"))
+            substitute(module("com.netonstream.app:module-account")).using(project(":module-account"))
             substitute(module("com.netonstream.app:module-member")).using(project(":module-member"))
             substitute(module("com.netonstream.app:module-payment")).using(project(":module-payment"))
             substitute(module("com.netonstream.app:module-platform")).using(project(":module-platform"))
