@@ -31,6 +31,7 @@ public class CoreAuthenticatorBridge(
     private val headerName: String = "Authorization",
     private val tokenPrefix: String = "Bearer ",
     private val sessionCookieName: String = "neton_session",
+    private val validateAdminToken: (suspend (String) -> Boolean)? = null,
 ) : CoreAuthenticator {
 
     override val name: String = delegate.name
@@ -48,6 +49,13 @@ public class CoreAuthenticatorBridge(
             override fun getRemoteAddress(): String? = null
         }
         return try {
+            if (context.routeGroup == "admin" && validateAdminToken != null) {
+                val raw = sec.headers.entries.firstOrNull { it.key.equals(headerName, true) }?.value
+                    ?: return null
+                // 与框架 JwtAuthenticator 一致：去前缀后再 trim。配置里的 "Bearer " 读出来是 "Bearer"
+                //（尾空格不保留），不 trim 时 token 以空格开头，验签失败 —— 所有管理员请求都会变成 401。
+                if (!raw.startsWith(tokenPrefix) || !validateAdminToken.invoke(raw.removePrefix(tokenPrefix).trim())) return null
+            }
             delegate.authenticate(sec)
         } catch (_: AuthenticationException) {
             null

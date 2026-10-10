@@ -33,7 +33,6 @@ import port.MemberInviteRewardRegistry
 import neton.core.event.DomainEventBus
 import neton.logging.Logger
 import neton.logging.LoggerFactory
-import security.WildcardPermissionEvaluator
 import table.MemberTable
 
 // MANIFEST-P2: 模块列表唯一来源是 application/build.gradle.kts 的
@@ -276,12 +275,8 @@ fun main(args: Array<String>) {
         // 详见架构边界：neton-docs/docs/spec/migration.md
         database { }
 
-        security {
-            // 注入应用脚手架的通配权限评估器（rbac-spec §4.2）。
-            // 框架默认 PermissionEvaluator 是精确匹配，不支持 *:*:* 等通配；
-            // 必须由脚手架显式覆盖。
-            setPermissionEvaluator(WildcardPermissionEvaluator())
-        }
+        // SecurityConfig owns authenticator and permission evaluator registration.
+        security { }
 
         // Redis 装载（SMS code 暂存、限流、token 黑名单等都需要）。
         // 配置文件 config/redis.conf；缺省 host=127.0.0.1 port=6379。

@@ -30,6 +30,12 @@ kotlin {
     }
 
     sourceSets {
+        commonTest {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation(libs.kotlinx.coroutines.test)
+            }
+        }
         commonMain {
             dependencies {
                 // 核心模块
