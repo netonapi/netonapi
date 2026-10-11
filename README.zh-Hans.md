@@ -35,6 +35,7 @@ projects/
 │   ├── geolite4k/                          # GeoIP（includeBuild）
 │   ├── neton-application-module-system/
 │   ├── neton-application-module-infra/
+│   ├── neton-application-module-account/
 │   ├── neton-application-module-member/
 │   ├── neton-application-module-payment/
 │   ├── neton-application-module-platform/

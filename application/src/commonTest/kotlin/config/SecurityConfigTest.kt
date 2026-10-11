@@ -36,6 +36,6 @@ class SecurityConfigTest {
         assertTrue(evaluator.allowed(identity(setOf("root"), setOf("*:*:*")), "system:user:query", request))
         assertTrue(evaluator.allowed(identity(emptySet(), setOf("system:user:*")), "system:user:query", request))
         assertFalse(evaluator.allowed(identity(setOf("super_admin"), emptySet()), "system:user:query", request))
-        assertFalse(evaluator.allowed(identity(emptySet(), setOf("member:user:query")), "system:user:query", request))
+        assertFalse(evaluator.allowed(identity(emptySet(), setOf("account:user:query")), "system:user:query", request))
     }
 }

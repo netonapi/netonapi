@@ -1,7 +1,7 @@
 # neton-application 开发硬规范 v1
 
 > 状态：立即生效
-> 适用范围：`neton-application`、`neton-application-module-member`、`neton-application-module-payment`、`neton-application-module-platform`、`neton-application-admin`
+> 适用范围：`neton-application`、`neton-application-module-account`、`neton-application-module-member`、`neton-application-module-payment`、`neton-application-module-platform`、`neton-application-admin`
 > 目标：把业务项目中反复出现的问题收敛成统一规则，反向打磨 Neton 框架与脚手架
 
 ---
@@ -186,7 +186,8 @@
 
 - `module-system`：用户、角色、菜单、权限、字典、消息等核心基础业务。
 - `module-infra`：配置、文件、任务、API 日志、基础设施能力。
-- `module-member`：会员域。
+- `module-account`：账号域（身份、认证、资料、手机 / 邮箱 / 密码）。
+- `module-member`：会员成长域（等级、积分、签到、邀请、分组），依赖 account。
 - `module-payment`：支付域。
 - `module-platform`：开放平台域。
 

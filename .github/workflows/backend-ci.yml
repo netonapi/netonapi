@@ -71,6 +71,13 @@ jobs:
           token: ${{ env.NETON_CI_TOKEN }}
           path: Neton/neton-application-module-infra
 
+      - name: Checkout module-account
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-account
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-account
+
       - name: Checkout module-member
         uses: actions/checkout@v4
         with:
@@ -200,6 +207,13 @@ jobs:
           repository: neton-application/neton-application-module-infra
           token: ${{ env.NETON_CI_TOKEN }}
           path: Neton/neton-application-module-infra
+
+      - name: Checkout module-account
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-module-account
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-module-account
 
       - name: Checkout module-member
         uses: actions/checkout@v4

@@ -48,7 +48,8 @@
 |------|------|---------|
 | `neton` | 框架（neton-core, neton-http, neton-database 等） | `includeBuild("../neton")` |
 | `neton-application` | 主应用：module-system、module-infra、application 入口 | 根项目 |
-| `neton-application-module-member` | 会员模块 | `includeBuild("../neton-application-module-member")` |
+| `neton-application-module-account` | 账号模块（身份、认证、资料、手机 / 邮箱 / 密码） | `includeBuild("../neton-application-module-account")` |
+| `neton-application-module-member` | 会员成长模块（等级、积分、签到、邀请、分组） | `includeBuild("../neton-application-module-member")` |
 | `neton-application-module-payment` | 支付模块 | `includeBuild("../neton-application-module-payment")` |
 | `neton-application-module-platform` | 开放平台模块 | `includeBuild("../neton-application-module-platform")` |
 | `neton-application-admin` | 管理端前端（Vue3 + Ant Design Vue） | 独立仓库，通过 HTTP 对接 |
@@ -59,6 +60,7 @@
 projects/
 ├── neton/                           # 框架
 ├── neton-application/               # 本仓库
+├── neton-application-module-account/
 ├── neton-application-module-member/
 ├── neton-application-module-payment/
 ├── neton-application-module-platform/
@@ -97,7 +99,8 @@ neton-application/
 application
 ├── module-system        ← 核心（用户/角色/菜单/权限/字典/日志/消息等）
 ├── module-infra         ← 依赖 system（配置/文件/定时任务/API 日志/Redis 监控）
-├── module-member        ← 依赖 system（会员认证/等级/积分/签到/地址/分组标签）
+├── module-account       ← 依赖 system、infra（账号身份/认证/资料/手机/邮箱/密码）
+├── module-member        ← 依赖 account（等级/经验/积分/签到/邀请/地址/分组标签）
 ├── module-payment       ← 依赖 system（支付应用/渠道/订单/退款/钱包/充值/转账）
 └── module-platform      ← 依赖 system（客户端/API 定义/授权/计费/日志/统计）
 ```
