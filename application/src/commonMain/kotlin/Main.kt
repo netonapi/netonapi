@@ -279,7 +279,7 @@ fun main(args: Array<String>) {
         // 详见架构边界：neton-docs/docs/spec/migration.md
         database { }
 
-        // SecurityConfig owns authenticator and permission evaluator registration.
+        // Authentication and permission evaluation are wired by module-system (config.SystemSecurityConfig).
         security { }
 
         // Redis 装载（SMS code 暂存、限流、token 黑名单等都需要）。
