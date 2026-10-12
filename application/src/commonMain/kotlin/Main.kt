@@ -275,7 +275,7 @@ fun main(args: Array<String>) {
 
         // database 启动只做连接初始化与探活。
         // 严禁在此或任何 ModuleInitializer 中调用 ensureTable()/ALTER 等 schema 变更逻辑。
-        // schema 演进的唯一权威路径是手动 SQL 脚本（sql/{dialect}/V*.sql）。
+        // schema 演进的唯一权威路径是 `application.kexe migrate up`（各模块 sql/postgresql/V*.sql 编译进二进制）。
         // 详见架构边界：neton-docs/docs/spec/migration.md
         database { }
 
