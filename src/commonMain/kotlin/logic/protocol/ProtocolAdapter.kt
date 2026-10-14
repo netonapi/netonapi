@@ -40,11 +40,8 @@ interface ProtocolAdapter {
     fun byteStreamDecoder(): ByteStreamDecoder? = null
 }
 
-/** 字节流 → SSE 文本的增量解码器；finish 返回残留（正常为空）。 */
-interface ByteStreamDecoder {
-    fun feed(bytes: ByteArray): String
-    fun finish(): String
-}
+/** 字节流 → SSE 文本的增量解码器（接口在 neton-ai）。 */
+typealias ByteStreamDecoder = neton.ai.protocol.transport.ByteStreamDecoder
 
 /** 流式 usage 旁路累加器（协议无关接口）。 */
 interface StreamUsageAccumulator {

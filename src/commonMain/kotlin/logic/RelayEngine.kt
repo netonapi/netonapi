@@ -361,7 +361,7 @@ class RelayEngine(
         val bypass = ThoughtSignatureBypassPolicy.enabled &&
             (verificationLogic?.isVerified(channel.id, ChannelVerificationLogic.CAPABILITY_GEMINI_SIGNATURE_BYPASS, upstreamModel) ?: false)
         val diagnostics = logic.protocol.SignatureDiagnostics()
-        val body = logic.protocol.codec.OpenAiToGeminiRequest.convert(hubBody, logic.protocol.GeminiRequestOptions(signatureBypass = bypass), diagnostics)
+        val body = logic.protocol.GeminiRequestConverter.convert(hubBody, logic.protocol.GeminiRequestOptions(signatureBypass = bypass), diagnostics)
         if (diagnostics.bypassed > 0) {
             log.info("${logic.protocol.GeminiThoughtSignatures.DIAG_BYPASSED} channel=${channel.id} model=$upstreamModel steps=${diagnostics.bypassed}")
         }

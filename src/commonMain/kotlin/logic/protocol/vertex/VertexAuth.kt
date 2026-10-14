@@ -3,7 +3,6 @@ package logic.protocol.vertex
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
-import neton.security.crypto.RsaSha256
 
 /**
  * Vertex AI 鉴权：渠道 Key 要么是服务账号 JSON（以 `{` 开头，含 client_email / private_key / token_uri），
@@ -29,17 +28,8 @@ object VertexAuth {
     }
 
     private suspend fun exchange(sa: JsonObject, email: String, nowMs: Long): Cached {
-        val privateKey = sa["private_key"]?.jsonPrimitive?.contentOrNull ?: throw IllegalArgumentException("服务账号 JSON 缺 private_key")
-        val tokenUri = sa["token_uri"]?.jsonPrimitive?.contentOrNull ?: "https://oauth2.googleapis.com/token"
-        val iat = nowMs / 1000
-        val header = b64url("""{"alg":"RS256","typ":"JWT"}""".encodeToByteArray())
-        val claims = b64url(buildJsonObject {
-            put("iss", email); put("scope", "https://www.googleapis.com/auth/cloud-platform")
-            put("aud", tokenUri); put("iat", iat); put("exp", iat + 3600)
-        }.toString().encodeToByteArray())
-        val signingInput = "$header.$claims"
-        val sig = b64url(RsaSha256.sign(privateKey, signingInput.encodeToByteArray()))
-        val assertion = "$signingInput.$sig"
+        val tokenUri = sa["token_uri"]?.jsonPrimitive?.contentOrNull ?: neton.ai.protocol.transport.google.GoogleAccessTokens.DEFAULT_TOKEN_URI
+        val assertion = neton.ai.protocol.transport.google.GoogleAccessTokens.assertion(sa, email, tokenUri, nowMs)
         val provider = logic.RelayEngine.clientProvider ?: error("HttpClientProvider not bound")
         val client = provider.create { connectMillis = 5_000; requestMillis = 15_000; socketMillis = 15_000 }
         try {
@@ -57,9 +47,6 @@ object VertexAuth {
             runCatching { client.close() }
         }
     }
-
-    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
-    private fun b64url(b: ByteArray): String = kotlin.io.encoding.Base64.UrlSafe.encode(b).trimEnd('=')
 
     /** 厂商参数 JSON 里的 project / location；location 缺省从 Base URL 主机名推（us-central1-aiplatform.googleapis.com）。 */
     fun projectAndLocation(channel: model.Channel): Pair<String, String> {

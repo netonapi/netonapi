@@ -67,7 +67,8 @@ class AnthropicOpenAiCodecTest {
         assertEquals(listOf("tool_result", "tool_result", "text"), merged)
         assertEquals("r2", msgs[2]["content"]!!.jsonArray[1].jsonObject["content"]!!.jsonPrimitive.content)
         assertEquals("none", o["tool_choice"]!!.jsonObject["type"]!!.jsonPrimitive.content)
-        assertEquals(true, o["tool_choice"]!!.jsonObject["disable_parallel_tool_use"]!!.jsonPrimitive.boolean)
+        // Anthropic 的 tool_choice=none 只有 type 字段；disable_parallel_tool_use 只属于 auto/any/tool
+        assertNull(o["tool_choice"]!!.jsonObject["disable_parallel_tool_use"])
     }
 
     @Test

@@ -24,11 +24,13 @@
 
 ## 2. 现有代码的迁移映射
 
+**进度（2026-10-15）**：前三行已完成。gateway 仍以 OpenAI Chat 为内部枢纽（签名状态引用在枢纽上工作），但 `ProtocolCodecs` 的每一段都由 `neton.ai.protocol.convert.ProtocolConverter` 实现；原有编解码单测通过测试侧的同名薄壳指向新实现，成为行为等价的回归用例。行为有意改变的几处见框架规格 §2.3。
+
 | gateway 现有 | 去向 |
 |---|---|
-| `logic/protocol/codec/*`（以 OpenAI Chat 为中枢的三向编解码） | 由框架的 IR 编解码替代；现有单测转成行为等价的回归用例 |
-| `SseEventFramer`、`Utf8StreamDecoder`、`aws/EventStreamDecoder` | 框架 `neton.ai.protocol.stream` |
-| `aws/SigV4`、`vertex/VertexAuth` | 框架 `neton.ai.protocol.transport` |
+| `logic/protocol/codec/*`（以 OpenAI Chat 为中枢的三向编解码） | 已删除，由框架编解码替代 |
+| `SseEventFramer`、`Utf8StreamDecoder`、`aws/EventStreamDecoder` | 已改用框架 `neton.ai.protocol.transport`（`SseEventFramer` 留一个只取 data 的薄壳） |
+| `aws/SigV4`、`vertex/VertexAuth` | SigV4 已改用框架；`VertexAuth` 的 JWT 改用框架 `GoogleAccessTokens.assertion`，取令牌的 HTTP 客户端与缓存仍在 gateway |
 | `ProtocolAdapter` 的 `extractUsage`、`streamUsageAccumulator` | 框架 `StreamState` 与用量模型 |
 | `ProtocolAdapter.errorBodyFor` | 框架错误渲染 |
 | `OpenAiAdapter`、`AnthropicAdapter`、`GeminiAdapter`、`AzureOpenAiAdapter`、`BedrockAdapter`、`VertexAdapters` | 拆开：协议与托管部分进框架；渠道字段到框架参数的装配留在 gateway |
@@ -79,9 +81,9 @@
 - 只允许 `https`；经 `NetGuard` 校验目标地址；限制大小与超时。
 - 下载的字节可以计入请求的计费依据（按渠道配置）。
 
-### 4.6 Gemini thought signature（已在现有编解码器中实现，待真实上游验证）
+### 4.6 Gemini thought signature（已实现，待真实上游验证）
 
-**实施状态（2026-10-15）**：第 1、2、4 条已实现（`GeminiThoughtSignatures`、`ThoughtSignatureVault`、`ChannelVerificationLogic`、V016、定时任务 `gateway-capability-verify`），单测 13 例覆盖两种客户端格式的整链路往返、绑定校验与过期、流式改写。**尚未完成**：harness 对真实 Gemini 上游的复现与回归。
+**实施状态（2026-10-15）**：占位值只写当前轮（与框架规格 §4.5.2 一致），缺失诊断只对 gemini-3 及之后的型号报。第 1、2、4 条已实现（`GeminiThoughtSignatures`、`ThoughtSignatureVault`、`ChannelVerificationLogic`、V016、定时任务 `gateway-capability-verify`），单测 13 例覆盖两种客户端格式的整链路往返、绑定校验与过期、流式改写。**尚未完成**：harness 对真实 Gemini 上游的复现与回归。
 
 环境变量：`NEWGATE_GEMINI_SIGNATURE_ECHO`（默认开，给 OpenAI 客户端输出官方 `extra_content`）、`NEWGATE_GEMINI_SIGNATURE_BYPASS`（默认开，仍需验证记录才生效）、`NEWGATE_GEMINI_SIGNATURE_TTL_HOURS`（默认 24）。
 

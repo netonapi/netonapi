@@ -22,7 +22,9 @@ class GeminiOpenAiCodecTest {
         val msgs = o["messages"]!!.jsonArray.map { it.jsonObject }
         assertEquals(listOf("user", "assistant", "tool"), msgs.map { it["role"]!!.jsonPrimitive.content })
         assertTrue(msgs[0]["content"]!!.jsonArray[1].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content.startsWith("data:image/png;base64,QUJD"))
-        assertEquals("get", msgs[2]["tool_call_id"]!!.jsonPrimitive.content)
+        // Gemini 没有调用 ID：按出现顺序生成，结果按名称回配到同一个 ID（同名并行调用也不会串，spec/ai.md §4.4）
+        val callId = msgs[1]["tool_calls"]!!.jsonArray[0].jsonObject["id"]!!.jsonPrimitive.content
+        assertEquals(callId, msgs[2]["tool_call_id"]!!.jsonPrimitive.content)
         assertEquals("high", o["reasoning_effort"]!!.jsonPrimitive.content)
         assertEquals("json_object", o["response_format"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("get", o["tool_choice"]!!.jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content)
@@ -48,7 +50,8 @@ class GeminiOpenAiCodecTest {
         assertEquals("plain", responses[1]["response"]!!.jsonObject["content"]!!.jsonPrimitive.content)
         val gc = o["generationConfig"]!!.jsonObject
         assertEquals(8192, gc["thinkingConfig"]!!.jsonObject["thinkingBudget"]!!.jsonPrimitive.int)
-        assertEquals("object", gc["responseSchema"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        // OpenAI 的 json_schema 是 JSON Schema：写到接受 JSON Schema 的 responseJsonSchema（responseSchema 只认 OpenAPI 子集）
+        assertEquals("object", gc["responseJsonSchema"]!!.jsonObject["type"]!!.jsonPrimitive.content)
     }
 
     @Test

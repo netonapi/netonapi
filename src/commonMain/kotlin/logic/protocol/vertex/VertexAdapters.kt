@@ -16,16 +16,11 @@ object VertexAnthropicAdapter : ProtocolAdapter by AnthropicAdapter {
 
     override fun upstreamPath(inboundPath: String, channel: Channel, upstreamModel: String, stream: Boolean): String {
         val (p, l) = VertexAuth.projectAndLocation(channel)
-        return "/v1/projects/$p/locations/$l/publishers/anthropic/models/$upstreamModel:" + if (stream) "streamRawPredict" else "rawPredict"
+        return neton.ai.protocol.transport.VertexUpstream.anthropicPath(p, l, upstreamModel, stream)
     }
 
-    override fun upstreamBody(body: String, upstreamModel: String, stream: Boolean): String {
-        val src = Json.parseToJsonElement(body).jsonObject
-        return buildJsonObject {
-            put("anthropic_version", "vertex-2023-10-16")
-            src.forEach { (k, v) -> if (k != "model") put(k, v) }
-        }.toString()
-    }
+    override fun upstreamBody(body: String, upstreamModel: String, stream: Boolean): String =
+        neton.ai.protocol.transport.VertexUpstream.anthropicBody(Json.parseToJsonElement(body).jsonObject).toString()
 
     override suspend fun requestHeaders(apiKey: String, method: String, url: String, body: String, channel: Channel): Map<String, String> =
         mapOf("Authorization" to "Bearer ${VertexAuth.bearer(apiKey)}", "Content-Type" to "application/json")
@@ -37,7 +32,7 @@ object VertexGeminiAdapter : ProtocolAdapter by GeminiAdapter {
 
     override fun upstreamPath(inboundPath: String, channel: Channel, upstreamModel: String, stream: Boolean): String {
         val (p, l) = VertexAuth.projectAndLocation(channel)
-        return "/v1/projects/$p/locations/$l/publishers/google/models/$upstreamModel:" + if (stream) "streamGenerateContent?alt=sse" else "generateContent"
+        return neton.ai.protocol.transport.VertexUpstream.geminiPath(p, l, upstreamModel, stream)
     }
 
     override suspend fun requestHeaders(apiKey: String, method: String, url: String, body: String, channel: Channel): Map<String, String> =

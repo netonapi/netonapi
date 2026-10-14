@@ -18,7 +18,7 @@ import neton.security.digest.Sha256
  */
 object GeminiThoughtSignatures {
     /** 官方占位值之一。只用于缺少真实签名的 functionCall（官方强烈不鼓励，见 spec §4.5.2）。 */
-    const val BYPASS_VALUE = "context_engineering_is_the_way_to_go"
+    const val BYPASS_VALUE = neton.ai.protocol.codec.GeminiCodec.SIGNATURE_BYPASS_VALUE
 
     /** hub tool call 上的签名；没有返回 null。 */
     fun fromToolCall(toolCall: JsonObject): String? =
@@ -68,15 +68,33 @@ object GeminiThoughtSignatures {
     }
 
     /** 诊断代码（spec §4.5.1 / §4.5.2）。 */
-    const val DIAG_MISSING = "gemini_thought_signature_missing"
-    const val DIAG_BYPASSED = "gemini_thought_signature_bypassed"
+    const val DIAG_MISSING = neton.ai.protocol.diag.DiagnosticCodes.GEMINI_THOUGHT_SIGNATURE_MISSING
+    const val DIAG_BYPASSED = neton.ai.protocol.diag.DiagnosticCodes.GEMINI_THOUGHT_SIGNATURE_BYPASSED
 }
 
 /** OpenAI→Gemini 请求转换的签名选项。 */
 data class GeminiRequestOptions(
     /** 缺签名时写入官方占位值（有损兼容；调用方须已确认该渠道与模型通过验证）。 */
     val signatureBypass: Boolean = false,
+    /** 目标型号是否校验签名；null = 按 hub body 的 model 推断（gemini-3 及之后）。 */
+    val requireSignatures: Boolean? = null,
 )
+
+/** hub（OpenAI Chat）→ Gemini 请求，带签名选项与诊断计数（转换本身在 neton-ai 协议层）。 */
+object GeminiRequestConverter {
+    private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+    fun convert(hubBody: String, options: GeminiRequestOptions, diagnostics: SignatureDiagnostics): String {
+        val r = neton.ai.protocol.convert.ProtocolConverter.convertRequest(
+            json.parseToJsonElement(hubBody) as JsonObject,
+            neton.ai.protocol.ir.WireFormat.OPENAI_CHAT, neton.ai.protocol.ir.WireFormat.GEMINI,
+            gemini = neton.ai.protocol.codec.GeminiEncodeOptions(options.signatureBypass, options.requireSignatures),
+        )
+        diagnostics.missingInCurrentTurn += r.diagnostics.count { it.code == GeminiThoughtSignatures.DIAG_MISSING }
+        diagnostics.bypassed += r.diagnostics.count { it.code == GeminiThoughtSignatures.DIAG_BYPASSED }
+        return r.value.toString()
+    }
+}
 
 /** 一次转换中产生的签名诊断（gateway 写日志与请求记录用）。 */
 data class SignatureDiagnostics(
