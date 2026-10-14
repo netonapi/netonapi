@@ -79,6 +79,13 @@
 - 只允许 `https`；经 `NetGuard` 校验目标地址；限制大小与超时。
 - 下载的字节可以计入请求的计费依据（按渠道配置）。
 
+### 4.6 Gemini thought signature（现存缺陷，优先处理）
+
+- **现状**：gateway 的 `OpenAiToGeminiRequest` 不写任何 thought signature。客户端用 OpenAI 或 Anthropic 格式、上游是 Gemini 3 时，多轮工具调用的第二轮会被上游以 400 拒绝。同协议透传不受影响。
+- **处理**：不等框架迁移完成，先在 gateway 现有编解码器里按框架规格 §4.5 的规则修复（对齐 new-api 最新版：每条 assistant 消息的第一个 `functionCall` 写入占位值，没有调用时写到第一个文本部分；`functionResponse` 去掉 `id`）。框架迁移完成后，由框架接管这一逻辑。
+- **开关**：渠道级配置，默认开启。
+- **验证**：harness 增加"OpenAI 格式客户端 → Gemini 3 上游 → 两轮工具调用"的用例。修复前必须先复现出 400。
+
 ## 5. 迁移步骤与回归
 
 1. 框架完成第 1–3 步（框架规格 §12）。
