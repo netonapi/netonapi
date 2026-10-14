@@ -38,6 +38,21 @@ object GatewayRuntimeBootstrap {
         }
         ctx.bind(RateLimiter::class, RateLimiter(log = log, redis = redis))
 
+        // Gemini thought signature 的状态引用存储（neton-docs spec/ai.md §4.5.1 机制 B）。
+        // 多实例部署必须走 Redis：进程内存储在别的实例上取不到，下一轮就会丢签名。
+        if (redis != null) {
+            logic.ThoughtSignatureVaults.store = logic.RedisThoughtSignatureStore(redis)
+        } else {
+            log.warn("gemini thought signatures: RedisClient not bound, signature references are in-process only (not shared across instances)")
+        }
+        fun envFlag(name: String, default: Boolean): Boolean =
+            neton.core.config.getEnv(name)?.trim()?.lowercase()?.let { it in setOf("1", "true", "yes", "on") } ?: default
+        logic.ThoughtSignatureVaults.echoToOpenAiClients = envFlag("NEWGATE_GEMINI_SIGNATURE_ECHO", true)
+        logic.ThoughtSignatureBypassPolicy.enabled = envFlag("NEWGATE_GEMINI_SIGNATURE_BYPASS", true)
+        neton.core.config.getEnv("NEWGATE_GEMINI_SIGNATURE_TTL_HOURS")?.trim()?.toLongOrNull()?.takeIf { it > 0 }?.let {
+            logic.ThoughtSignatureVaults.ttl = kotlin.time.Duration.parse("${it}h")
+        }
+
         // 充值下单能力同样来自装配层（gateway 不认识 payment）。absent 就保持 null：
         // 充值接口会明确报错，而不是静默把单建到别处、或凭空发放额度。
         ctx.getOrNull(QuotaRechargeLogic::class)?.orderPort = ctx.getOrNull(RechargeOrderPort::class)

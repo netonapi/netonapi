@@ -40,7 +40,7 @@ class GeminiToOpenAiStream(private val model: String) {
                 }
                 part.containsKey("functionCall") -> {
                     // Gemini 一次给完整 functionCall，映射成「开始 + 全量参数」一个 chunk
-                    val call = GeminiToOpenAiResponse.functionCallToToolCall(part["functionCall"]!!.jsonObject, toolIndex)
+                    val call = GeminiToOpenAiResponse.functionCallToToolCall(part["functionCall"]!!.jsonObject, toolIndex, logic.protocol.GeminiThoughtSignatures.fromGeminiPart(part))
                     emitChunk(out, buildJsonObject {
                         role()
                         put("tool_calls", buildJsonArray { add(buildJsonObject { put("index", toolIndex); call.forEach { (k, v) -> put(k, v) } }) })

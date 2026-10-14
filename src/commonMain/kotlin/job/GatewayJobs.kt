@@ -26,3 +26,16 @@ class PriceSyncJob(private val log: Logger, private val ctx: NetonContext) : Job
         else log.info("gateway.price.sync created=${r.created} updated=${r.updated} skipped=${r.skipped}")
     }
 }
+
+/**
+ * 能力验证：每 6 小时对 Gemini 渠道的每个模型做一次「带官方占位签名的两轮工具调用」探测，
+ * 结果写入 V016 验证记录。占位兼容只在有效的通过记录下生效（neton-docs spec/ai.md §4.5.2）。
+ */
+@Job(id = "gateway-capability-verify", cron = "17 */6 * * *", lockTtlMs = 600_000)
+class CapabilityVerifyJob(private val log: Logger, private val ctx: NetonContext) : JobExecutor {
+    override suspend fun run(context: JobContext) {
+        val verify = ctx.getOrNull(logic.ChannelVerificationLogic::class) ?: return
+        val n = verify.verifyAllGeminiSignatureBypass()
+        log.info("gateway.capability.verify gemini_signature_bypass targets=$n")
+    }
+}

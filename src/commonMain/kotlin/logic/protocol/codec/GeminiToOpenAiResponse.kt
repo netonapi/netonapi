@@ -18,7 +18,7 @@ object GeminiToOpenAiResponse {
             when {
                 part["thought"]?.jsonPrimitive?.booleanOrNull == true -> thoughts += part["text"]?.jsonPrimitive?.contentOrNull ?: ""
                 part.containsKey("text") -> texts += part["text"]!!.jsonPrimitive.contentOrNull ?: ""
-                part.containsKey("functionCall") -> toolCalls += functionCallToToolCall(part["functionCall"]!!.jsonObject, i)
+                part.containsKey("functionCall") -> toolCalls += functionCallToToolCall(part["functionCall"]!!.jsonObject, i, logic.protocol.GeminiThoughtSignatures.fromGeminiPart(part))
             }
         }
         val out = buildJsonObject {
@@ -42,13 +42,20 @@ object GeminiToOpenAiResponse {
         return out.toString()
     }
 
-    fun functionCallToToolCall(fc: JsonObject, index: Int): JsonObject = buildJsonObject {
-        put("id", fc["id"] ?: JsonPrimitive("call_${fc["name"]?.jsonPrimitive?.contentOrNull ?: ""}_$index"))
-        put("type", "function")
-        put("function", buildJsonObject {
-            put("name", fc["name"] ?: JsonPrimitive(""))
-            put("arguments", JsonPrimitive((fc["args"] ?: buildJsonObject {}).toString()))
-        })
+    /**
+     * Gemini functionCall → hub tool call。[signature] 是该 functionCall 部分的 thought signature，
+     * 按 Google 官方的 OpenAI 兼容约定放进 `extra_content.google.thought_signature`（spec/ai.md §4.5）。
+     */
+    fun functionCallToToolCall(fc: JsonObject, index: Int, signature: String? = null): JsonObject {
+        val call = buildJsonObject {
+            put("id", fc["id"] ?: JsonPrimitive("call_${fc["name"]?.jsonPrimitive?.contentOrNull ?: ""}_$index"))
+            put("type", "function")
+            put("function", buildJsonObject {
+                put("name", fc["name"] ?: JsonPrimitive(""))
+                put("arguments", JsonPrimitive((fc["args"] ?: buildJsonObject {}).toString()))
+            })
+        }
+        return if (signature != null) logic.protocol.GeminiThoughtSignatures.withSignature(call, signature) else call
     }
 
     fun mapFinish(reason: String?): String = when (reason) {

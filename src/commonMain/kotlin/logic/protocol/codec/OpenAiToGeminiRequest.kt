@@ -10,10 +10,16 @@ import kotlinx.serialization.json.*
 object OpenAiToGeminiRequest {
     private val json = Json { }
 
-    fun convert(openaiBody: String): String {
+    fun convert(openaiBody: String): String = convert(openaiBody, logic.protocol.GeminiRequestOptions(), logic.protocol.SignatureDiagnostics())
+
+    /**
+     * [options] 决定缺签名时是否补占位值；[diagnostics] 收集签名诊断（spec/ai.md §4.5）。
+     * 真实签名（hub tool call 的 `extra_content.google.thought_signature`）一律原样写回，不覆盖。
+     */
+    fun convert(openaiBody: String, options: logic.protocol.GeminiRequestOptions, diagnostics: logic.protocol.SignatureDiagnostics): String {
         val src = json.parseToJsonElement(openaiBody).jsonObject
         val systemTexts = mutableListOf<String>()
-        val contents = buildContents(src["messages"]!!.jsonArray, systemTexts)
+        val contents = buildContents(src["messages"]!!.jsonArray, systemTexts, options, diagnostics)
         val out = buildJsonObject {
             put("contents", contents)
             if (systemTexts.isNotEmpty()) put("systemInstruction", buildJsonObject {
@@ -58,10 +64,15 @@ object OpenAiToGeminiRequest {
         return out.toString()
     }
 
-    private fun buildContents(msgs: JsonArray, systemTexts: MutableList<String>): JsonArray {
+    private fun buildContents(
+        msgs: JsonArray, systemTexts: MutableList<String>,
+        options: logic.protocol.GeminiRequestOptions, diagnostics: logic.protocol.SignatureDiagnostics,
+    ): JsonArray {
         val callNames = mutableMapOf<String, String>()  // tool_call_id → 函数名
         val list = mutableListOf<JsonObject>()
-        for (m in msgs) {
+        // 当前轮 = 最后一条用户消息之后（tool 结果不算用户消息）。Google 只校验当前轮。
+        val currentTurnStart = msgs.indexOfLast { it.jsonObject["role"]?.jsonPrimitive?.contentOrNull == "user" }
+        for ((msgIndex, m) in msgs.withIndex()) {
             val msg = m.jsonObject
             when (msg["role"]?.jsonPrimitive?.contentOrNull) {
                 "system", "developer" -> CodecSupport.textOf(msg["content"]).takeIf { it.isNotEmpty() }?.let { systemTexts += it }
@@ -82,20 +93,35 @@ object OpenAiToGeminiRequest {
                 }
                 "assistant" -> {
                     val parts = CodecSupport.openAiParts(msg["content"])
-                    val arr = buildJsonArray {
-                        parts.texts.joinToString("\n").takeIf { it.isNotEmpty() }?.let { add(buildJsonObject { put("text", it) }) }
-                        (msg["tool_calls"] as? JsonArray)?.forEach { tc ->
-                            val call = tc.jsonObject
-                            val fn = call["function"]?.jsonObject
-                            val name = fn?.get("name")?.jsonPrimitive?.contentOrNull ?: ""
-                            call["id"]?.jsonPrimitive?.contentOrNull?.let { callNames[it] = name }
-                            add(buildJsonObject { put("functionCall", buildJsonObject {
+                    val out = mutableListOf<JsonObject>()
+                    parts.texts.joinToString("\n").takeIf { it.isNotEmpty() }?.let { out += buildJsonObject { put("text", it) } }
+                    var firstCallIndex = -1
+                    (msg["tool_calls"] as? JsonArray)?.forEach { tc ->
+                        val call = tc.jsonObject
+                        val fn = call["function"]?.jsonObject
+                        val name = fn?.get("name")?.jsonPrimitive?.contentOrNull ?: ""
+                        call["id"]?.jsonPrimitive?.contentOrNull?.let { callNames[it] = name }
+                        val signature = logic.protocol.GeminiThoughtSignatures.fromToolCall(call)
+                        if (firstCallIndex < 0) firstCallIndex = out.size
+                        out += buildJsonObject {
+                            put("functionCall", buildJsonObject {
                                 put("name", name)
                                 put("args", runCatching { json.parseToJsonElement(fn?.get("arguments")?.jsonPrimitive?.contentOrNull ?: "{}") }.getOrElse { buildJsonObject {} })
-                            }) })
+                            })
+                            // 真实签名原样写回（Google 只在每步第一个 functionCall 上给签名，并行调用的其余没有）
+                            signature?.let { put("thoughtSignature", it) }
                         }
                     }
-                    if (arr.isNotEmpty()) list += buildJsonObject { put("role", "model"); put("parts", arr) }
+                    // 每一步的第一个 functionCall 没有真实签名：按选项补占位值，否则记为缺失（只统计当前轮）
+                    if (firstCallIndex >= 0 && !out[firstCallIndex].containsKey("thoughtSignature")) {
+                        if (options.signatureBypass) {
+                            out[firstCallIndex] = JsonObject(out[firstCallIndex] + ("thoughtSignature" to JsonPrimitive(logic.protocol.GeminiThoughtSignatures.BYPASS_VALUE)))
+                            diagnostics.bypassed++
+                        } else if (msgIndex > currentTurnStart) {
+                            diagnostics.missingInCurrentTurn++
+                        }
+                    }
+                    if (out.isNotEmpty()) list += buildJsonObject { put("role", "model"); put("parts", JsonArray(out)) }
                 }
                 else -> {
                     val parts = CodecSupport.openAiParts(msg["content"])

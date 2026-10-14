@@ -46,6 +46,8 @@ class RelayEngine(
     private val quotaLogic: QuotaLogic,
     private val settlementLogic: SettlementLogic,
     private val rateLimiter: RateLimiter,
+    /** 能力验证（V016）。为空时从应用上下文取；都没有则视为一律未验证，不启用占位兼容。 */
+    private var verificationLogic: ChannelVerificationLogic? = null,
 ) {
 
     /** 本次请求的资金占位（RelayEngine 每请求实例化，故可用字段持有）。 */
@@ -85,6 +87,7 @@ class RelayEngine(
 
     private suspend fun relayInner(ctx: HttpContext, userId: Long, tokenId: Long, inbound: ProtocolAdapter, path: String, rawBodyOverride: String? = null) {
         val startMs = now()
+        if (verificationLogic == null) verificationLogic = ctx.getApplicationContext()?.getOrNull(ChannelVerificationLogic::class)
         val rawBody = rawBodyOverride ?: ctx.request.text()
 
         val token = tokenLogic.get(tokenId)
@@ -231,7 +234,7 @@ class RelayEngine(
                 lastError = "channel ${channel.id} (${channel.type}) does not serve $path"
                 return@repeat
             }
-            val transform = buildTransform(inbound, upstream, rawBody, channel, path)
+            val transform = buildTransform(inbound, upstream, rawBody, channel, path, userId, tokenId)
             val key = channelLogic.pickKey(channel.id)
             if (key == null) { lastError = "channel ${channel.id} has no available key"; return@repeat }
 
@@ -294,8 +297,9 @@ class RelayEngine(
      * 同协议 = 恒等透传（保真，决策 A）；跨协议 = inbound→hub→upstream 组合，
      * openai 端各段恒等，Gemini↔Anthropic 经 hub 免费组合。
      */
-    private fun buildTransform(
+    private suspend fun buildTransform(
         inbound: ProtocolAdapter, upstream: ProtocolAdapter, rawBody: String, channel: Channel, path: String,
+        userId: Long, tokenId: Long,
     ): RelayTransform {
         // 同协议：模型映射 + 协议原生改写，响应恒等透传
         if (inbound.id == upstream.id) {
@@ -316,9 +320,16 @@ class RelayEngine(
         // 跨协议：inbound → hub(OpenAI) → upstream
         val mapped = RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
         val hubBody = ProtocolCodecs.requestToHub(inbound.id)(mapped.body)
+        // 上游是 Gemini：thought signature 的跨请求回传与缺失处理（neton-docs spec/ai.md §4.5，gateway 文档 §4.6）
+        val vault = if (upstream.id == "gemini") ThoughtSignatureVault(
+            ThoughtSignatureVault.Binding(tokenId, userId, channel.type, mapped.upstreamModel, channel.id),
+            keepExtraContent = inbound.id == "openai" && ThoughtSignatureVaults.echoToOpenAiClients,
+        ) else null
         // 上游是 OpenAI 时补 include_usage（流式尾包）
         val upstreamBody = if (upstream.id == "openai" && mapped.stream) {
             RequestRewriter.injectIncludeUsage(hubBody)
+        } else if (vault != null) {
+            geminiUpstreamBody(vault.resolve(hubBody), channel, mapped.upstreamModel)
         } else {
             ProtocolCodecs.requestFromHub(upstream.id)(hubBody)
         }
@@ -329,15 +340,35 @@ class RelayEngine(
             upstreamPath = upstreamPathFor(upstream, channel, path, mapped.upstreamModel, mapped.stream),
             transformResponseBody = { upstreamNative ->
                 val hub = ProtocolCodecs.responseToHub(upstream.id)(upstreamNative)
-                ProtocolCodecs.responseFromHub(inbound.id)(ModelRename.json(hub, mapped.upstreamModel, mapped.requestModel))
+                val signed = vault?.issue(hub) ?: hub
+                ProtocolCodecs.responseFromHub(inbound.id)(ModelRename.json(signed, mapped.upstreamModel, mapped.requestModel))
             },
             streamTransformerFactory = {
                 val toHub = ProtocolCodecs.streamToHub(upstream.id, mapped.requestModel)
                 val rename = if (mapped.upstreamModel != mapped.requestModel) ModelRename.stage(mapped.upstreamModel, mapped.requestModel) else null
                 val fromHub = ProtocolCodecs.streamFromHub(inbound.id, mapped.requestModel)
-                ChainedStreamTransformer(listOfNotNull(toHub, rename, fromHub))
+                ChainedStreamTransformer(listOfNotNull(toHub, vault?.stage(), rename, fromHub))
             },
+            signatureVault = vault,
         )
+    }
+
+    /**
+     * hub → Gemini 请求，处理 thought signature：真实签名原样写回；缺失时只在
+     * 「开关开启 + 该渠道与模型有有效的验证记录」时补官方占位值（spec §4.5.2），否则记为缺失。
+     */
+    private suspend fun geminiUpstreamBody(hubBody: String, channel: Channel, upstreamModel: String): String {
+        val bypass = ThoughtSignatureBypassPolicy.enabled &&
+            (verificationLogic?.isVerified(channel.id, ChannelVerificationLogic.CAPABILITY_GEMINI_SIGNATURE_BYPASS, upstreamModel) ?: false)
+        val diagnostics = logic.protocol.SignatureDiagnostics()
+        val body = logic.protocol.codec.OpenAiToGeminiRequest.convert(hubBody, logic.protocol.GeminiRequestOptions(signatureBypass = bypass), diagnostics)
+        if (diagnostics.bypassed > 0) {
+            log.info("${logic.protocol.GeminiThoughtSignatures.DIAG_BYPASSED} channel=${channel.id} model=$upstreamModel steps=${diagnostics.bypassed}")
+        }
+        if (diagnostics.missingInCurrentTurn > 0) {
+            log.warn("${logic.protocol.GeminiThoughtSignatures.DIAG_MISSING} channel=${channel.id} model=$upstreamModel steps=${diagnostics.missingInCurrentTurn} (upstream may reject with 400)")
+        }
+        return body
     }
 
     /** 组合多个流式阶段：feed 链式；finish 时每阶段先消费上阶段 flush 输出再自己 flush。 */
@@ -444,7 +475,9 @@ class RelayEngine(
                 // 转写结果按上游的内容类型回（response_format=text 时是纯文本，不是 JSON）
                 respondRaw(ctx, 200, res.body, res.headers["Content-Type"] ?: res.headers["content-type"])
             } else {
-                respondRaw(ctx, 200, transform.transformResponseBody(res.body))  // body 按需转协议
+                val out = transform.transformResponseBody(res.body)  // body 按需转协议
+                transform.signatureVault?.let { v -> runCatching { v.flush() }.onFailure { log.warn("signature vault flush failed: ${it.message}") } }
+                respondRaw(ctx, 200, out)
             }
             bill(token, channel, rewritten, usage, group, groupSource, startMs, ttfb)
             return RelayOutcome.SUCCESS
@@ -454,7 +487,7 @@ class RelayEngine(
         // 首字节前上游失败时无法换渠道重试（会撞 ResponseAlreadyCommitted）。
         val accumulator = upstream.streamUsageAccumulator(rewritten.body)
         val streamTransformer = transform.streamTransformerFactory?.invoke()
-        return streamWithPreflight(ctx, client, request, accumulator, streamTransformer, token, channel, keyId, rewritten, group, groupSource, startMs, upstream)
+        return streamWithPreflight(ctx, client, request, accumulator, streamTransformer, token, channel, keyId, rewritten, group, groupSource, startMs, upstream, transform.signatureVault)
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -463,6 +496,7 @@ class RelayEngine(
         accumulator: logic.protocol.StreamUsageAccumulator, streamTransformer: StreamTransformer?,
         token: GatewayToken, channel: Channel, keyId: Long, rewritten: Rewritten, group: String,
         groupSource: GroupSource, startMs: Long, upstreamAdapter: ProtocolAdapter,
+        signatureVault: ThoughtSignatureVault? = null,
     ): RelayOutcome = kotlinx.coroutines.coroutineScope {
         // producer 捕获上游异常存入 openError（不外抛，避免 cancel scope 抢占我们的重试异常）
         var openError: Throwable? = null
@@ -510,7 +544,10 @@ class RelayEngine(
                 suspend fun writeOut(text: String) {
                     accumulator.feed(text)  // 始终喂上游原文用于计费
                     if (streamTransformer != null) {
-                        val c = streamTransformer.feed(text); if (c.isNotEmpty()) writeChunk(c)
+                        val c = streamTransformer.feed(text)
+                        // 签名状态引用必须先落库，客户端才可能看到它（见 ThoughtSignatureVault.flush）
+                        signatureVault?.let { v -> runCatching { v.flush() }.onFailure { log.warn("signature vault flush failed: ${it.message}") } }
+                        if (c.isNotEmpty()) writeChunk(c)
                     } else writeChunk(text)
                 }
                 firstResult.getOrNull()?.let { writeOut(it) }  // 空流（首块即 close 无异常）则跳过
@@ -526,7 +563,10 @@ class RelayEngine(
                         aborted = true
                         log.warn("relay stream ended without terminal marker (upstream truncated) channel=${channel.id}")
                     }
-                    else -> streamTransformer?.finish()?.let { if (it.isNotEmpty()) writeChunk(it) }
+                    else -> streamTransformer?.finish()?.let {
+                        signatureVault?.let { v -> runCatching { v.flush() }.onFailure { e -> log.warn("signature vault flush failed: ${e.message}") } }
+                        if (it.isNotEmpty()) writeChunk(it)
+                    }
                 }
             }
         } catch (e: Throwable) {
@@ -572,6 +612,8 @@ class RelayEngine(
         val upstreamPath: String,
         val transformResponseBody: (String) -> String,
         val streamTransformerFactory: (() -> StreamTransformer)?,
+        /** 本次签发的签名状态引用，写给客户端之前必须 flush（见 [ThoughtSignatureVault.flush]）。 */
+        val signatureVault: ThoughtSignatureVault? = null,
     ) {
         /**
          * 上游 4xx 的错误体：同协议原样透传；跨协议改写成客户端协议的错误格式。

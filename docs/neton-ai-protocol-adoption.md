@@ -79,7 +79,11 @@
 - 只允许 `https`；经 `NetGuard` 校验目标地址；限制大小与超时。
 - 下载的字节可以计入请求的计费依据（按渠道配置）。
 
-### 4.6 Gemini thought signature（现存缺陷，优先处理）
+### 4.6 Gemini thought signature（已在现有编解码器中实现，待真实上游验证）
+
+**实施状态（2026-10-15）**：第 1、2、4 条已实现（`GeminiThoughtSignatures`、`ThoughtSignatureVault`、`ChannelVerificationLogic`、V016、定时任务 `gateway-capability-verify`），单测 13 例覆盖两种客户端格式的整链路往返、绑定校验与过期、流式改写。**尚未完成**：harness 对真实 Gemini 上游的复现与回归。
+
+环境变量：`NEWGATE_GEMINI_SIGNATURE_ECHO`（默认开，给 OpenAI 客户端输出官方 `extra_content`）、`NEWGATE_GEMINI_SIGNATURE_BYPASS`（默认开，仍需验证记录才生效）、`NEWGATE_GEMINI_SIGNATURE_TTL_HOURS`（默认 24）。
 
 **现状（已核对代码）**：两个方向都会丢签名。`GeminiToOpenAiResponse` 拆分文本、推理和工具调用时不保留签名；`OpenAiToGeminiRequest` 重新构造工具调用时也不写回签名。同协议透传不受影响。
 

@@ -11,12 +11,13 @@ moduleId `gateway`；路由组 `gateway`（`/v1`、`/v1beta`、`/health`、`/met
 | `controller/app` | 用户自助：Key、用量与汇总、充值、兑换码、模型广场、公开接入信息 |
 | `controller/admin` | 管理台：渠道（含探测、拉模型）、定价（含导入 / 价源同步）、令牌、日志、结算复核、计价组、兑换码、概览 |
 | `logic/RelayEngine` | 中转引擎：限流 → 计价组 → 路由候选 → 预留 → 上游执行（重试、流式预检）→ 结算 |
-| `logic/protocol` | 协议适配器（OpenAI / Azure / Anthropic / Gemini / Bedrock / Vertex）、编解码器、SSE 分帧、模型名反向改写、multipart |
+| `logic/protocol` | 协议适配器（OpenAI / Azure / Anthropic / Gemini / Bedrock / Vertex）、编解码器、SSE 分帧、模型名反向改写、multipart、Gemini thought signature 约定 |
+| `logic/ThoughtSignatureVault` `ChannelVerificationLogic` | Gemini thought signature 的跨请求回传（状态引用嵌入工具调用 ID）与占位兼容的验证闸门（见 docs/neton-ai-protocol-adoption.md §4.6） |
 | `logic/SettlementLogic` `SettlementWorker` | 两阶段结算与崩溃恢复（见 docs/V004） |
 | `logic/PricingCalc` `SalePricing` `ReserveCalc` | 计价、售价轨、预留额估算 |
 | `logic/OverviewLogic` `UsageStatsLogic` | 管理台概览与用户用量汇总（都从日志表现算） |
-| `job/` | 定时任务：渠道测速、价源同步 |
-| `sql/postgresql` | 迁移 V001–V012，编译期嵌入 |
+| `job/` | 定时任务：渠道测速、价源同步、能力验证（Gemini 签名占位兼容） |
+| `sql/postgresql` | 迁移 V001–V016，编译期嵌入 |
 
 ## 管理台信息架构（V012）
 
