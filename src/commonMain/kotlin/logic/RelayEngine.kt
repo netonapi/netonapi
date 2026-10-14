@@ -151,7 +151,23 @@ class RelayEngine(
         // 端点能力路由：/v1/embeddings 之类只能落到声明了该能力的渠道（否则上游必然 404，钱已预留、日志已脏）
         val capability = RelayRouter.capabilityFor(path)
         val enabledChannels = channelLogic.listEnabled()
-        val candidates = RelayRouter.candidates(enabledChannels, requestModel, group, now(), capability)
+        var candidates = RelayRouter.candidates(enabledChannels, requestModel, group, now(), capability)
+        // 模型名推理尾缀（V017，§4.3）：完整名字没有渠道、且有开启了该开关的渠道服务去掉尾缀后的模型时，
+        // 按基础模型路由与计价，推理意图按客户端协议写进请求体
+        if (candidates.isEmpty()) {
+            val parsed = neton.ai.protocol.convert.ReasoningSuffix.parse(requestModel)
+            val reasoning = parsed.reasoning
+            if (reasoning != null) {
+                val suffixed = RelayRouter.candidates(enabledChannels.filter { it.reasoningSuffix == 1 }, parsed.model, group, now(), capability)
+                val protocol = if (path == RESPONSES_PATH) logic.protocol.ResponsesBridge.PROTOCOL else inbound.id
+                val rewrittenBody = if (suffixed.isEmpty()) null
+                    else runCatching { logic.protocol.ProtocolCodecs.withReasoning(protocol, rawBody, parsed.model, reasoning) }.getOrNull()
+                if (rewrittenBody != null) {
+                    log.info("relay reasoning suffix model=$requestModel base=${parsed.model} reasoning=$reasoning")
+                    return relayInner(ctx, userId, tokenId, inbound, path, rewrittenBody)
+                }
+            }
+        }
         if (candidates.isEmpty()) {
             val reason = RelayRouter.noCandidateReason(enabledChannels, requestModel, group, now(), capability)
             log.warn("relay no candidate model=$requestModel capability=$capability group=$group reason=$reason")
@@ -217,6 +233,7 @@ class RelayEngine(
                 return respondError(ctx, inbound, 401, "invalid_token", "token not found or disabled")
         }
 
+        val responsesRejection: String? by lazy { logic.protocol.ResponsesBridge.rejection(rawBody) }
         val tried = mutableSetOf<Long>()
         var lastError: String? = null
         val maxAttempts = minOf(3, candidates.size)
@@ -229,12 +246,22 @@ class RelayEngine(
                 lastError = "unknown channel type ${channel.type}"
                 return@repeat
             }
-            // Responses / Images 没有到 hub 的转码（结构与 Chat 不同构），只能打 OpenAI 系上游
+            // Images / 音频 / rerank 只能打 OpenAI 系上游；Responses 无状态请求可经 hub 桥接到其他上游
             if (path in OPENAI_ONLY_PATHS && upstream.id != "openai") {
-                lastError = "channel ${channel.id} (${channel.type}) does not serve $path"
+                val why = if (path == RESPONSES_PATH && ProtocolCodecs.formatOf(upstream.id) != null) responsesRejection else "does not serve $path"
+                if (why != null) {
+                    lastError = "channel ${channel.id} (${channel.type}) $why"
+                    return@repeat
+                }
+            }
+            val transform = try {
+                buildTransform(inbound, upstream, rawBody, channel, path, userId, tokenId)
+            } catch (e: neton.ai.protocol.diag.ConversionRejectedException) {
+                lastError = "channel ${channel.id} (${channel.type}) loss policy ${channel.lossPolicy} rejected: " +
+                    e.violations.joinToString(",") { it.code }
+                log.info("relay conversion rejected $lastError")
                 return@repeat
             }
-            val transform = buildTransform(inbound, upstream, rawBody, channel, path, userId, tokenId)
             val key = channelLogic.pickKey(channel.id)
             if (key == null) { lastError = "channel ${channel.id} has no available key"; return@repeat }
 
@@ -260,7 +287,7 @@ class RelayEngine(
                     // 上游认证错（401/403）归咎于 Key；其它 4xx 是客户端问题，不计 Key 失败
                     if (err.statusCode == 401 || err.statusCode == 403) channelLogic.recordKeyFailure(key.id, "upstream_${err.statusCode}")
                     recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
-                    respondRaw(ctx, err.statusCode, err.body?.let { transform.errorBodyFor(it) } ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
+                    respondRaw(ctx, err.statusCode, err.body?.let { transform.errorBodyFor(it, err.statusCode) } ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
                     return
                 }
                 lastError = err.toString().replace("\n", " ").take(160)
@@ -317,9 +344,15 @@ class RelayEngine(
                 } else null,
             )
         }
-        // 跨协议：inbound → hub(OpenAI) → upstream
+        // 跨协议：inbound → hub(OpenAI) → upstream。/v1/responses 的入站格式是 Responses（不是 Chat）
+        val inboundProtocol = if (path == RESPONSES_PATH) logic.protocol.ResponsesBridge.PROTOCOL else inbound.id
         val mapped = RequestRewriter.rewrite(rawBody, channel, injectStreamOptions = false)
-        val hubBody = ProtocolCodecs.requestToHub(inbound.id)(mapped.body)
+        // 损耗策略（V017，§4.2）：违反时抛 ConversionRejectedException，外层换下一个渠道
+        val bypassOn = upstream.id == "gemini" && ThoughtSignatureBypassPolicy.enabled &&
+            (verificationLogic?.isVerified(channel.id, ChannelVerificationLogic.CAPABILITY_GEMINI_SIGNATURE_BYPASS, mapped.upstreamModel) ?: false)
+        val policy = ConversionPolicy.of(channel, signatureBypass = bypassOn)
+        val diagnostics = mutableListOf<neton.ai.protocol.diag.Diagnostic>()
+        val hubBody = ProtocolCodecs.convertRequest(mapped.body, inboundProtocol, "openai", policy, diagnostics)
         // 上游是 Gemini：thought signature 的跨请求回传与缺失处理（neton-docs spec/ai.md §4.5，gateway 文档 §4.6）
         val vault = if (upstream.id == "gemini") ThoughtSignatureVault(
             ThoughtSignatureVault.Binding(tokenId, userId, channel.type, mapped.upstreamModel, channel.id),
@@ -329,9 +362,13 @@ class RelayEngine(
         val upstreamBody = if (upstream.id == "openai" && mapped.stream) {
             RequestRewriter.injectIncludeUsage(hubBody)
         } else if (vault != null) {
-            geminiUpstreamBody(vault.resolve(hubBody), channel, mapped.upstreamModel)
+            geminiUpstreamBody(vault.resolve(hubBody), channel, mapped.upstreamModel, bypassOn, policy, diagnostics)
         } else {
-            ProtocolCodecs.requestFromHub(upstream.id)(hubBody)
+            ProtocolCodecs.convertRequest(hubBody, "openai", upstream.id, policy, diagnostics)
+        }
+        if (diagnostics.isNotEmpty()) {
+            log.info("relay conversion channel=${channel.id} $inboundProtocol->${upstream.id} policy=${channel.lossPolicy} " +
+                "diagnostics=${diagnostics.joinToString(",") { it.code + "@" + it.path }}".take(1000))
         }
         return RelayTransform(
             rewritten = Rewritten(upstreamBody, mapped.requestModel, mapped.upstreamModel, mapped.stream),
@@ -341,15 +378,16 @@ class RelayEngine(
             transformResponseBody = { upstreamNative ->
                 val hub = ProtocolCodecs.responseToHub(upstream.id)(upstreamNative)
                 val signed = vault?.issue(hub) ?: hub
-                ProtocolCodecs.responseFromHub(inbound.id)(ModelRename.json(signed, mapped.upstreamModel, mapped.requestModel))
+                ProtocolCodecs.responseFromHub(inboundProtocol)(ModelRename.json(signed, mapped.upstreamModel, mapped.requestModel))
             },
             streamTransformerFactory = {
                 val toHub = ProtocolCodecs.streamToHub(upstream.id, mapped.requestModel)
                 val rename = if (mapped.upstreamModel != mapped.requestModel) ModelRename.stage(mapped.upstreamModel, mapped.requestModel) else null
-                val fromHub = ProtocolCodecs.streamFromHub(inbound.id, mapped.requestModel)
+                val fromHub = ProtocolCodecs.streamFromHub(inboundProtocol, mapped.requestModel)
                 ChainedStreamTransformer(listOfNotNull(toHub, vault?.stage(), rename, fromHub))
             },
             signatureVault = vault,
+            inboundProtocol = inboundProtocol,
         )
     }
 
@@ -357,11 +395,12 @@ class RelayEngine(
      * hub → Gemini 请求，处理 thought signature：真实签名原样写回；缺失时只在
      * 「开关开启 + 该渠道与模型有有效的验证记录」时补官方占位值（spec §4.5.2），否则记为缺失。
      */
-    private suspend fun geminiUpstreamBody(hubBody: String, channel: Channel, upstreamModel: String): String {
-        val bypass = ThoughtSignatureBypassPolicy.enabled &&
-            (verificationLogic?.isVerified(channel.id, ChannelVerificationLogic.CAPABILITY_GEMINI_SIGNATURE_BYPASS, upstreamModel) ?: false)
+    private fun geminiUpstreamBody(
+        hubBody: String, channel: Channel, upstreamModel: String, bypass: Boolean,
+        policy: neton.ai.protocol.diag.LossPolicy, all: MutableList<neton.ai.protocol.diag.Diagnostic>,
+    ): String {
         val diagnostics = logic.protocol.SignatureDiagnostics()
-        val body = logic.protocol.GeminiRequestConverter.convert(hubBody, logic.protocol.GeminiRequestOptions(signatureBypass = bypass), diagnostics)
+        val body = logic.protocol.GeminiRequestConverter.convert(hubBody, logic.protocol.GeminiRequestOptions(signatureBypass = bypass), diagnostics, policy, all)
         if (diagnostics.bypassed > 0) {
             log.info("${logic.protocol.GeminiThoughtSignatures.DIAG_BYPASSED} channel=${channel.id} model=$upstreamModel steps=${diagnostics.bypassed}")
         }
@@ -466,7 +505,7 @@ class RelayEngine(
                 // 401/403 = 凭证级失败，计 Key 失败（与流式/外层分类统一）；其它 4xx 是客户端问题
                 if (res.statusCode == 401 || res.statusCode == 403) channelLogic.recordKeyFailure(keyId, "upstream_${res.statusCode}")
                 recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, "error", "upstream_${res.statusCode}", null)
-                respondRaw(ctx, res.statusCode, transform.errorBodyFor(res.body))  // 同协议原样、跨协议改写（擦除 headers）
+                respondRaw(ctx, res.statusCode, transform.errorBodyFor(res.body, res.statusCode))  // 同协议原样、跨协议改写（擦除 headers）
                 return RelayOutcome.PARTIAL  // 上游语义错误：终态，不当 Key 成功
             }
             val ttfb = now() - startMs
@@ -614,6 +653,8 @@ class RelayEngine(
         val streamTransformerFactory: (() -> StreamTransformer)?,
         /** 本次签发的签名状态引用，写给客户端之前必须 flush（见 [ThoughtSignatureVault.flush]）。 */
         val signatureVault: ThoughtSignatureVault? = null,
+        /** 客户端协议（/v1/responses 时是 Responses，而不是 inbound 适配器的 Chat）。 */
+        val inboundProtocol: String = inbound.id,
     ) {
         /**
          * 上游 4xx 的错误体：同协议原样透传；跨协议改写成客户端协议的错误格式。
@@ -621,8 +662,12 @@ class RelayEngine(
          * `type` 就只剩一句 "unknown error"，用户看不到上游到底说了什么。三家的错误体都有
          * `error.message`，拿到它按 inbound 重新包一层，拿不到就把原文当 message。
          */
-        fun errorBodyFor(upstreamBody: String): String {
+        fun errorBodyFor(upstreamBody: String, status: Int = 0): String {
             if (inbound.id == upstream.id) return upstreamBody
+            // 两端格式都已知：由 neton-ai 按客户端协议重新渲染（保留错误类别）
+            val from = ProtocolCodecs.formatOf(upstream.id)
+            val to = ProtocolCodecs.formatOf(inboundProtocol)
+            if (from != null && to != null) return neton.ai.protocol.convert.ProtocolConverter.convertError(status, upstreamBody, from, to).second
             val message = runCatching {
                 kotlinx.serialization.json.Json.parseToJsonElement(upstreamBody)
                     .jsonObject["error"]?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
@@ -895,6 +940,7 @@ class RelayEngine(
             "anthropic" -> AnthropicAdapter
             "gemini" -> GeminiAdapter
             "bedrock" -> logic.protocol.aws.BedrockAdapter
+            "bedrock_converse" -> logic.protocol.aws.BedrockConverseAdapter
             "vertex_anthropic" -> logic.protocol.vertex.VertexAnthropicAdapter
             "vertex_gemini" -> logic.protocol.vertex.VertexGeminiAdapter
             else -> null

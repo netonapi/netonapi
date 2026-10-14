@@ -20,6 +20,8 @@ object ProtocolCodecs {
         "openai" -> WireFormat.OPENAI_CHAT
         "anthropic" -> WireFormat.ANTHROPIC
         "gemini" -> WireFormat.GEMINI
+        "bedrock_converse" -> WireFormat.BEDROCK_CONVERSE
+        ResponsesBridge.PROTOCOL -> WireFormat.OPENAI_RESPONSES
         else -> null
     }
 
@@ -29,6 +31,35 @@ object ProtocolCodecs {
 
     private fun request(from: WireFormat, to: WireFormat): (String) -> String =
         { b -> ProtocolConverter.convertRequest(parse(b), from, to).value.toString() }
+
+    /**
+     * 按损耗策略转换请求；诊断追加到 [diagnostics]。违反策略时抛
+     * [neton.ai.protocol.diag.ConversionRejectedException]（调用方据此换下一个渠道）。
+     */
+    fun convertRequest(
+        body: String, from: String, to: String,
+        policy: neton.ai.protocol.diag.LossPolicy,
+        diagnostics: MutableList<neton.ai.protocol.diag.Diagnostic>,
+    ): String {
+        val f = formatOf(from) ?: return body
+        val t = formatOf(to) ?: return body
+        if (f == t) return body
+        val r = ProtocolConverter.convertRequest(parse(body), f, t, policy)
+        diagnostics += r.diagnostics
+        return r.value.toString()
+    }
+
+    /**
+     * 把推理意图写进某协议的请求体（模型名推理尾缀，§4.3）：解码 → 设置模型与推理 → 按原协议编码。
+     * Gemini 报文本来没有 model 字段，gateway 放在 body 里给路由用，这里写回。
+     */
+    fun withReasoning(protocol: String, body: String, model: String, reasoning: neton.ai.protocol.ir.ReasoningOptions): String {
+        val f = formatOf(protocol) ?: return body
+        val codec = neton.ai.protocol.codec.ProtocolCodecs.of(f)
+        val ir = codec.decodeRequest(parse(body))
+        val out = codec.encodeRequest(ir.copy(model = model, options = ir.options.copy(reasoning = reasoning)))
+        return (if (f == WireFormat.GEMINI) JsonObject(out + ("model" to kotlinx.serialization.json.JsonPrimitive(model))) else out).toString()
+    }
 
     private fun response(from: WireFormat, to: WireFormat): (String) -> String =
         { b -> ProtocolConverter.convertResponse(parse(b), from, to).value.toString() }

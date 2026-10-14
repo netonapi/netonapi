@@ -84,12 +84,18 @@ data class GeminiRequestOptions(
 object GeminiRequestConverter {
     private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
-    fun convert(hubBody: String, options: GeminiRequestOptions, diagnostics: SignatureDiagnostics): String {
+    fun convert(
+        hubBody: String, options: GeminiRequestOptions, diagnostics: SignatureDiagnostics,
+        policy: neton.ai.protocol.diag.LossPolicy = neton.ai.protocol.diag.LossPolicy.Allow,
+        all: MutableList<neton.ai.protocol.diag.Diagnostic>? = null,
+    ): String {
         val r = neton.ai.protocol.convert.ProtocolConverter.convertRequest(
             json.parseToJsonElement(hubBody) as JsonObject,
             neton.ai.protocol.ir.WireFormat.OPENAI_CHAT, neton.ai.protocol.ir.WireFormat.GEMINI,
+            policy = policy,
             gemini = neton.ai.protocol.codec.GeminiEncodeOptions(options.signatureBypass, options.requireSignatures),
         )
+        all?.addAll(r.diagnostics)
         diagnostics.missingInCurrentTurn += r.diagnostics.count { it.code == GeminiThoughtSignatures.DIAG_MISSING }
         diagnostics.bypassed += r.diagnostics.count { it.code == GeminiThoughtSignatures.DIAG_BYPASSED }
         return r.value.toString()

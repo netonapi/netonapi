@@ -47,6 +47,14 @@
 | embeddings、rerank、images（生成、编辑）、audio（三种） | 已有（多为仅 OpenAI 系上游） | 维持；按需补 embeddings 跨协议 | 维持现有规则 |
 | batches | 无 | 下一期 | 按批价 |
 
+## 3.1 已开放的新能力（2026-10-15）
+
+- **渠道类型 `bedrock_converse`**：Bedrock Converse 接口，任意 Bedrock 模型（Nova、Llama、Mistral、Claude 等）。Key 与 region 规则同 `bedrock`；用量按 Converse 的 `inputTokens`（不含缓存）与缓存读写计。
+- **`/v1/responses` 打非 OpenAI 上游**：经枢纽转换到 Anthropic / Gemini / Converse 等。只桥接无状态请求：带 `previous_response_id`、`conversation`、`background: true`，或用了 OpenAI 托管工具（web_search 等）的请求，跳过非 OpenAI 渠道，由 OpenAI 渠道服务；都没有时返回 503 并说明原因，不静默降级。
+- **跨协议错误体**由 neton-ai 按客户端协议重新渲染，保留错误类别（限流、过载、鉴权等）与上游原话。
+- 非文本端点的按件用量（图片数、音频秒数、TTS 字符、rerank 检索单位）框架已能提取，但**计费还没接**：每一项都要先有计价项、迁移与 harness 用例（见 §5 第 4 条）。
+- 实时端点（Realtime、Responses WebSocket）：框架的 `RealtimeBridge` 已就绪；等 neton-websocket 提供客户端（含 TLS）后再接线。
+
 ## 4. 新增的业务规则
 
 ### 4.1 用量与计费
@@ -61,11 +69,15 @@
 
 ### 4.2 损耗策略
 
+**已实现（V017）**：渠道字段 `loss_policy`（`allow` / `safe` / `strict`）。违反策略时这个渠道不参与本次请求，换下一个渠道；全部被拒时返回 503 并带原因。Gemini 占位签名实际启用时，`safe` 自动把对应诊断列为已授权降级；`strict` 不受影响。诊断目前写进应用日志（`relay conversion ...` 一行），还没进请求日志表与管理台。
+
 - 默认 `allow`，诊断写入请求日志。
 - 涉及工具调用的渠道建议使用 `safe`：工具行为会发生变化时直接拒绝转换，避免"看起来成功、实际调用了错误的工具"。
 - 管理台展示每次请求的转换路径、质量等级与诊断，便于客服排查。
 
 ### 4.3 推理尾缀
+
+**已实现（V017）**：渠道字段 `reasoning_suffix`。完整模型名没有渠道、而有开启了该开关的渠道服务去掉尾缀后的模型时，按基础模型路由与计价，推理意图按客户端协议写进请求体（解析规则见 neton-ai `ReasoningSuffix`）。
 
 - 是否解析 `-thinking`、`-high` 这类模型名尾缀，按渠道或计价组配置，默认关闭。
 - 解析后实际使用的推理预算计入计费依据（推理 token 由上游 usage 给出）。

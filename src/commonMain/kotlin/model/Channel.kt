@@ -48,6 +48,10 @@ data class Channel(
     val cooldownUntil: Long = 0,
     /** 成本折扣（如 "0.6" = 官方价 6 折），DECIMAL 字符串，毛利核算用（spec 决策 B2） */
     val costDiscount: String = "1.0",
+    /** 跨协议转换的损耗策略（V017）：allow / safe / strict。 */
+    val lossPolicy: String = "allow",
+    /** 1 = 解析模型名推理尾缀（V017），默认关闭。 */
+    val reasoningSuffix: Int = 0,
     val remark: String? = null,
     @SoftDelete val deleted: Int = 0,
     @CreatedAt val createdAt: Long? = null,

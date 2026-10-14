@@ -20,6 +20,8 @@ data class CreateChannelRequest(
     /** 托管上游的厂商参数 JSON：Vertex {"project","location"}，Bedrock 可选 {"region"} */
     val providerConfig: String? = null,
     val costDiscount: String = "1.0",
+    val lossPolicy: String = "allow",
+    val reasoningSuffix: Int = 0,
     val remark: String? = null,
     /** 初始 Key 列表（可批量粘贴） */
     val keys: List<String> = emptyList(),
@@ -44,6 +46,8 @@ data class UpdateChannelRequest(
     /** 托管上游的厂商参数 JSON：Vertex {"project","location"}，Bedrock 可选 {"region"} */
     val providerConfig: String? = null,
     val costDiscount: String = "1.0",
+    val lossPolicy: String = "allow",
+    val reasoningSuffix: Int = 0,
     val remark: String? = null,
     /** 表单里的状态列一起提交；null = 不动。走 updateStatus 以复用其副作用（恢复挂起等）。 */
     val status: Int? = null,

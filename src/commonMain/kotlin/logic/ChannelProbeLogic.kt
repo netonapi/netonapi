@@ -130,7 +130,7 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
             ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "未知渠道类型 ${channel.type}")
         val key = channelLogic.pickKey(channel.id)
             ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "渠道没有可用的 Key")
-        if (channel.type in setOf("bedrock", "vertex_anthropic", "vertex_gemini")) {
+        if (channel.type in setOf("bedrock", "bedrock_converse", "vertex_anthropic", "vertex_gemini")) {
             return ChannelModelsResult(ok = false, error = "该类型没有可用的模型列表接口，请手动填写模型清单（模型映射的目标名即厂商模型 id）")
         }
         val base = channel.baseUrl.trimEnd('/')
