@@ -79,12 +79,27 @@
 - 只允许 `https`；经 `NetGuard` 校验目标地址；限制大小与超时。
 - 下载的字节可以计入请求的计费依据（按渠道配置）。
 
-### 4.6 Gemini thought signature（现存缺陷，优先处理）
+### 4.6 Gemini thought signature（已确认转换丢失，优先处理）
 
-- **现状**：gateway 的 `OpenAiToGeminiRequest` 不写任何 thought signature。客户端用 OpenAI 或 Anthropic 格式、上游是 Gemini 3 时，多轮工具调用的第二轮会被上游以 400 拒绝。同协议透传不受影响。
-- **处理**：不等框架迁移完成，先在 gateway 现有编解码器里按框架规格 §4.5 的规则修复（对齐 new-api 最新版：每条 assistant 消息的第一个 `functionCall` 写入占位值，没有调用时写到第一个文本部分；`functionResponse` 去掉 `id`）。框架迁移完成后，由框架接管这一逻辑。
-- **开关**：渠道级配置，默认开启。
-- **验证**：harness 增加"OpenAI 格式客户端 → Gemini 3 上游 → 两轮工具调用"的用例。修复前必须先复现出 400。
+**现状（已核对代码）**：两个方向都会丢签名。`GeminiToOpenAiResponse` 拆分文本、推理和工具调用时不保留签名；`OpenAiToGeminiRequest` 重新构造工具调用时也不写回签名。同协议透传不受影响。
+**是否会被上游拒绝尚未实测**：社区报告称 Gemini 3 会对 `generateContent` 当前轮的 `functionCall` 签名做严格校验并返回 400，但实际结果取决于具体接口、模型和请求，必须先用真实上游复现确认。
+
+**gateway 的策略**（gateway 是框架规格 §4.5 里的"宿主"）：
+
+1. **保留真实签名**（框架规格 §4.5.1）：
+   - 实现 `ThoughtSignatureStore`：用 Redis 存储，key 为"令牌所属用户 + 调用 ID"，设置过期时间与容量上限，不同用户之间隔离。多实例共享。
+   - 客户端回带通道（`extra_content`、Anthropic thinking `signature`、Responses `encrypted_content`）在真实客户端验证后逐个开启。
+2. **占位兼容**（框架规格 §4.5.2，有损）：按"无法判断时参照 new-api 最新版"的产品规则，**gateway 对 Gemini 渠道默认开启 `newApiCompatible`**，并把 `gemini_thought_signature_bypassed` 加入该渠道的已授权降级列表。
+   - 只在找不到真实签名时才补，不覆盖真实签名。
+   - 这是降级而不是修复：管理台的请求日志要显示这条诊断，客服排查时能看出这次请求用了占位签名。
+   - **发布前**必须用真实上游跑通 harness 用例，确认占位值仍然有效。
+3. **`functionResponse.id` 暂不删除**：等"同名工具并行调用、结果乱序"的用例证明调用与结果仍能正确对应后，再决定是否对齐 new-api。
+4. **实施顺序**：不等框架迁移，先在现有编解码器里实现第 1、2 条；框架迁移完成后改由框架接管，gateway 只保留状态存储的实现和渠道配置。
+
+**验证**（harness，均使用真实 Gemini 上游）：
+- 先在修复前复现"OpenAI 格式客户端 → Gemini 3 → 两轮工具调用"，记录上游的真实返回；
+- 修复后覆盖：非流式、流式、并行工具、多步工具、下一轮完整往返；真实签名经状态存储恢复；状态过期后回退到占位值；用户隔离；
+- 不能只断言请求 JSON 里出现了占位字符串，要断言上游接受请求，并且多轮对话结果正确。
 
 ## 5. 迁移步骤与回归
 
