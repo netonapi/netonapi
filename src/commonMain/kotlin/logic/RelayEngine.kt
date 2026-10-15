@@ -481,9 +481,10 @@ class RelayEngine(
             val chunks = ArrayList<ByteArray>()
             client.stream(request).collect { chunk ->
                 when (chunk) {
+                    is HttpClientStreamChunk.Start -> contentType = chunk.headers["Content-Type"] ?: chunk.headers["content-type"]
                     is HttpClientStreamChunk.Bytes -> chunks += chunk.bytes
                     is HttpClientStreamChunk.Text -> chunks += chunk.text.encodeToByteArray()
-                    is HttpClientStreamChunk.End -> contentType = chunk.finalHeaders["Content-Type"] ?: chunk.finalHeaders["content-type"]
+                    is HttpClientStreamChunk.End -> if (contentType == null) contentType = chunk.finalHeaders["Content-Type"] ?: chunk.finalHeaders["content-type"]
                 }
             }
             val total = ByteArray(chunks.sumOf { it.size }); var off = 0
@@ -552,7 +553,7 @@ class RelayEngine(
                             if (s.isNotEmpty()) send(s)
                         }
                         is HttpClientStreamChunk.Text -> { val s = if (frames != null) frames.feed(chunk.text.encodeToByteArray()) else chunk.text; if (s.isNotEmpty()) send(s) }
-                        is HttpClientStreamChunk.End -> {}
+                        is HttpClientStreamChunk.Start, is HttpClientStreamChunk.End -> {}
                     }
                 }
                 val tail = if (frames != null) frames.finish() else utf8.flush(); if (tail.isNotEmpty()) send(tail)
