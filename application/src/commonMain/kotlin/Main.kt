@@ -14,7 +14,6 @@ import neton.http.http
 import neton.http.client.HttpClient
 import neton.http.client.HttpClientProvider
 import neton.http.client.create
-import neton.http.ktor.KtorHttpAdapter
 import neton.redis.redis
 import neton.routing.routing
 import neton.security.security
@@ -69,8 +68,8 @@ fun main(args: Array<String>) {
         // module-gateway（渠道客户端 —— 按各渠道自己的代理与超时，走下面的 provider 建）。
         //
         // 为什么由应用建而不是各模块自建：模块自建就得自带引擎，带引擎的模块一多，
-        // 类路径上会出现多个 `create`。所以引擎只在本工程的 build 文件里出现一次
-        // （neton-http-ktor），源码里不出现引擎名 —— 换引擎不需要改这里。
+        // 类路径上会出现多个 `create`。引擎是 neton-http 内置的（基于 netonstream io），
+        // 服务端 `http { }` 与这里的 `HttpClient.create { }` 都是它，源码里不出现引擎名。
         //
         // 两个模块把这个绑定当**硬要求**：module-system 的 SystemRuntimeBootstrap 与
         // module-gateway 的 GatewayRuntimeBootstrap 都取不到就 error() 启动失败。
@@ -84,7 +83,7 @@ fun main(args: Array<String>) {
         // provider 建出来的客户端由**调用方模块自己关闭**（见 HttpClientProvider 的约定）；
         // 这里只负责关掉应用自己持有的那一个。
         bind(HttpClientProvider::class, HttpClientProvider { HttpClient.create(it) })
-        // SMTP 发信（module-system 的 EmailProvider 用）：socket + TLS 的实现在引擎适配层
+        // SMTP 发信（module-system 的 EmailProvider 用）：neton-http 内置实现（netonstream io + tls）
         bind(neton.http.mail.SmtpTransport::class, neton.http.mail.defaultSmtpTransport())
 
         // 账号注册策略：account 的默认策略只开短信注册（PHONE_SMS），而 NetonAPI 的控制台是
@@ -263,7 +262,7 @@ fun main(args: Array<String>) {
         //
         // ⚠️ 这是**硬编码**、不是配置项：想给生产收紧白名单，只能改这段重新编译，
         // 或让反向代理只放行受信 origin。别指望换一份 conf 能改掉它。
-        http(::KtorHttpAdapter) {
+        http {
             cors {
                 allowedOrigins = listOf("*")
                 allowedMethods = listOf("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")

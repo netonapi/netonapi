@@ -1,7 +1,6 @@
 [versions]
 kotlin = "2.4.20"
 ksp = "2.3.12"
-ktor = "3.6.0"
 kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.11.0"
 cryptography-kotlin = "0.6.0"
@@ -10,13 +9,6 @@ cryptography-kotlin = "0.6.0"
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
-ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
-ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
-ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "ktor" }
-ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
-ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
-ktor-client-winhttp = { module = "io.ktor:ktor-client-winhttp", version.ref = "ktor" }
-ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 # cryptography-kotlin（KMP crypto，Native 走 CommonCrypto / OpenSSL）。
 # 用于 module-infra 的 SHA-256 内容指纹（文件 storage_key 一部分）。
 cryptography-core = { module = "dev.whyoleg.cryptography:cryptography-core", version.ref = "cryptography-kotlin" }
