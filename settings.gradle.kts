@@ -11,6 +11,8 @@ rootProject.name = "newgate"
 // 框架依赖（composite build）—— canonical 仓位于 ../../Neton/，所有下游 fork 共用这个布局约定
 includeBuild("../../Neton/neton")
 includeBuild("../../Neton/geolite4k")
+// 套件基础契约（infra / account 等模块依赖 com.netonstream.app:application-contract）
+includeBuild("../../Neton/neton-application-contract")
 
 // Canonical sibling repositories are assembled as source subprojects here.
 // Each repository keeps its own settings.gradle.kts and remains independently buildable.
