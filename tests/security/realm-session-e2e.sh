@@ -160,7 +160,7 @@ m2=$(envelope POST /app/auth/login "" "{\"mobile\":\"$MOBILE\",\"password\":\"wr
 expect "账号登录：未注册号码与密码错误提示一致" "$m1" "$m2"
 for i in 1 2 3 4; do envelope POST /app/auth/login "" "{\"mobile\":\"$LOCK_MOBILE\",\"password\":\"wrongPassw0rd\"}" >/dev/null; done
 r=$(envelope POST /app/auth/login "" "{\"mobile\":\"$LOCK_MOBILE\",\"password\":\"wrongPassw0rd\"}")
-echo "$r" | grep -q "Too many failed attempts" && pass "连续失败 5 次后锁定" || fail "未锁定: $r"
+echo "$r" | grep -q "LOGIN_LOCKED" && pass "连续失败 5 次后锁定" || fail "未锁定: $r"
 RA=$(curl -s -D - -o /dev/null -X POST "$U/app/auth/login" -H "$CT" -d "{\"mobile\":\"$LOCK_MOBILE\",\"password\":\"wrongPassw0rd\"}" | tr -d '\r' | awk -F': ' 'tolower($1)=="retry-after"{print $2}')
 [ -n "$RA" ] && [ "$RA" -gt 0 ] && pass "冷却响应带 Retry-After（$RA 秒）" || fail "冷却响应缺 Retry-After"
 LOCK_KEYS=$(rc --scan --pattern '*auth:fail:account:*' | tr '\n' ' ')
