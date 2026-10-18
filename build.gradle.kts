@@ -78,6 +78,12 @@ kotlin {
     }
 }
 
+// 业务错误 message 守卫（共享测试夹具，不进生产二进制）：见 ErrorMessageGuardTest。
+kotlin.sourceSets.named("macosArm64Test") { kotlin.srcDir("../neton-application-contract/src/testFixtures/kotlin") }
+tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
+    environment("NETON_MODULE_DIR", projectDir.absolutePath)
+}
+
 dependencies {
     add("kspMacosArm64", "com.netonstream:neton-ksp")
     add("kspLinuxX64", "com.netonstream:neton-ksp")

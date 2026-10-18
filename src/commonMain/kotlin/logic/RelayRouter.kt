@@ -92,18 +92,11 @@ object RelayRouter {
      * 静默接受拼错的能力名，等于把该渠道从对应端点上悄悄摘掉，事后只能靠用户投诉发现。
      */
     fun requireCapabilities(csv: String): String {
-        val known = KNOWN_CAPABILITIES.sorted().joinToString()
         val items = csv.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-        if (items.isEmpty()) invalid("must not be empty (known: $known)")
-        val bad = items.filter { it !in KNOWN_CAPABILITIES }
-        if (bad.isNotEmpty()) invalid("unknown: ${bad.joinToString()} (known: $known)")
+        if (items.isEmpty()) rejectField("capabilities", GatewayErrorCodes.CHANNEL_CAPABILITIES_REQUIRED)
+        if (items.any { it !in KNOWN_CAPABILITIES }) rejectField("capabilities", GatewayErrorCodes.CHANNEL_CAPABILITY_UNKNOWN)
         return items.distinct().joinToString(",")
     }
-
-    private fun invalid(message: String): Nothing =
-        throw neton.core.http.ValidationException(
-            listOf(neton.core.http.ValidationError(path = "capabilities", message = message))
-        )
 
     private fun capabilitySupported(ch: Channel, capability: String): Boolean =
         ch.capabilities.split(',').map { it.trim() }.contains(capability)

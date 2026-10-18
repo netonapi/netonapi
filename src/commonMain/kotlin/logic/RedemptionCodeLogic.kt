@@ -67,13 +67,13 @@ class RedemptionCodeLogic(private val log: Logger, private val quotaLogic: Quota
         note: String?,
         createdBy: Long?,
     ): Generated {
-        if (quotaMicro <= 0) throw badRequest("面额必须为正数（μUSD）")
-        if (count <= 0) throw badRequest("生成数量必须为正数")
-        if (count > MAX_BATCH) throw badRequest("单次最多生成 $MAX_BATCH 张，实际请求 $count")
-        if (expiresAt != null && expiresAt <= nowMillis()) throw badRequest("过期时间必须晚于当前时刻")
+        if (quotaMicro <= 0) rejectField("quotaMicro", GatewayErrorCodes.REDEMPTION_QUOTA_INVALID)
+        if (count <= 0) rejectField("count", GatewayErrorCodes.REDEMPTION_COUNT_INVALID)
+        if (count > MAX_BATCH) rejectField("count", GatewayErrorCodes.REDEMPTION_COUNT_TOO_LARGE)
+        if (expiresAt != null && expiresAt <= nowMillis()) rejectField("expiresAt", GatewayErrorCodes.REDEMPTION_EXPIRES_AT_INVALID)
         val trimmedNote = note?.trim()?.takeIf { it.isNotEmpty() }
         if (trimmedNote != null && trimmedNote.length > NOTE_MAX) {
-            throw badRequest("备注最多 $NOTE_MAX 个字符")
+            rejectField("note", GatewayErrorCodes.REDEMPTION_NOTE_TOO_LONG)
         }
 
         val batchId = newBatchId()
@@ -104,8 +104,8 @@ class RedemptionCodeLogic(private val log: Logger, private val quotaLogic: Quota
      */
     suspend fun redeem(userId: Long, rawCode: String): Redeemed {
         val code = normalize(rawCode)
-        if (code.isEmpty()) throw badRequest("请输入兑换码")
-        if (code.length > CODE_MAX_LEN) throw badRequest("兑换码格式不正确")
+        if (code.isEmpty()) rejectField("code", GatewayErrorCodes.REDEMPTION_CODE_REQUIRED)
+        if (code.length > CODE_MAX_LEN) rejectField("code", GatewayErrorCodes.REDEMPTION_CODE_INVALID_FORMAT)
 
         val db = neton.database.dbContext()
         var balance = 0L
@@ -113,14 +113,14 @@ class RedemptionCodeLogic(private val log: Logger, private val quotaLogic: Quota
         var codeId = 0L
         db.transaction {
             val row = RedemptionCodeTable.oneWhere { RedemptionCode::code eq code }
-                ?: throw notFound("兑换码无效")
+                ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.REDEMPTION_CODE_NOT_FOUND)
             codeId = row.id
             when (row.status) {
-                STATUS_USED -> throw conflict("兑换码已被使用")
-                STATUS_DISABLED -> throw conflict("兑换码已作废")
+                STATUS_USED -> throw HttpException(NetonErrorCode.OPERATION_CONFLICT, GatewayErrorCodes.REDEMPTION_CODE_USED)
+                STATUS_DISABLED -> throw HttpException(NetonErrorCode.OPERATION_CONFLICT, GatewayErrorCodes.REDEMPTION_CODE_DISABLED)
             }
             val exp = row.expiresAt
-            if (exp != null && exp <= nowMillis()) throw conflict("兑换码已过期")
+            if (exp != null && exp <= nowMillis()) throw HttpException(NetonErrorCode.OPERATION_CONFLICT, GatewayErrorCodes.REDEMPTION_CODE_EXPIRED)
             amount = row.quotaMicro
 
             // ② 乐观锁占位：并发第二个请求在这里拿到 0 行 → 抛冲突退出，不会重复入账。
@@ -136,7 +136,7 @@ class RedemptionCodeLogic(private val log: Logger, private val quotaLogic: Quota
                     "unused" to STATUS_UNUSED,
                 ),
             )
-            if (claimed == 0L) throw conflict("兑换码已被使用")
+            if (claimed == 0L) throw HttpException(NetonErrorCode.OPERATION_CONFLICT, GatewayErrorCodes.REDEMPTION_CODE_USED)
             // ③ 台账 ref 唯一约束是最后一道闸。type='redeem' 是 V001 就预留好的那一个。
             balance = quotaLogic.grant(userId, amount, type = TX_TYPE, ref = REF_PREFIX + code)
         }
@@ -160,14 +160,16 @@ class RedemptionCodeLogic(private val log: Logger, private val quotaLogic: Quota
             mapOf("dis" to STATUS_DISABLED, "ts" to nowMillis(), "id" to id, "unused" to STATUS_UNUSED),
         )
         if (claimed == 0L) {
-            val row = RedemptionCodeTable.get(id) ?: throw notFound("兑换码不存在: $id")
-            throw conflict(
-                if (row.status == STATUS_USED) "兑换码已被使用（用户 ${row.usedUserId}），不能作废"
-                else "兑换码已经是作废状态"
-            )
+            val row = RedemptionCodeTable.get(id)
+                ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.REDEMPTION_CODE_NOT_FOUND)
+            if (row.status == STATUS_USED) {
+                throw HttpException(NetonErrorCode.OPERATION_CONFLICT, GatewayErrorCodes.REDEMPTION_CODE_USED)
+            }
+            throw HttpException(NetonErrorCode.OPERATION_CONFLICT, GatewayErrorCodes.REDEMPTION_CODE_DISABLED)
         }
         log.info("redemption code disabled id=$id")
-        return RedemptionCodeTable.get(id) ?: throw notFound("兑换码不存在: $id")
+        return RedemptionCodeTable.get(id)
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.REDEMPTION_CODE_NOT_FOUND)
     }
 
     /**
@@ -176,7 +178,7 @@ class RedemptionCodeLogic(private val log: Logger, private val quotaLogic: Quota
      */
     suspend fun disableBatch(batchId: String): Int {
         val bid = batchId.trim()
-        if (bid.isEmpty()) throw badRequest("批次号不能为空")
+        if (bid.isEmpty()) rejectField("batchId", GatewayErrorCodes.REDEMPTION_BATCH_ID_REQUIRED)
         val n = neton.database.dbContext().execute(
             "UPDATE gateway_redemption_codes SET status = :dis, updated_at = :ts " +
                 "WHERE batch_id = :b AND status = :unused",
@@ -199,9 +201,9 @@ class RedemptionCodeLogic(private val log: Logger, private val quotaLogic: Quota
      */
     suspend fun stats(batchId: String): BatchStats {
         val bid = batchId.trim()
-        if (bid.isEmpty()) throw badRequest("批次号不能为空")
+        if (bid.isEmpty()) rejectField("batchId", GatewayErrorCodes.REDEMPTION_BATCH_ID_REQUIRED)
         val rows = RedemptionCodeTable.query { where { RedemptionCode::batchId eq bid } }.list()
-        if (rows.isEmpty()) throw notFound("批次不存在: $bid")
+        if (rows.isEmpty()) throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.REDEMPTION_BATCH_NOT_FOUND)
         val now = nowMillis()
         val used = rows.count { it.status == STATUS_USED }
         val disabled = rows.count { it.status == STATUS_DISABLED }
@@ -271,19 +273,6 @@ class RedemptionCodeLogic(private val log: Logger, private val quotaLogic: Quota
     private fun mask(code: String): String = code.take(LOG_CODE_PREFIX) + "…"
 
     private fun nowMillis(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
-
-    // ── 业务拒绝一律走标准 4xx（与 GroupController、payment 的 WalletHttpErrors 同一约定）──
-    // 抛 IllegalArgumentException 会被 BufferedHttpDispatcher 兜底成 500 + "Internal Server Error"，
-    // message 不进信封 —— 用户点了「兑换」只会看到一片空白，而原因其实是「这张码已经用过了」。
-
-    private fun badRequest(message: String): Nothing =
-        throw HttpException(NetonErrorCode.INVALID_PARAMS, message)
-
-    private fun notFound(message: String): Nothing =
-        throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, message)
-
-    private fun conflict(message: String): Nothing =
-        throw HttpException(NetonErrorCode.OPERATION_CONFLICT, message)
 
     companion object {
         const val STATUS_UNUSED = 0

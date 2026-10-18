@@ -7,6 +7,9 @@ import model.GroupOverride
 import neton.core.annotations.*
 import neton.core.http.HttpException
 import neton.core.http.NetonErrorCode
+import neton.core.http.ValidationError
+import logic.GatewayErrorCodes
+import logic.rejectField
 import neton.database.dsl.*
 import table.GatewayGroupTable
 import table.GroupOverrideTable
@@ -36,7 +39,7 @@ data class SaveGroupOverrideRequest(
  * 就等于自己给自己打折。harness 里有一条专门断言 app 组下这些路径是 404。
  *
  * `userId` 的存在性由 [logic.MemberDirectoryPort] 校验（装配层实现并 bind）：写错一位数字
- * 得到的是 400 与一句说清后果的话，而不是「例外静静躺着、客户仍按 `default` 组计价、
+ * 得到的是 400 与机器码 MEMBER_NOT_CHARGEABLE，而不是「例外静静躺着、客户仍按 `default` 组计价、
  * 双方都不报错」。port 未绑定时退化成只校验正数，[init.GatewayRuntimeBootstrap] 会 warn，
  * 取舍见 [logic.MemberDirectory]。只有 [create] 校验，理由见 [requireChargeableMember]。
  *
@@ -63,7 +66,7 @@ class GroupOverrideController {
         val remark = normalizeRemark(request.remark)
         val code = requireLiveGroupCode(request.groupCode)
         // 插入前先查重，为的是给出可读原因；并发下真正挡得住的只有主键 user_id。
-        if (GroupOverrideTable.get(userId) != null) alreadyExists(userId)
+        if (GroupOverrideTable.get(userId) != null) alreadyExists()
         return try {
             GroupOverrideTable.insert(
                 GroupOverride(userId = userId, groupCode = code, remark = remark)
@@ -75,7 +78,7 @@ class GroupOverrideController {
             // **不解析驱动的报错文本**（三方言各不相同、还随版本漂），改为回问数据库 ——
             // 此刻已有该用户的行 = 被人抢先建了。问不出行说明失败另有原因，原样上抛：
             // 把真故障盖成 409 比留一个 500 更难查。
-            if (GroupOverrideTable.existsWhere { GroupOverride::userId eq userId }) alreadyExists(userId)
+            if (GroupOverrideTable.existsWhere { GroupOverride::userId eq userId }) alreadyExists()
             throw e
         }
     }
@@ -89,7 +92,7 @@ class GroupOverrideController {
     suspend fun update(@Body request: SaveGroupOverrideRequest) {
         val userId = requireUserId(request.userId)
         val current = GroupOverrideTable.get(userId)
-            ?: notFound("per-user billing override for user=$userId not found")
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.GROUP_OVERRIDE_NOT_FOUND)
         val remark = normalizeRemark(request.remark)
         val code = requireLiveGroupCode(request.groupCode)
         GroupOverrideTable.update(current.copy(groupCode = code, remark = remark))
@@ -117,12 +120,12 @@ class GroupOverrideController {
     @Permission("gateway:group-override:delete")
     suspend fun delete(@PathVariable userId: Long) {
         GroupOverrideTable.get(userId)
-            ?: notFound("per-user billing override for user=$userId not found")
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.GROUP_OVERRIDE_NOT_FOUND)
         GroupOverrideTable.destroy(userId)
     }
 
     private fun requireUserId(userId: Long): Long {
-        if (userId <= 0) badRequest("userId must be a positive number")
+        if (userId <= 0) rejectField("userId", GatewayErrorCodes.USER_ID_INVALID)
         return userId
     }
 
@@ -137,17 +140,13 @@ class GroupOverrideController {
      *
      * 400 而不是 404：与 [requireLiveGroupCode] 对悬空组码的处置一致 —— 两者都是
      * **入参指向了一个不存在的东西**，不是「资源当前状态不允许这个操作」。
-     * 消息点名两种可能（id 打错 / 账号不可用）而不合并成一句「无效」，是因为「无效」
-     * 读起来像格式错了，运营会去改格式而不是去核对数字。
+     * 机器码 MEMBER_NOT_CHARGEABLE 与格式错误 USER_ID_INVALID 分开，前端文案点名两种可能
+     * （id 打错 / 账号不可用）：读起来像格式错了，运营会去改格式而不是去核对数字。
      */
     private suspend fun requireChargeableMember(userId: Long) {
         val port = MemberDirectory.port ?: return // 未绑定 → 退化，bootstrap 已 warn
-        if (!port.isChargeableMember(userId)) badRequest(
-            "no chargeable member with userId=$userId; either the id is mistyped or that member is " +
-                "disabled / has closed their account. Refusing to write the override: it would sit in " +
-                "the table, the resolver would never reach it, and the customer would keep being " +
-                "priced at the default group with no error on either side",
-        )
+        // 不写进去的理由：例外会躺在表里、解析器永远走不到它，客户继续按 default 组计价且两边都不报错。
+        if (!port.isChargeableMember(userId)) rejectField("userId", GatewayErrorCodes.MEMBER_NOT_CHARGEABLE)
     }
 
     /**
@@ -162,18 +161,15 @@ class GroupOverrideController {
      * 就会写出「写得进去但解析不出来」的行，也就是这条校验要消灭的那个 500。
      *
      * 悬空引用回 400 而不是 409：这是**入参指向了一个不存在的东西**，
-     * 不是「资源当前状态不允许这个操作」。消息里写清后果，运营才知道为什么不能先建后配。
+     * 不是「资源当前状态不允许这个操作」。前端按 GROUP_CODE_UNKNOWN 写清后果，运营才知道为什么不能先建后配。
      */
     private suspend fun requireLiveGroupCode(raw: String): String {
         val code = raw.trim()
-        if (code.isEmpty()) badRequest("groupCode must not be blank")
-        if (code.length > 64) badRequest("groupCode must be at most 64 characters")
+        if (code.isEmpty()) rejectField("groupCode", GatewayErrorCodes.GROUP_CODE_REQUIRED)
+        if (code.length > 64) rejectField("groupCode", GatewayErrorCodes.GROUP_CODE_TOO_LONG)
+        // 悬空例外会被解析器判成 billing_group_config_broken（HTTP 500），那个用户的每个请求都 500。
         GatewayGroupTable.oneWhere { GatewayGroup::code eq code }
-            ?: badRequest(
-                "no live billing group with code='$code'; refusing to write a dangling override " +
-                    "because the resolver rejects it as billing_group_config_broken (HTTP 500) " +
-                    "for that user on every request",
-            )
+            ?: rejectField("groupCode", GatewayErrorCodes.GROUP_CODE_UNKNOWN)
         return code
     }
 
@@ -182,24 +178,15 @@ class GroupOverrideController {
         val remark = raw?.trim()?.takeIf { it.isNotEmpty() }
         // 超长必须在到达驱动之前拦下：三方言对超长 VARCHAR 的处置不一致
         // （报错 / 静默截断），静默截断会把备注变成半句话且没人知道。
-        if (remark != null && remark.length > 256) badRequest("remark must be at most 256 characters")
+        if (remark != null && remark.length > 256) rejectField("remark", GatewayErrorCodes.REMARK_TOO_LONG)
         return remark
     }
 
-    // ── 业务拒绝一律走标准 4xx（与 GroupController 同一约定）──
-    // 抛 IllegalArgumentException 会被 BufferedHttpDispatcher 兜底成 500 + "Internal Server Error"：
-    // message 不进响应信封，真正的原因只留在服务端日志里。4xx 的 message 会原样返回，能直接显示给人看。
-
-    private fun notFound(message: String): Nothing =
-        throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, message)
-
     /** 该用户已有一条例外（含并发抢建）→ 409。主键就是 userId，所以「第二条」只能是冲突。 */
-    private fun alreadyExists(userId: Long): Nothing =
+    private fun alreadyExists(): Nothing =
         throw HttpException(
             NetonErrorCode.RESOURCE_ALREADY_EXISTS,
-            "user=$userId already has a per-user billing override; update it instead of creating another",
+            GatewayErrorCodes.GROUP_OVERRIDE_ALREADY_EXISTS,
+            listOf(ValidationError("userId", GatewayErrorCodes.GROUP_OVERRIDE_ALREADY_EXISTS, GatewayErrorCodes.GROUP_OVERRIDE_ALREADY_EXISTS)),
         )
-
-    private fun badRequest(message: String): Nothing =
-        throw HttpException(NetonErrorCode.INVALID_PARAMS, message)
 }

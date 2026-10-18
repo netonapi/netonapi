@@ -10,7 +10,8 @@ object ConversionPolicy {
 
     fun requirePolicy(value: String): String {
         val v = value.trim().lowercase()
-        require(v in NAMES) { "lossPolicy must be one of $NAMES" }
+        // 管理端入参：拒成字段级 400（require 会被兜底成 500）。
+        if (v !in NAMES) rejectField("lossPolicy", GatewayErrorCodes.CHANNEL_LOSS_POLICY_INVALID)
         return v
     }
 

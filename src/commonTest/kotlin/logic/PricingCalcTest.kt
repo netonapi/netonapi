@@ -93,7 +93,9 @@ class PricingValidationTest {
 
     @kotlin.test.Test
     fun priceRejectsNegative() {
-        kotlin.test.assertFailsWith<neton.core.http.ValidationException> { PricingCalc.requirePrice("-2.5") }
+        val e = kotlin.test.assertFailsWith<neton.core.http.ValidationException> { PricingCalc.requirePrice("-2.5", "inputPrice") }
+        kotlin.test.assertEquals(GatewayErrorCodes.PRICE_INVALID, e.message)
+        kotlin.test.assertEquals(neton.core.http.ValidationError("inputPrice", GatewayErrorCodes.PRICE_INVALID, GatewayErrorCodes.PRICE_INVALID), e.errors.single())
         kotlin.test.assertEquals("2.5", PricingCalc.requirePrice("2.50"))
     }
 

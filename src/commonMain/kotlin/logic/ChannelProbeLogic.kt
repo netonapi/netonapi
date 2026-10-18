@@ -77,11 +77,11 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
     suspend fun probe(channel: Channel, requestedModel: String?): ChannelProbeResult {
         val model = requestedModel?.trim()?.takeIf { it.isNotEmpty() }
             ?: channel.models.split(',').map { it.trim() }.firstOrNull { it.isNotEmpty() }
-            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "渠道没有模型清单，请指定要探测的模型")
+            ?: rejectField("model", GatewayErrorCodes.CHANNEL_MODELS_EMPTY)
         val upstream = RelayEngine.adapterForChannel(channel.type)
-            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "未知渠道类型 ${channel.type}")
+            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, GatewayErrorCodes.CHANNEL_TYPE_UNKNOWN)
         val key = channelLogic.pickKey(channel.id)
-            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "渠道没有可用的 Key")
+            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, GatewayErrorCodes.CHANNEL_NO_AVAILABLE_KEY)
 
         val hub = """{"model":${kotlinx.serialization.json.JsonPrimitive(model)},"messages":[{"role":"user","content":"ping"}],"max_tokens":1}"""
         val mapped = RequestRewriter.rewrite(hub, channel, injectStreamOptions = false)
@@ -127,9 +127,9 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
      */
     suspend fun listModels(channel: Channel): ChannelModelsResult {
         val upstream = RelayEngine.adapterForChannel(channel.type)
-            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "未知渠道类型 ${channel.type}")
+            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, GatewayErrorCodes.CHANNEL_TYPE_UNKNOWN)
         val key = channelLogic.pickKey(channel.id)
-            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "渠道没有可用的 Key")
+            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, GatewayErrorCodes.CHANNEL_NO_AVAILABLE_KEY)
         if (channel.type in setOf("bedrock", "bedrock_converse", "vertex_anthropic", "vertex_gemini")) {
             return ChannelModelsResult(ok = false, error = "该类型没有可用的模型列表接口，请手动填写模型清单（模型映射的目标名即厂商模型 id）")
         }

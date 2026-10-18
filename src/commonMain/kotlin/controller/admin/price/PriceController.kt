@@ -1,5 +1,8 @@
 package controller.admin.price
 
+import logic.GatewayErrorCodes
+import neton.core.http.HttpException
+import neton.core.http.NetonErrorCode
 import kotlinx.serialization.Serializable
 import model.ModelPrice
 import neton.core.annotations.*
@@ -51,7 +54,7 @@ class PriceController(private val importLogic: logic.PriceImportLogic) {
     @Permission("gateway:price:update")
     suspend fun update(@Body request: SavePriceRequest) {
         val current = ModelPriceTable.get(request.id)
-            ?: throw IllegalArgumentException("gateway price id=${request.id} not found")
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.PRICE_NOT_FOUND)
         val price = toModelPrice(request)
         logic.SalePricing.requireMargin(price)
         ModelPriceTable.update(current.copy(
@@ -74,7 +77,7 @@ class PriceController(private val importLogic: logic.PriceImportLogic) {
     @Post("/sync")
     @Permission("gateway:price:create")
     suspend fun sync(): logic.PriceImportResult = importLogic.syncFromEnv()
-        ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, "未配置 NEWGATE_PRICE_SYNC_URL")
+        ?: throw HttpException(NetonErrorCode.OPERATION_NOT_ALLOWED, GatewayErrorCodes.PRICE_SYNC_NOT_CONFIGURED)
 
     private fun toItem(r: SavePriceRequest) = logic.PriceImportItem(
         model = r.model, inputPrice = r.inputPrice, outputPrice = r.outputPrice,

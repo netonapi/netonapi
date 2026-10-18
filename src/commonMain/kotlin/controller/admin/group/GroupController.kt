@@ -8,6 +8,9 @@ import model.GatewayToken
 import neton.core.annotations.*
 import neton.core.http.HttpException
 import neton.core.http.NetonErrorCode
+import neton.core.http.ValidationError
+import logic.GatewayErrorCodes
+import logic.rejectField
 import neton.database.dsl.*
 import table.ChannelTable
 import table.GatewayGroupTable
@@ -44,7 +47,7 @@ class GroupController {
         val code = requireCode(request.code)
         // 插入前先查重，为的是给出可读原因；并发下真正挡得住的只有 uk_gateway_groups_code。
         // 分组是配置表（几十行量级），findAll 的代价可以忽略。
-        if (GatewayGroupTable.findAll().any { it.code == code }) alreadyExists(code)
+        if (GatewayGroupTable.findAll().any { it.code == code }) alreadyExists()
         requireMappingFree(request.memberGroupId, exceptId = null)
         return try {
             GatewayGroupTable.insert(
@@ -62,7 +65,7 @@ class GroupController {
             // 两个并发创建会同时通过上面的查重，输的那个撞唯一索引。这里**不解析驱动的报错文本**
             // （三方言各不相同、还随版本漂），改为回问数据库：此刻已有同 code 的活行 = 被人抢先建了。
             // 问不出活行说明失败另有原因，原样上抛 —— 把真故障盖成 409 比留一个 500 更难查。
-            if (GatewayGroupTable.existsWhere { GatewayGroup::code eq code }) alreadyExists(code)
+            if (GatewayGroupTable.existsWhere { GatewayGroup::code eq code }) alreadyExists()
             throw e
         }
     }
@@ -71,13 +74,14 @@ class GroupController {
     @Permission("gateway:group:update")
     suspend fun update(@Body request: SaveGroupRequest) {
         val current = GatewayGroupTable.get(request.id)
-            ?: notFound("gateway group id=${request.id} not found")
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.GROUP_NOT_FOUND)
         // code 不可变。带了不同的 code 就**拒绝**，而不是静默忽略：静默忽略会让调用方
         // 以为改成功了，而路由与计价仍按旧 code 走 —— 又是一类不报错的错账。
         if (request.code.isNotBlank() && request.code != current.code) {
-            conflict(
-                "gateway group code is immutable (id=${request.id}, code='${current.code}'); " +
-                    "create a new group and migrate the references instead",
+            throw HttpException(
+                NetonErrorCode.OPERATION_CONFLICT,
+                GatewayErrorCodes.GROUP_CODE_IMMUTABLE,
+                listOf(ValidationError("code", GatewayErrorCodes.GROUP_CODE_IMMUTABLE, GatewayErrorCodes.GROUP_CODE_IMMUTABLE)),
             )
         }
         requireMappingFree(request.memberGroupId, exceptId = current.id)
@@ -95,22 +99,16 @@ class GroupController {
     @Permission("gateway:group:delete")
     suspend fun delete(@PathVariable id: Long) {
         val current = GatewayGroupTable.get(id)
-            ?: notFound("gateway group id=$id not found")
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.GROUP_NOT_FOUND)
         // 被引用的组不许删。软删之后路由静默失配、倍率静默回落，两类都不会自己报错。
         val codeRef: String? = current.code
         if (GatewayTokenTable.existsWhere { GatewayToken::groupOverride eq codeRef }) {
-            conflict(
-                "gateway group code='${current.code}' is still used as a token group override; " +
-                    "move those tokens to another group first",
-            )
+            throw HttpException(NetonErrorCode.OPERATION_CONFLICT, GatewayErrorCodes.GROUP_IN_USE_BY_TOKEN)
         }
         // 用户级例外同样算引用。漏掉它会留下悬空 group_code，而悬空之后该用户走哪个组
         // 取决于 GroupResolver 的回落策略 —— 也就是一处不报错的错账。
         if (GroupOverrideTable.existsWhere { GroupOverride::groupCode eq current.code }) {
-            conflict(
-                "gateway group code='${current.code}' is still used by a per-user override; " +
-                    "remove those overrides first",
-            )
+            throw HttpException(NetonErrorCode.OPERATION_CONFLICT, GatewayErrorCodes.GROUP_IN_USE_BY_OVERRIDE)
         }
         // channel.groups 是 CSV，用 LIKE 会把 'vip' 匹配到 'vip2'。这里取回来按与
         // RelayRouter.candidates **完全相同**的语义（split + trim + contains）判断，
@@ -119,20 +117,21 @@ class GroupController {
             ch.groups.split(',').map { it.trim() }.contains(current.code)
         }
         if (channelRefs > 0) {
-            conflict(
-                "gateway group code='${current.code}' is still listed by $channelRefs channel(s); " +
-                    "remove it from their groups first",
-            )
+            throw HttpException(NetonErrorCode.OPERATION_CONFLICT, GatewayErrorCodes.GROUP_IN_USE_BY_CHANNEL)
         }
         GatewayGroupTable.destroy(id)
     }
 
-    /** 一个会员组最多映射到一个计费组；DB 有唯一索引，这里给出可读的失败原因。 */
+    /** 一个会员组最多映射到一个计费组；DB 有唯一索引，这里给出明确的失败原因。 */
     private suspend fun requireMappingFree(memberGroupId: Long?, exceptId: Long?) {
         if (memberGroupId == null) return
         val existing = GatewayGroupTable.findAll().firstOrNull { it.memberGroupId == memberGroupId }
         if (existing != null && existing.id != exceptId) {
-            conflict("member group $memberGroupId is already mapped to gateway group '${existing.code}'")
+            throw HttpException(
+                NetonErrorCode.OPERATION_CONFLICT,
+                GatewayErrorCodes.MEMBER_GROUP_ALREADY_MAPPED,
+                listOf(ValidationError("memberGroupId", GatewayErrorCodes.MEMBER_GROUP_ALREADY_MAPPED, GatewayErrorCodes.MEMBER_GROUP_ALREADY_MAPPED)),
+            )
         }
     }
 
@@ -142,33 +141,19 @@ class GroupController {
      */
     private fun requireCode(raw: String): String {
         val code = raw.trim()
-        if (code.isEmpty()) badRequest("gateway group code must not be blank")
-        if (code.length > 64) badRequest("gateway group code must be at most 64 characters")
+        if (code.isEmpty()) rejectField("code", GatewayErrorCodes.GROUP_CODE_REQUIRED)
+        if (code.length > 64) rejectField("code", GatewayErrorCodes.GROUP_CODE_TOO_LONG)
         if (!code.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
-            badRequest("gateway group code must contain only letters, digits, '_' and '-'")
+            rejectField("code", GatewayErrorCodes.GROUP_CODE_INVALID_FORMAT)
         }
         return code
     }
 
-    // ── 业务拒绝一律走标准 4xx（与 payment 的 logic/WalletHttpErrors.kt 同一约定）──
-    // 抛 IllegalArgumentException 会被 BufferedHttpDispatcher 兜底成 500 + "Internal Server Error"：
-    // message 不进响应信封，真正的原因只留在服务端日志里。于是管理员点「删除」得到的是一片空白，
-    // 而原因其实是「这个组还被 3 个渠道引用」—— 4xx 的 message 会原样返回，能直接显示给人看。
-
-    private fun notFound(message: String): Nothing =
-        throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, message)
-
-    /** 引用未清 / 状态不允许这个操作 → 409 */
-    private fun conflict(message: String): Nothing =
-        throw HttpException(NetonErrorCode.OPERATION_CONFLICT, message)
-
     /** code 撞唯一约束（含并发抢建）→ 409，与插入前的查重同一语义 */
-    private fun alreadyExists(code: String): Nothing =
+    private fun alreadyExists(): Nothing =
         throw HttpException(
             NetonErrorCode.RESOURCE_ALREADY_EXISTS,
-            "gateway group code='$code' already exists",
+            GatewayErrorCodes.GROUP_CODE_ALREADY_EXISTS,
+            listOf(ValidationError("code", GatewayErrorCodes.GROUP_CODE_ALREADY_EXISTS, GatewayErrorCodes.GROUP_CODE_ALREADY_EXISTS)),
         )
-
-    private fun badRequest(message: String): Nothing =
-        throw HttpException(NetonErrorCode.INVALID_PARAMS, message)
 }

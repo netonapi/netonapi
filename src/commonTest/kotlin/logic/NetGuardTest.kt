@@ -159,6 +159,7 @@ class NetGuardTest {
         val v = NetGuard.checkUpstreamUrl("https://upstream.example/v1", resolver = r)
         assertTrue(v is NetGuard.UrlVerdict.Rejected, "应拒绝：$v")
         assertTrue(rejectReason(v).contains("169.254.169.254"), "拒绝原因要点名内网地址：${rejectReason(v)}")
+        assertEquals(GatewayErrorCodes.UPSTREAM_URL_PRIVATE_ADDRESS, (v as NetGuard.UrlVerdict.Rejected).code)
         assertEquals(listOf("upstream.example"), r.queried)
     }
 

@@ -1,11 +1,13 @@
 package controller.app.gateway
 
+import logic.GatewayErrorCodes
+import logic.rejectField
 import kotlinx.serialization.Serializable
 import logic.TokenLogic
 import model.GatewayToken
 import neton.core.annotations.*
-import neton.core.http.ValidationError
-import neton.core.http.ValidationException
+import neton.core.http.HttpException
+import neton.core.http.NetonErrorCode
 import neton.core.interfaces.Identity
 
 @Serializable
@@ -100,15 +102,15 @@ class MyTokenController(private val tokenLogic: TokenLogic) {
     }
 
     private fun validate(name: String, quotaBudget: Long?, expiresAt: Long?) {
-        if (name.isBlank()) invalid("name", "name is required")
-        quotaBudget?.let { if (it <= 0) invalid("quotaBudget", "must be positive") }
-        expiresAt?.let { if (it <= TokenLogic.nowMillis()) invalid("expiresAt", "must be in the future") }
+        if (name.isBlank()) rejectField("name", GatewayErrorCodes.TOKEN_NAME_REQUIRED)
+        quotaBudget?.let { if (it <= 0) rejectField("quotaBudget", GatewayErrorCodes.TOKEN_QUOTA_BUDGET_INVALID) }
+        expiresAt?.let { if (it <= TokenLogic.nowMillis()) rejectField("expiresAt", GatewayErrorCodes.TOKEN_EXPIRES_AT_INVALID) }
     }
 
     @Put("/update-status")
     suspend fun updateStatus(identity: Identity, @Query id: Long, @Query status: Int) {
         requireOwned(identity, id)
-        if (status != 0 && status != 1) invalid("status", "status must be 0 or 1")
+        if (status != 0 && status != 1) rejectField("status", GatewayErrorCodes.TOKEN_STATUS_INVALID)
         tokenLogic.updateStatus(id, status)
     }
 
@@ -121,9 +123,8 @@ class MyTokenController(private val tokenLogic: TokenLogic) {
     /** 复核令牌归属；不属于当前用户时按「不存在」处理，不泄露他人令牌是否存在。 */
     private suspend fun requireOwned(identity: Identity, tokenId: Long) {
         val t = tokenLogic.get(tokenId)
-        if (t == null || t.userId != identity.id.toLong()) invalid("id", "token not found")
+        if (t == null || t.userId != identity.id.toLong()) {
+            throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.TOKEN_NOT_FOUND)
+        }
     }
-
-    private fun invalid(field: String, message: String): Nothing =
-        throw ValidationException(listOf(ValidationError(path = field, message = message)))
 }

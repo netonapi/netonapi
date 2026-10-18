@@ -31,7 +31,9 @@ class ConversionPolicyTest {
         assertFailsWith<ConversionRejectedException> {
             ProtocolCodecs.convertRequest(anthropic, "anthropic", "openai", ConversionPolicy.of(ch("safe")), mutableListOf())
         }
-        assertFailsWith<IllegalArgumentException> { ConversionPolicy.requirePolicy("lenient") }
+        val e = assertFailsWith<neton.core.http.ValidationException> { ConversionPolicy.requirePolicy("lenient") }
+        assertEquals(GatewayErrorCodes.CHANNEL_LOSS_POLICY_INVALID, e.message)
+        assertEquals("lossPolicy", e.errors.single().path)
         assertEquals("safe", ConversionPolicy.requirePolicy(" SAFE "))
     }
 

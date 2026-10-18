@@ -2,8 +2,6 @@ package logic
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
 
 class QuotaLogicTest {
     @Test
@@ -57,9 +55,8 @@ class QuotaLogicTest {
     @Test
     fun revokeRejectsNonPositiveAmountAsGrantBypass() {
         for (bad in listOf(0L, -1L, -100000L)) {
-            val msg = QuotaLogic.validateRevoke(amount = bad, ref = "revoke:t1")
-            assertNotNull(msg, "amount=$bad 被放行了，等于开了一个绕过 grant 权限的发放口子")
-            assertTrue("gateway:quota:grant" in msg!!, "拒绝理由没点名 grant 权限: $msg")
+            val code = QuotaLogic.validateRevoke(amount = bad, ref = "revoke:t1")
+            assertEquals(GatewayErrorCodes.QUOTA_REVOKE_AMOUNT_INVALID, code, "amount=$bad 被放行了，等于开了一个绕过 grant 权限的发放口子")
         }
         assertEquals(null, QuotaLogic.validateRevoke(amount = 1, ref = "revoke:t1"))
     }
@@ -67,20 +64,19 @@ class QuotaLogicTest {
     /** ref 是撤回唯一的幂等键，不给「可选」的余地：空 ref 意味着运营双击就是双扣。 */
     @Test
     fun revokeRequiresRefForIdempotency() {
-        assertNotNull(QuotaLogic.validateRevoke(amount = 100, ref = null))
-        assertNotNull(QuotaLogic.validateRevoke(amount = 100, ref = ""))
-        assertNotNull(QuotaLogic.validateRevoke(amount = 100, ref = "   "))
+        assertEquals(GatewayErrorCodes.QUOTA_REVOKE_REF_REQUIRED, QuotaLogic.validateRevoke(amount = 100, ref = null))
+        assertEquals(GatewayErrorCodes.QUOTA_REVOKE_REF_REQUIRED, QuotaLogic.validateRevoke(amount = 100, ref = ""))
+        assertEquals(GatewayErrorCodes.QUOTA_REVOKE_REF_REQUIRED, QuotaLogic.validateRevoke(amount = 100, ref = "   "))
         assertEquals(null, QuotaLogic.validateRevoke(amount = 100, ref = "revoke:t1"))
     }
 
     /** 发放侧同一条：非正数放行会把台账灌满 0 额行与反向行。 */
     @Test
     fun grantRejectsNonPositiveAmount() {
-        assertNotNull(QuotaLogic.validateGrant(amount = 0))
-        assertNotNull(QuotaLogic.validateGrant(amount = -1))
+        // 发放侧与撤回侧是两个机器码：前端文案据此把人指向 revoke，否则运营想不出该怎么减额度。
+        assertEquals(GatewayErrorCodes.QUOTA_GRANT_AMOUNT_INVALID, QuotaLogic.validateGrant(amount = 0))
+        assertEquals(GatewayErrorCodes.QUOTA_GRANT_AMOUNT_INVALID, QuotaLogic.validateGrant(amount = -1))
         assertEquals(null, QuotaLogic.validateGrant(amount = 1))
-        // 拒绝理由要把人指向 revoke，否则运营看到「金额必须是正数」还想不出该怎么减额度。
-        assertTrue("revoke" in QuotaLogic.validateGrant(amount = 0)!!)
     }
 
     /** 台账类型串必须与 model 的 KDoc 一致：它是审计查询的过滤条件，改名等于让历史行查不到。 */

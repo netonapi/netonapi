@@ -8,7 +8,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import model.ModelPrice
-import neton.core.http.ValidationError
 import neton.core.http.ValidationException
 
 /**
@@ -53,10 +52,10 @@ object SalePricing {
         // perRequest：override 显式给 null = 关闭按次计价；未给该键 = 官方按次价 × 加价率
         val perRequest = if (o != null && o.containsKey("perRequest")) {
             val p = o["perRequest"]?.jsonPrimitive
-                ?: invalid("saleOverride.perRequest", "must be a non-negative integer or null")
+                ?: rejectField("saleOverride.perRequest", GatewayErrorCodes.SALE_PER_REQUEST_INVALID)
             if (p is JsonNull) null
             else p.longOrNull?.takeIf { it >= 0 }
-                ?: invalid("saleOverride.perRequest", "must be a non-negative integer or null")
+                ?: rejectField("saleOverride.perRequest", GatewayErrorCodes.SALE_PER_REQUEST_INVALID)
         } else official.perRequestPrice?.let { scaleMicro(it, markup) }
         return ModelPrice(
             model = official.model,
@@ -81,7 +80,7 @@ object SalePricing {
         val floor = minMargin()
         fun check(saleMicro: Long, officialMicro: Long, field: String) {
             if (saleMicro < scaleMicro(officialMicro, floor))
-                invalid(field, "sale price must not be below the cost floor (official cost x $floor)")
+                rejectField(field, GatewayErrorCodes.SALE_PRICE_BELOW_COST_FLOOR)
         }
         check(PricingCalc.parseMicro(sale.inputPrice), PricingCalc.parseMicro(price.inputPrice), "saleOverride.input")
         check(PricingCalc.parseMicro(sale.outputPrice), PricingCalc.parseMicro(price.outputPrice), "saleOverride.output")
@@ -104,9 +103,6 @@ object SalePricing {
         val s = json?.trim().orEmpty()
         if (s.isEmpty()) return null
         return runCatching { Json.parseToJsonElement(s).jsonObject }
-            .getOrElse { invalid("saleOverride", "must be a JSON object") }
+            .getOrElse { rejectField("saleOverride", GatewayErrorCodes.SALE_OVERRIDE_INVALID) }
     }
-
-    private fun invalid(field: String, msg: String): Nothing =
-        throw ValidationException(listOf(ValidationError(path = field, message = msg)))
 }

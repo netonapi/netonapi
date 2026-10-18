@@ -1,8 +1,6 @@
 package logic
 
 import model.ModelPrice
-import neton.core.http.ValidationException
-import neton.core.http.ValidationError
 
 /** 上游回报的用量。 */
 data class Usage(
@@ -46,23 +44,20 @@ object PricingCalc {
         return if (neg && n != "0") "-$n" else n
     }
 
-    private fun invalid(field: String, msg: String): Nothing =
-        throw ValidationException(listOf(ValidationError(path = field, message = msg)))
-
     /** 价格字段校验（非负，≤7 位整数），返回规范化串；供 admin 写接口使用。 */
     fun requirePrice(decimal: String, field: String = "price"): String {
         if (!isValidDecimal(decimal) || decimal.trim().startsWith("-"))
-            invalid(field, "must be a non-negative decimal (got '$decimal')")
+            rejectField(field, GatewayErrorCodes.PRICE_INVALID)
         return normalize(decimal)
     }
 
     /** 倍率/折扣校验（(0,100]），返回规范化串。 */
     fun requireRatio(decimal: String, field: String = "ratio"): String {
         if (!isValidDecimal(decimal, maxIntDigits = 3))
-            invalid(field, "must be a decimal (got '$decimal')")
+            rejectField(field, GatewayErrorCodes.RATIO_INVALID)
         val v = parseScaled(decimal, 4)
         if (v !in 1..1_000_000)
-            invalid(field, "must be in (0, 100] (got '$decimal')")
+            rejectField(field, GatewayErrorCodes.RATIO_OUT_OF_RANGE)
         return normalize(decimal)
     }
 

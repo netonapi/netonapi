@@ -1,0 +1,141 @@
+package logic
+
+import neton.core.http.ValidationError
+import neton.core.http.ValidationException
+
+/**
+ * module-gateway 的业务错误机器码（Neton 信封里的 `message`）。
+ *
+ * 规则：业务错误的 message 只放这里的常量；细节放字段级 `ValidationError(path, CODE, CODE)`。
+ * 前端按 `error.<CODE>` 翻译（neton-application-front-gateway/src/locales）。
+ * 规范：neton-docs/docs/zh-hans/spec/application/gateway-errors.md。
+ *
+ * ⚠️ 只管 Neton 信封。OpenAI / Anthropic / Gemini 兼容转发端点（/v1/…）返回的是厂商格式的
+ * `{"error":{"message":…,"type":…}}`，那是协议契约，不走这里。
+ */
+object GatewayErrorCodes {
+    // ── 渠道 ──
+    /** 渠道不存在。 */
+    const val CHANNEL_NOT_FOUND = "CHANNEL_NOT_FOUND"
+    /** 渠道类型未知（没有对应的上游适配器）。 */
+    const val CHANNEL_TYPE_UNKNOWN = "CHANNEL_TYPE_UNKNOWN"
+    /** 渠道没有可用的 Key。 */
+    const val CHANNEL_NO_AVAILABLE_KEY = "CHANNEL_NO_AVAILABLE_KEY"
+    /** 探测时未指定模型且渠道没有模型清单。字段 model。 */
+    const val CHANNEL_MODELS_EMPTY = "CHANNEL_MODELS_EMPTY"
+    /** 能力清单为空。字段 capabilities。 */
+    const val CHANNEL_CAPABILITIES_REQUIRED = "CHANNEL_CAPABILITIES_REQUIRED"
+    /** 能力清单含未知能力名。字段 capabilities。 */
+    const val CHANNEL_CAPABILITY_UNKNOWN = "CHANNEL_CAPABILITY_UNKNOWN"
+    /** 跨协议损耗策略不是 allow/safe/strict。字段 lossPolicy。 */
+    const val CHANNEL_LOSS_POLICY_INVALID = "CHANNEL_LOSS_POLICY_INVALID"
+
+    // ── 上游地址（SSRF 校验，字段 baseUrl / proxyUrl）──
+    const val UPSTREAM_URL_EMPTY = "UPSTREAM_URL_EMPTY"
+    const val UPSTREAM_URL_SCHEME_INVALID = "UPSTREAM_URL_SCHEME_INVALID"
+    const val UPSTREAM_URL_USERINFO_NOT_ALLOWED = "UPSTREAM_URL_USERINFO_NOT_ALLOWED"
+    const val UPSTREAM_URL_HOST_EMPTY = "UPSTREAM_URL_HOST_EMPTY"
+    /** 地址指向回环 / 内网 / 链路本地（含云元数据地址）。 */
+    const val UPSTREAM_URL_PRIVATE_ADDRESS = "UPSTREAM_URL_PRIVATE_ADDRESS"
+    /** 域名解析不出地址。 */
+    const val UPSTREAM_URL_UNRESOLVABLE = "UPSTREAM_URL_UNRESOLVABLE"
+
+    // ── 价格 ──
+    const val PRICE_NOT_FOUND = "PRICE_NOT_FOUND"
+    /** 价格不是非负十进制数。字段为价格字段名。 */
+    const val PRICE_INVALID = "PRICE_INVALID"
+    /** 倍率 / 折扣不是十进制数。 */
+    const val RATIO_INVALID = "RATIO_INVALID"
+    /** 倍率 / 折扣不在 (0, 100]。 */
+    const val RATIO_OUT_OF_RANGE = "RATIO_OUT_OF_RANGE"
+    /** saleOverride 不是 JSON 对象。 */
+    const val SALE_OVERRIDE_INVALID = "SALE_OVERRIDE_INVALID"
+    /** saleOverride.perRequest 不是非负整数或 null。 */
+    const val SALE_PER_REQUEST_INVALID = "SALE_PER_REQUEST_INVALID"
+    /** 售价低于毛利底线（官方成本 × 毛利下限倍率）。 */
+    const val SALE_PRICE_BELOW_COST_FLOOR = "SALE_PRICE_BELOW_COST_FLOOR"
+    /** 未配置 NEWGATE_PRICE_SYNC_URL，不能立即同步。 */
+    const val PRICE_SYNC_NOT_CONFIGURED = "PRICE_SYNC_NOT_CONFIGURED"
+
+    // ── 计费组 ──
+    const val GROUP_NOT_FOUND = "GROUP_NOT_FOUND"
+    const val GROUP_CODE_REQUIRED = "GROUP_CODE_REQUIRED"
+    const val GROUP_CODE_TOO_LONG = "GROUP_CODE_TOO_LONG"
+    /** code 只允许字母、数字、`_`、`-`。 */
+    const val GROUP_CODE_INVALID_FORMAT = "GROUP_CODE_INVALID_FORMAT"
+    const val GROUP_CODE_ALREADY_EXISTS = "GROUP_CODE_ALREADY_EXISTS"
+    /** code 创建后不可改。 */
+    const val GROUP_CODE_IMMUTABLE = "GROUP_CODE_IMMUTABLE"
+    /** 引用的计费组不存在或已删除（写例外时）。 */
+    const val GROUP_CODE_UNKNOWN = "GROUP_CODE_UNKNOWN"
+    /** 仍有令牌把该组用作分组覆盖。 */
+    const val GROUP_IN_USE_BY_TOKEN = "GROUP_IN_USE_BY_TOKEN"
+    /** 仍有用户级例外指向该组。 */
+    const val GROUP_IN_USE_BY_OVERRIDE = "GROUP_IN_USE_BY_OVERRIDE"
+    /** 仍有渠道的分组清单里列着该组。 */
+    const val GROUP_IN_USE_BY_CHANNEL = "GROUP_IN_USE_BY_CHANNEL"
+    /** 会员组已映射到另一个计费组。 */
+    const val MEMBER_GROUP_ALREADY_MAPPED = "MEMBER_GROUP_ALREADY_MAPPED"
+
+    // ── 用户级计费例外 ──
+    const val GROUP_OVERRIDE_NOT_FOUND = "GROUP_OVERRIDE_NOT_FOUND"
+    /** 该用户已有一条例外，应改用更新。 */
+    const val GROUP_OVERRIDE_ALREADY_EXISTS = "GROUP_OVERRIDE_ALREADY_EXISTS"
+    const val USER_ID_INVALID = "USER_ID_INVALID"
+    /** userId 不是可计费会员（id 写错，或会员已停用 / 注销）。 */
+    const val MEMBER_NOT_CHARGEABLE = "MEMBER_NOT_CHARGEABLE"
+    const val REMARK_TOO_LONG = "REMARK_TOO_LONG"
+
+    // ── 额度 ──
+    /** 发放金额必须是正数（撤回请用 revoke）。 */
+    const val QUOTA_GRANT_AMOUNT_INVALID = "QUOTA_GRANT_AMOUNT_INVALID"
+    /** 撤回金额必须是正数。 */
+    const val QUOTA_REVOKE_AMOUNT_INVALID = "QUOTA_REVOKE_AMOUNT_INVALID"
+    /** 撤回必须带 ref 做幂等键。 */
+    const val QUOTA_REVOKE_REF_REQUIRED = "QUOTA_REVOKE_REF_REQUIRED"
+
+    // ── 充值 ──
+    /** 充值请求校验失败（字段错误见 errors）。 */
+    const val RECHARGE_INVALID = "RECHARGE_INVALID"
+    const val RECHARGE_PRICE_INVALID = "RECHARGE_PRICE_INVALID"
+    /** 必须指定可用的支付渠道（payment 没有默认渠道）。 */
+    const val RECHARGE_CHANNEL_REQUIRED = "RECHARGE_CHANNEL_REQUIRED"
+    /** 充值单不存在（不是自己的单同样回这个）。 */
+    const val RECHARGE_NOT_FOUND = "RECHARGE_NOT_FOUND"
+    /** 模拟充值未开启（NEWGATE_ENABLE_MOCK_RECHARGE）。 */
+    const val MOCK_RECHARGE_DISABLED = "MOCK_RECHARGE_DISABLED"
+    const val RECHARGE_AMOUNT_INVALID = "RECHARGE_AMOUNT_INVALID"
+
+    // ── 我的令牌 ──
+    const val TOKEN_NOT_FOUND = "TOKEN_NOT_FOUND"
+    const val TOKEN_NAME_REQUIRED = "TOKEN_NAME_REQUIRED"
+    const val TOKEN_QUOTA_BUDGET_INVALID = "TOKEN_QUOTA_BUDGET_INVALID"
+    /** 过期时间必须晚于当前时刻。 */
+    const val TOKEN_EXPIRES_AT_INVALID = "TOKEN_EXPIRES_AT_INVALID"
+    const val TOKEN_STATUS_INVALID = "TOKEN_STATUS_INVALID"
+
+    // ── 兑换码 ──
+    const val REDEMPTION_QUOTA_INVALID = "REDEMPTION_QUOTA_INVALID"
+    const val REDEMPTION_COUNT_INVALID = "REDEMPTION_COUNT_INVALID"
+    /** 单次生成超过上限（RedemptionCodeLogic.MAX_BATCH）。 */
+    const val REDEMPTION_COUNT_TOO_LARGE = "REDEMPTION_COUNT_TOO_LARGE"
+    /** 过期时间必须晚于当前时刻。 */
+    const val REDEMPTION_EXPIRES_AT_INVALID = "REDEMPTION_EXPIRES_AT_INVALID"
+    const val REDEMPTION_NOTE_TOO_LONG = "REDEMPTION_NOTE_TOO_LONG"
+    const val REDEMPTION_CODE_REQUIRED = "REDEMPTION_CODE_REQUIRED"
+    const val REDEMPTION_CODE_INVALID_FORMAT = "REDEMPTION_CODE_INVALID_FORMAT"
+    /** 兑换码不存在 / 无效。 */
+    const val REDEMPTION_CODE_NOT_FOUND = "REDEMPTION_CODE_NOT_FOUND"
+    const val REDEMPTION_CODE_USED = "REDEMPTION_CODE_USED"
+    const val REDEMPTION_CODE_DISABLED = "REDEMPTION_CODE_DISABLED"
+    const val REDEMPTION_CODE_EXPIRED = "REDEMPTION_CODE_EXPIRED"
+    const val REDEMPTION_BATCH_ID_REQUIRED = "REDEMPTION_BATCH_ID_REQUIRED"
+    const val REDEMPTION_BATCH_NOT_FOUND = "REDEMPTION_BATCH_NOT_FOUND"
+}
+
+/**
+ * 字段级 400：`message` 与字段错误的 `message`/`code` 都是同一个机器码。
+ * ErrorMessageGuardTest 把 `rejectField` 当作构造器检查调用点：第 2 个实参必须是 [GatewayErrorCodes] 常量。
+ */
+fun rejectField(path: String, code: String): Nothing =
+    throw ValidationException(listOf(ValidationError(path, code, code)), code)

@@ -2,8 +2,6 @@ package logic
 
 import model.QuotaAccount
 import model.QuotaTransaction
-import neton.core.http.HttpException
-import neton.core.http.NetonErrorCode
 import neton.database.dsl.*
 import neton.logging.Logger
 import table.QuotaAccountTable
@@ -27,9 +25,9 @@ class QuotaLogic(private val log: Logger) {
 
     suspend fun grant(userId: Long, amount: Long, type: String = "grant", ref: String? = null): Long {
         // 这里原本是 require(amount > 0)。IllegalArgumentException 会被 BufferedHttpDispatcher
-        // 兜底成 500 + "Internal Server Error"，message 不进信封 —— 运营在后台把金额填成 0 或
-        // 负数，看到的是一片空白，而原因其实是「金额必须是正数」。与 RedemptionCodeLogic 同处置。
-        validateGrant(amount)?.let { throw HttpException(NetonErrorCode.INVALID_PARAMS, it) }
+        // 兜底成 500 + "Internal Server Error" —— 运营在后台把金额填成 0 或负数，看到的是一片空白。
+        // 改为字段级 400 + 机器码，与 RedemptionCodeLogic 同处置。
+        if (validateGrant(amount) != null) rejectField("amount", GatewayErrorCodes.QUOTA_GRANT_AMOUNT_INVALID)
         return applyDelta(userId, amount, type, ref)
     }
 
@@ -52,7 +50,10 @@ class QuotaLogic(private val log: Logger) {
      * 约束保证，与结算 / 充值 / 兑换同一套机制。建议传 `revoke:<工单号>`，既做幂等键又做审计线索。
      */
     suspend fun revoke(userId: Long, amount: Long, ref: String?): Long {
-        validateRevoke(amount, ref)?.let { throw HttpException(NetonErrorCode.INVALID_PARAMS, it) }
+        when (validateRevoke(amount, ref)) {
+            GatewayErrorCodes.QUOTA_REVOKE_AMOUNT_INVALID -> rejectField("amount", GatewayErrorCodes.QUOTA_REVOKE_AMOUNT_INVALID)
+            GatewayErrorCodes.QUOTA_REVOKE_REF_REQUIRED -> rejectField("ref", GatewayErrorCodes.QUOTA_REVOKE_REF_REQUIRED)
+        }
         return applyDelta(userId, -amount, TYPE_REVOKE, ref)
     }
 
@@ -153,7 +154,7 @@ class QuotaLogic(private val log: Logger) {
         fun balanceAfterRevoke(balance: Long, amount: Long): Long = balance - amount
 
         /**
-         * 入参校验，返回错误信息，null 表示合法。
+         * 入参校验，返回 [GatewayErrorCodes] 机器码，null 表示合法。
          *
          * 抽成纯函数是因为这两条是**安全性质**而不是风格偏好：amount 放行非正数的话，
          * `revoke(amount = -100)` 就是一次发放 —— 持有 gateway:quota:revoke 的人借此绕过
@@ -161,13 +162,16 @@ class QuotaLogic(private val log: Logger) {
          * 运营在后台双击一次就是双扣，而且台账上看不出这是两次还是一次。
          */
         fun validateRevoke(amount: Long, ref: String?): String? = when {
-            amount <= 0 -> "撤回金额必须是正数；非正数的撤回等于发放，那需要 gateway:quota:grant"
-            ref.isNullOrBlank() -> "撤回必须带 ref 做幂等键（建议 revoke:<工单号>），否则重复提交会重复扣款"
+            // 非正数的撤回等于发放，那需要 gateway:quota:grant
+            amount <= 0 -> GatewayErrorCodes.QUOTA_REVOKE_AMOUNT_INVALID
+            // 建议 revoke:<工单号>；没有幂等键，重复提交会重复扣款
+            ref.isNullOrBlank() -> GatewayErrorCodes.QUOTA_REVOKE_REF_REQUIRED
             else -> null
         }
 
         /** 同 [validateRevoke] 的 amount 那一半：非正数的发放会把台账灌满 0 额行与反向行。 */
         fun validateGrant(amount: Long): String? =
-            if (amount <= 0) "发放金额必须是正数；要撤回额度请用 revoke，它走独立的权限与台账类型" else null
+            // 要撤回额度请用 revoke，它走独立的权限与台账类型
+            if (amount <= 0) GatewayErrorCodes.QUOTA_GRANT_AMOUNT_INVALID else null
     }
 }

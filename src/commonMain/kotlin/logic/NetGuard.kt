@@ -11,7 +11,8 @@ object NetGuard {
 
     sealed interface UrlVerdict {
         data object Ok : UrlVerdict
-        data class Rejected(val reason: String) : UrlVerdict
+        /** [code] 是 [GatewayErrorCodes] 的 UPSTREAM_URL_* 机器码（进响应）；[reason] 是给日志与测试看的细节。 */
+        data class Rejected(val code: String, val reason: String) : UrlVerdict
     }
 
     /**
@@ -46,21 +47,24 @@ object NetGuard {
         resolver: HostResolver? = null,
     ): UrlVerdict {
         val u = url.trim()
-        if (u.isEmpty()) return UrlVerdict.Rejected("url is empty")
+        if (u.isEmpty()) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_EMPTY, "url is empty")
         val scheme = u.substringBefore("://", "").lowercase()
-        if (scheme != "http" && scheme != "https") return UrlVerdict.Rejected("scheme must be http or https")
+        if (scheme != "http" && scheme != "https") return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_SCHEME_INVALID, "scheme must be http or https")
         val hostPort = u.removePrefix("$scheme://").substringBefore('/').substringBefore('?')
-        if (hostPort.contains('@')) return UrlVerdict.Rejected("userinfo in URL is not allowed")
+        if (hostPort.contains('@')) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_USERINFO_NOT_ALLOWED, "userinfo in URL is not allowed")
         val host = hostPort.substringBeforeLast(':').trim('[', ']').lowercase()
-        if (host.isEmpty()) return UrlVerdict.Rejected("host is empty")
+        if (host.isEmpty()) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_HOST_EMPTY, "host is empty")
         if (allowPrivate) return UrlVerdict.Ok
-        if (isPrivateHost(host)) return UrlVerdict.Rejected("host '$host' resolves to a private or link-local address")
+        if (isPrivateHost(host)) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_PRIVATE_ADDRESS, "host '$host' resolves to a private or link-local address")
         if (resolver != null && !isIpLiteral(host)) {
             val addresses = runCatching { resolver.resolve(host) }.getOrDefault(emptyList())
-            if (addresses.isEmpty()) return UrlVerdict.Rejected("host '$host' could not be resolved")
+            if (addresses.isEmpty()) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_UNRESOLVABLE, "host '$host' could not be resolved")
             val internal = addresses.mapNotNull { normalizeIp(it) }.firstOrNull { isPrivateHost(it) }
             if (internal != null) {
-                return UrlVerdict.Rejected("host '$host' resolves to a private or link-local address ($internal)")
+                return UrlVerdict.Rejected(
+                    GatewayErrorCodes.UPSTREAM_URL_PRIVATE_ADDRESS,
+                    "host '$host' resolves to a private or link-local address ($internal)",
+                )
             }
         }
         return UrlVerdict.Ok

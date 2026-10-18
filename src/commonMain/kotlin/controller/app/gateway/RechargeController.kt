@@ -1,5 +1,7 @@
 package controller.app.gateway
 
+import logic.GatewayErrorCodes
+import logic.rejectField
 import kotlinx.serialization.Serializable
 import logic.QuotaLogic
 import logic.QuotaRechargeLogic
@@ -106,15 +108,13 @@ class RechargeController(
         // 白白在钱据表里留下一张开完就关的单 —— 对账时那是纯噪声。
         val errors = mutableListOf<ValidationError>()
         if (request.price <= 0) {
-            errors += ValidationError(path = "price", message = "must be positive")
+            errors += ValidationError("price", GatewayErrorCodes.RECHARGE_PRICE_INVALID, GatewayErrorCodes.RECHARGE_PRICE_INVALID)
         }
         if (request.channelCode.isNullOrBlank()) {
-            errors += ValidationError(
-                path = "channelCode",
-                message = "must be a usable pay channel code; payment has no default channel",
-            )
+            // 必须是可用的支付渠道码：payment 没有默认渠道
+            errors += ValidationError("channelCode", GatewayErrorCodes.RECHARGE_CHANNEL_REQUIRED, GatewayErrorCodes.RECHARGE_CHANNEL_REQUIRED)
         }
-        if (errors.isNotEmpty()) throw ValidationException(errors)
+        if (errors.isNotEmpty()) throw ValidationException(errors, GatewayErrorCodes.RECHARGE_INVALID)
 
         val userId = identity.id.toLong()
         // userIp 暂传 null：可信代理判定（NEWGATE_TRUSTED_PROXIES）在 RelayEngine 那条路径上，
@@ -147,7 +147,8 @@ class RechargeController(
     @Get("/get/{rechargeId}")
     suspend fun status(identity: Identity, @PathVariable rechargeId: Long): RechargeStatusVO {
         val r = rechargeLogic.findForUser(rechargeId, identity.id.toLong())
-            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, NOT_OURS_MESSAGE)
+            // 「不存在」与「不是你的」共用同一个机器码，不泄露别人的单是否存在（harness S53 块 D 比对两者）。
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.RECHARGE_NOT_FOUND)
         return RechargeStatusVO(
             rechargeId = r.id,
             // merchant_order_id 不落库，两处都按同一规则现算（markPaid 认单也是这么算的）
@@ -163,13 +164,11 @@ class RechargeController(
     @Post("/mock")
     suspend fun mock(identity: Identity, @Body request: MockRechargeRequest): RechargeResultVO {
         if (!mockEnabled()) {
-            throw ValidationException(listOf(ValidationError(
-                path = "mock",
-                message = "mock recharge is disabled; set NEWGATE_ENABLE_MOCK_RECHARGE=true to enable it in a test environment",
-            )))
+            // 测试环境设 NEWGATE_ENABLE_MOCK_RECHARGE=true 才开
+            throw HttpException(NetonErrorCode.OPERATION_NOT_ALLOWED, GatewayErrorCodes.MOCK_RECHARGE_DISABLED)
         }
         if (request.amount <= 0) {
-            throw ValidationException(listOf(ValidationError(path = "amount", message = "must be positive")))
+            rejectField("amount", GatewayErrorCodes.RECHARGE_AMOUNT_INVALID)
         }
         val userId = identity.id.toLong()
         // ref 唯一 → 重复提交不会重复入账（台账 ref 上有唯一约束）
@@ -181,13 +180,4 @@ class RechargeController(
 
     private fun mockEnabled(): Boolean =
         neton.core.config.getEnv("NEWGATE_ENABLE_MOCK_RECHARGE")?.lowercase() == "true"
-
-    companion object {
-        /**
-         * 「不存在」与「不是你的」共用这一句。写成常量是为了让共用变成看得见的事实 ——
-         * 两处各写一句字面量，将来改一处忘一处就把区分泄出去了。harness S53 的块 D 逐字比对
-         * 这两种情况的 message，并且要求它非空（否则提取链断掉时两个空串相等会假绿）。
-         */
-        const val NOT_OURS_MESSAGE = "充值单不存在"
-    }
 }

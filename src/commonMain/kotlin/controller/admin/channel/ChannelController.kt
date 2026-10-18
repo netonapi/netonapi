@@ -1,5 +1,9 @@
 package controller.admin.channel
 
+import logic.GatewayErrorCodes
+import logic.rejectField
+import neton.core.http.HttpException
+import neton.core.http.NetonErrorCode
 import controller.admin.channel.dto.*
 import logic.ChannelLogic
 import model.Channel
@@ -46,7 +50,7 @@ class ChannelController(
     suspend fun update(@Body request: UpdateChannelRequest) {
         requireSafeUrls(request.baseUrl, request.proxyUrl)
         val current = channelLogic.get(request.id)
-            ?: throw IllegalArgumentException("gateway channel id=${request.id} not found")
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.CHANNEL_NOT_FOUND)
         channelLogic.update(current.copy(
             name = request.name, type = request.type, baseUrl = request.baseUrl,
             groups = request.groups, models = request.models,
@@ -74,7 +78,8 @@ class ChannelController(
     @Post("/probe/{id}")
     @Permission("gateway:channel:update")
     suspend fun probe(@PathVariable id: Long, @Body request: ProbeChannelRequest): logic.ChannelProbeResult {
-        val channel = channelLogic.get(id) ?: throw IllegalArgumentException("gateway channel id=$id not found")
+        val channel = channelLogic.get(id)
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.CHANNEL_NOT_FOUND)
         return probeLogic.probeAndRecord(channel, request.model)
     }
 
@@ -82,7 +87,8 @@ class ChannelController(
     @Post("/models/{id}")
     @Permission("gateway:channel:update")
     suspend fun upstreamModels(@PathVariable id: Long): logic.ChannelModelsResult {
-        val channel = channelLogic.get(id) ?: throw IllegalArgumentException("gateway channel id=$id not found")
+        val channel = channelLogic.get(id)
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.CHANNEL_NOT_FOUND)
         return probeLogic.listModels(channel)
     }
 
@@ -130,9 +136,8 @@ class ChannelController(
             if (url.isNullOrBlank()) continue
             val v = logic.NetGuard.checkUpstreamUrl(url, allowPrivate, resolver)
             if (v is logic.NetGuard.UrlVerdict.Rejected) {
-                throw neton.core.http.ValidationException(
-                    listOf(neton.core.http.ValidationError(path = field, message = v.reason))
-                )
+                log.warn("channel SSRF check rejected field=$field code=${v.code} reason=${v.reason}")
+                rejectField(field, v.code) // v.code 恒为 GatewayErrorCodes.UPSTREAM_URL_*
             }
         }
     }

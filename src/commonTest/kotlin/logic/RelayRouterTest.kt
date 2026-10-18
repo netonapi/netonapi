@@ -92,8 +92,11 @@ class RelayRouterTest {
         assertEquals("embeddings,chat", RelayRouter.requireCapabilities(" embeddings , chat ,chat "))
         assertEquals("chat", RelayRouter.requireCapabilities("chat"))
         // 拼错的能力名若被静默接受，该渠道就从对应端点上消失了，只能靠用户投诉发现
-        assertFailsWith<neton.core.http.ValidationException> { RelayRouter.requireCapabilities("chat,embedding") }
-        assertFailsWith<neton.core.http.ValidationException> { RelayRouter.requireCapabilities("  ") }
+        val unknown = assertFailsWith<neton.core.http.ValidationException> { RelayRouter.requireCapabilities("chat,embedding") }
+        assertEquals(GatewayErrorCodes.CHANNEL_CAPABILITY_UNKNOWN, unknown.message)
+        assertEquals(GatewayErrorCodes.CHANNEL_CAPABILITY_UNKNOWN, unknown.errors.single().code)
+        val empty = assertFailsWith<neton.core.http.ValidationException> { RelayRouter.requireCapabilities("  ") }
+        assertEquals(GatewayErrorCodes.CHANNEL_CAPABILITIES_REQUIRED, empty.message)
     }
 
     @Test
