@@ -71,7 +71,7 @@ class PriceImportLogic(private val log: Logger) {
         val url = neton.core.config.getEnv(ENV_SYNC_URL)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val overwrite = neton.core.config.getEnv(ENV_SYNC_OVERWRITE)?.trim()?.lowercase() != "false"
         // 本模块不带 HTTP 引擎，客户端能力来自应用绑定的 provider（与渠道转发同源）
-        val provider = RelayEngine.clientProvider ?: return PriceImportResult(0, 0, 0, listOf("HttpClientProvider 未绑定"))
+        val provider = RelayEngine.deployConfigClients ?: return PriceImportResult(0, 0, 0, listOf("HttpClientProvider 未绑定"))
         val client = provider.create { connectMillis = 5_000; requestMillis = 30_000; socketMillis = 30_000 }
         try {
             val res = client.request(neton.http.client.HttpClientRequest(method = neton.http.client.HttpClientMethod.Get, url = url))

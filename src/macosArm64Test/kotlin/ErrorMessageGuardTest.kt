@@ -15,7 +15,7 @@ class ErrorMessageGuardTest {
                 // rejectField 本身：code 形参透传；调用点由下面的 constructors 条目逐个检查。
                 "kotlin/logic/GatewayErrorCodes.kt#ValidationException#code",
                 "kotlin/logic/GatewayErrorCodes.kt#ValidationError#code",
-                // NetGuard.UrlVerdict.Rejected.code 恒为 GatewayErrorCodes.UPSTREAM_URL_* 常量（NetGuard 内构造）。
+                // NetGuard.UrlVerdict.Rejected.code 恒为 GatewayErrorCodes.UPSTREAM_* 常量（NetGuard 内构造）。
                 "kotlin/controller/admin/channel/ChannelController.kt#rejectField#v.code",
             ),
             // 模块的字段级拒绝 helper：第 2 个实参（code）必须是目录常量。

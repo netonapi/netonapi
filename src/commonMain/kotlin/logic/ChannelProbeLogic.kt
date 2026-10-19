@@ -20,6 +20,8 @@ data class ChannelModelsResult(
     val status: Int? = null,
     val models: List<String> = emptyList(),
     val error: String? = null,
+    /** 受控客户端拒绝目标时的机器码（[GatewayErrorCodes] 的 UPSTREAM_*，前端按 `error.<CODE>` 翻译）；其余失败为 null。 */
+    val errorCode: String? = null,
 )
 
 @Serializable
@@ -31,8 +33,10 @@ data class ChannelProbeResult(
     val model: String,
     val upstreamModel: String,
     val upstreamPath: String,
-    /** 失败时的上游原话（截断），成功为 null */
+    /** 失败时的上游原话（截断），成功为 null；目标被出站策略拒绝时是 [errorCode] */
     val error: String? = null,
+    /** 受控客户端拒绝目标时的机器码（[GatewayErrorCodes] 的 UPSTREAM_*）；其余失败为 null。 */
+    val errorCode: String? = null,
 )
 
 /**
@@ -89,7 +93,11 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
         val path = RelayEngine.upstreamPathFor(upstream, channel, "/v1/chat/completions", mapped.upstreamModel, stream = false)
         val url = channel.baseUrl.trimEnd('/') + path
         val finalBody = upstream.upstreamBody(body, mapped.upstreamModel, false)
-        val headers = try { upstream.requestHeaders(key.apiKey, "POST", url, finalBody, channel) } catch (e: Exception) {
+        val headers = try { upstream.requestHeaders(key.apiKey, "POST", url, finalBody, channel) } catch (e: HttpClientException) {
+            // Vertex 换 token 时 token_uri 被出站策略拒绝
+            val code = NetGuard.rejectionCode(e.error)
+            return ChannelProbeResult(ok = false, status = null, latencyMs = 0, model = model, upstreamModel = mapped.upstreamModel, upstreamPath = path, error = code ?: e.error.toString().take(500), errorCode = code)
+        } catch (e: Exception) {
             return ChannelProbeResult(ok = false, status = null, latencyMs = 0, model = model, upstreamModel = mapped.upstreamModel, upstreamPath = path, error = (e.message ?: "credential error").take(500))
         }
         val request = HttpClientRequest(
@@ -112,10 +120,12 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
         } catch (e: HttpClientException) {
             log.warn("channel probe error channel=${channel.id} err=${e.error}")
             val err = e.error
+            val code = NetGuard.rejectionCode(err)
             ChannelProbeResult(
                 ok = false, status = (err as? HttpClientError.Http)?.statusCode, latencyMs = elapsed(), model = model,
                 upstreamModel = mapped.upstreamModel, upstreamPath = path,
-                error = ((err as? HttpClientError.Http)?.body ?: err.toString()).take(500),
+                error = code ?: ((err as? HttpClientError.Http)?.body ?: err.toString()).take(500),
+                errorCode = code,
             )
         }
     }
@@ -155,7 +165,12 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
             }
         } catch (e: HttpClientException) {
             val err = e.error
-            ChannelModelsResult(ok = false, status = (err as? HttpClientError.Http)?.statusCode, error = ((err as? HttpClientError.Http)?.body ?: err.toString()).take(500))
+            val code = NetGuard.rejectionCode(err)
+            ChannelModelsResult(
+                ok = false, status = (err as? HttpClientError.Http)?.statusCode,
+                error = code ?: ((err as? HttpClientError.Http)?.body ?: err.toString()).take(500),
+                errorCode = code,
+            )
         }
     }
 

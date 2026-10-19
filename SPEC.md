@@ -230,16 +230,17 @@
   内才采信 XFF，从右往左剥掉可信跳，第一个不可信地址即客户端；不采信 `X-Real-IP`。限流、审计、白名单共用这一个值。
   旧变量 `NEWGATE_TRUSTED_PROXIES` 已废弃，仍配着就拒绝启动（静默忽略会让反代后所有带白名单的令牌 403）。
   S14 两阶段断言：未配可信代理时伪造 XFF 无效；配了之后真客户端能剥出，而把名单内 IP 塞在链首仍拒。
-- **SSRF**：渠道 baseUrl/proxyUrl 写入时校验，拒绝回环/私网/链路本地/云元数据（169.254.169.254）与 userinfo 混淆；
-  自托管可用 `NEWGATE_ALLOW_PRIVATE_UPSTREAM=true` 放行。
-  **DNS 解析型校验**：只看主机名字面量挡不住 `http://attacker.com`（A 记录指向 127.0.0.1）。`NetGuard` 接受
-  注入的 `HostResolver`（保持自身纯净可单测），对非 IP 字面量且未放行私网的主机先解析：解析抛异常/空结果 →
-  **fail-closed 拒绝**；任一解析结果落在内网 → 拒绝。posix（macOS/Linux）actual 走 `getaddrinfo`/`getnameinfo`；
-  **mingw actual 显式返回 null（不解析）**——WSAStartup 时机不可控且无法在本机验证，宁可让 Windows 只受字面量
-  校验，也不 fail-closed 到「建不了任何域名渠道」。
-  ⚠️ **只在写入时校验，挡不住 DNS rebinding**（写入时解析成公网、发请求时改指内网）；那一层只能靠部署侧出网
-  过滤兜底（DEPLOY.md「上游地址与 SSRF」）。S25 断言：元数据地址与 `[::1]` 被拒、公网字面量放行、域名经真
-  DNS 复查后放行。
+- **SSRF / 出站策略**（neton-docs spec/egress.md）：渠道 baseUrl / proxyUrl、服务账号 Key 的 `token_uri` 是后台运行期数据，
+  渠道转发、探测、拉模型、能力校验、Vertex 换 token **全部**走 `GuardedHttpClientProvider` 建的受控客户端
+  （`RelayEngine.guardedClients`，module-system 按 application.conf `[egress]` 绑定）——**强制点在请求时**：每条连接解析一次、
+  全部地址校验（IANA 特殊用途段、非规范 IP 写法、端口放行列表），只连校验过的 IP，DNS rebinding 挪不走；经渠道代理时代理只收到
+  校验过的 IP（`CONNECT <ip>:443` / absolute-form），代理地址本身也校验。被拒的候选不计 Key 失败、换下一个渠道，全部被拒
+  503 `no_available_channel`（消息带机器码）；探测 / 拉模型结果带 `errorCode`。
+  写入时（create / update / addKey）用同一个策略与 `systemHostResolver()` 先判一遍，不过 400 不落库（快速反馈）。
+  `token_uri` 只许 https（写入时与换 token 时都拒）。内网上游只能由运维在 `[egress]` 精确放行（`allowed_networks` /
+  `allowed_hosts` / `allowed_ports`），`NEWGATE_ALLOW_PRIVATE_UPSTREAM` 已删除。价目表同步地址来自环境变量，走普通客户端。
+  S25 断言写入时（元数据、`[::1]`、非放行端口被拒，公网放行）；S25b 断言请求时（直接写库的 `localhost` 别名与元数据渠道 503、
+  Key 不计失败、探测 errorCode，放行的 127.0.0.1 照常可用）。
 - **速率限制（V005）**：令牌级 RPM/TPM/并发。Redis 优先（多实例共享），无 Redis 退化为**进程内**计数（单实例
   仍有效）并 warn。固定分钟窗（边界最多约 2 倍突发）；并发额度在 finally 释放，失败请求不会泄漏额度。
   **原子化**：此前是「读-改-写」（GET → 比较 → SET），并发下丢增量 = 限流被绕过；改为服务端 Lua 一次执行
@@ -285,7 +286,8 @@ S17 在途改价按快照计价、S18 快照损坏转人工+预留保留、S19 �
 S20 双轨计价（售价/成本分离）、S21 毛利闸门（发布期）、S22 全局加价率 / 毛利下限、
 S23 端点能力路由（embeddings 只落声明渠道，无能力 404 且零预留）、
 S24 Redis 原子限流计数（RPM/TPM 精确、窗口键 TTL、并发键无泄漏无负数）、
-S25 渠道 SSRF 校验（admin API：元数据/回环被拒，公网字面量与域名经 DNS 复查后放行）。
+S25 渠道 SSRF 写入时校验（admin API：元数据/回环/非放行端口被拒，公网字面量与域名放行）、
+S25b 请求时出站校验（直接写库的内网渠道在连接前被拒，放行的内网上游可用）。
 
 ## 待办（逐条核实仍未完成的真实差距）
 
@@ -300,6 +302,5 @@ S25 渠道 SSRF 校验（admin API：元数据/回环被拒，公网字面量与
 - 管理台 UI 缺口：多 Key 管理 / 测速 / 健康视图缺；渠道能力目前只有一个逗号分隔文本框（无逐能力勾选）
 - 3×3 = 文本聊天核心子集 baseline E2E，非完整协议兼容
 - CI 未真跑：harness 与单测都不在任何远端流水线里（三个 fork 仍是 local-path origin）
-- SSRF 只在写入时校验：DNS rebinding（写入时公网、发请求时改指内网）代码层未覆盖，只能靠部署侧出网过滤
 - KSP @Logic 跳过带默认值的构造参数（gateway 的 RateLimiter.redis 已用 RuntimeBootstrap 绕过）：
   `module-system` 的 `MessageSendLogic.redis` 同样中招，影响面未核实

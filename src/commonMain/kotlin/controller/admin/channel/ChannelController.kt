@@ -29,6 +29,7 @@ class ChannelController(
     @Permission("gateway:channel:create")
     suspend fun create(@Body request: CreateChannelRequest): Long {
         requireSafeUrls(request.baseUrl, request.proxyUrl)
+        request.keys.forEach { requireSafeKey(it) }
         val id = channelLogic.create(
             Channel(
                 name = request.name, type = request.type, baseUrl = request.baseUrl,
@@ -110,8 +111,10 @@ class ChannelController(
 
     @Post("/keys/{id}/add")
     @Permission("gateway:channel:update")
-    suspend fun addKey(@PathVariable id: Long, @Body request: AddKeyRequest): Long =
-        channelLogic.addKey(id, request.apiKey)
+    suspend fun addKey(@PathVariable id: Long, @Body request: AddKeyRequest): Long {
+        requireSafeKey(request.apiKey)
+        return channelLogic.addKey(id, request.apiKey)
+    }
 
     @Delete("/keys/delete/{keyId}")
     @Permission("gateway:channel:update")
@@ -121,24 +124,37 @@ class ChannelController(
         if (key.length <= 11) "****" else key.take(7) + "****" + key.takeLast(4)
 
     /**
-     * 上游地址 SSRF 校验：拒绝指向回环/内网/链路本地（含云元数据 169.254.169.254）的地址，
-     * 否则网关会成为打内网的跳板。域名还要解析一次复查——字面量看不出 `http://upstream.example`
-     * 指向哪里。自托管需要连内网上游时，设 NEWGATE_ALLOW_PRIVATE_UPSTREAM=true 显式放行。
+     * 上游地址的写入时校验（快速反馈）：与请求时的受控客户端用**同一个**运维出站策略（application.conf
+     * `[egress]`）和同一个解析器，拒绝指向回环 / 内网 / 链路本地（含云元数据 169.254.169.254）、端口不在放行
+     * 列表、解析不出的地址；代理地址按代理规则（地址，端口不限）。强制点在请求时（[logic.RelayEngine.clientFor]），
+     * 写库绕过本接口的渠道、之后改了 DNS 的域名一样被挡在连接前。自托管连内网上游由运维在部署配置里放行。
      */
-    private fun requireSafeUrls(baseUrl: String, proxyUrl: String?) {
-        val allowPrivate = neton.core.config.getEnv("NEWGATE_ALLOW_PRIVATE_UPSTREAM")?.lowercase() == "true"
-        val resolver = logic.platformHostResolver()
-        if (resolver == null) {
-            // 本平台没有 DNS 解析器：只剩字面量校验。明确说出来，别让人以为域名也被查过了。
-            log.warn("channel SSRF check: DNS re-check unavailable on this platform, only literal hosts are validated")
-        }
-        for ((field, url) in listOf("baseUrl" to baseUrl, "proxyUrl" to proxyUrl)) {
-            if (url.isNullOrBlank()) continue
-            val v = logic.NetGuard.checkUpstreamUrl(url, allowPrivate, resolver)
-            if (v is logic.NetGuard.UrlVerdict.Rejected) {
-                log.warn("channel SSRF check rejected field=$field code=${v.code} reason=${v.reason}")
-                rejectField(field, v.code) // v.code 恒为 GatewayErrorCodes.UPSTREAM_URL_*
-            }
+    private suspend fun requireSafeUrls(baseUrl: String, proxyUrl: String?) {
+        checkField("baseUrl", baseUrl, logic.NetGuard.UrlRole.UPSTREAM)
+        if (!proxyUrl.isNullOrBlank()) checkField("proxyUrl", proxyUrl, logic.NetGuard.UrlRole.PROXY)
+    }
+
+    /**
+     * 服务账号 JSON 形态的 Key（Vertex）里带 token_uri：换 token 时网关会把签名断言 POST 过去，所以它和 baseUrl
+     * 一样是要校验的出站地址（只允许 https）。普通字符串 Key 不含地址，直接放过。
+     */
+    private suspend fun requireSafeKey(apiKey: String) {
+        val trimmed = apiKey.trim()
+        if (!trimmed.startsWith("{")) return
+        val sa = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(trimmed) as kotlinx.serialization.json.JsonObject }
+            .getOrElse { rejectField("apiKey", GatewayErrorCodes.CHANNEL_KEY_SERVICE_ACCOUNT_INVALID) }
+        val tokenUri = (sa["token_uri"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return // 缺省 Google 的 token 端点
+        checkField("apiKey", tokenUri, logic.NetGuard.UrlRole.TOKEN_ENDPOINT)
+    }
+
+    private suspend fun checkField(field: String, url: String, role: logic.NetGuard.UrlRole) {
+        // GatewayRuntimeBootstrap 取不到就启动失败，服务期必然存在。
+        val guarded = checkNotNull(logic.RelayEngine.guardedClients) { "GuardedHttpClientProvider not bound" }
+        val v = logic.NetGuard.checkUpstreamUrl(url, guarded.policy, neton.http.client.systemHostResolver(), role)
+        if (v is logic.NetGuard.UrlVerdict.Rejected) {
+            log.warn("channel SSRF check rejected field=$field code=${v.code} reason=${v.reason}")
+            rejectField(field, v.code) // v.code 恒为 GatewayErrorCodes.UPSTREAM_*
         }
     }
 }

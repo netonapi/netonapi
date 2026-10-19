@@ -98,7 +98,8 @@ class ChannelVerificationLogic(private val log: Logger, private val channelLogic
             (res.statusCode in 200..299) to (if (res.statusCode in 200..299) null else "HTTP ${res.statusCode}: ${res.body.take(400)}")
         }.getOrElse { e ->
             val detail = when (e) {
-                is HttpClientException -> (e.error as? HttpClientError.Http)?.let { "HTTP ${it.statusCode}: ${it.body?.take(400) ?: ""}" } ?: e.error.toString()
+                is HttpClientException -> NetGuard.rejectionCode(e.error)
+                    ?: (e.error as? HttpClientError.Http)?.let { "HTTP ${it.statusCode}: ${it.body?.take(400) ?: ""}" } ?: e.error.toString()
                 else -> e.message ?: e::class.simpleName ?: "error"
             }
             false to detail

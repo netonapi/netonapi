@@ -290,6 +290,14 @@ class RelayEngine(
                     respondRaw(ctx, err.statusCode, err.body?.let { transform.errorBodyFor(it, err.statusCode) } ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
                     return
                 }
+                val forbidden = NetGuard.rejectionCode(err)
+                if (forbidden != null) {
+                    // 渠道配置指向出站策略不允许的目标（或 DNS 现在指向内网）：一个包都没发出去，不是 Key 的错，
+                    // 不计 Key 失败；换下一个候选渠道。
+                    lastError = "channel ${channel.id} upstream target refused: $forbidden"
+                    log.warn("relay target refused channel=${channel.id} code=$forbidden detail=${err.message.take(200)}")
+                    return@repeat
+                }
                 lastError = err.toString().replace("\n", " ").take(160)
                 // 429（限流）是暂时性的，不计入永久禁用；仅 5xx/网络/超时计 Key 失败（Codex 评审 #3）。
                 // 429 改为给渠道加冷却退避（cooldown_until），冷却期内不再选它，避免立即重试撞同一限流上游。
@@ -954,17 +962,21 @@ class RelayEngine(
         private val clients = mutableMapOf<String, HttpClient>()
 
         /**
-         * 由 [init.GatewayRuntimeBootstrap] 从 `NetonContext` 取应用绑定的
-         * `HttpClientProvider` 后注入。网关按渠道各自的代理与超时建客户端，
-         * 所以借一个共享实例不够；但建客户端的能力必须来自应用——本模块不带引擎。
+         * 受控出站客户端的来源：由 [init.GatewayRuntimeBootstrap] 从 `NetonContext` 取（module-system 按
+         * application.conf `[egress]` 绑定一次）。渠道的 baseUrl / proxyUrl、服务账号的 token_uri 都是后台
+         * 运行期数据，所以渠道转发、探测、拉模型、能力校验、Vertex 换 token **全部**走它建的客户端：每条连接
+         * 解析一次、全部地址按运维出站策略校验、只连校验过的地址；经代理时代理也只拿到校验过的 IP。
+         * 写入时的 [NetGuard.checkUpstreamUrl] 只是快速反馈，这里才是强制点。
          */
-        var clientProvider: HttpClientProvider? = null
+        var guardedClients: GuardedHttpClientProvider? = null
+
+        /** 价目表同步（地址来自部署环境变量 NEWGATE_PRICE_SYNC_URL）用的普通客户端来源；渠道流量绝不用它。 */
+        var deployConfigClients: HttpClientProvider? = null
 
         /** 渠道 client 缓存：key 含影响连接行为的字段；渠道配置变更后 key 变化自然重建。 */
         suspend fun clientFor(channel: Channel): HttpClient {
-            val provider = clientProvider ?: error(
-                "gateway needs an HttpClientProvider bound in NetonContext. Bind one in the application: " +
-                    "bind(HttpClientProvider::class, HttpClientProvider { HttpClient.create(it) }).",
+            val provider = guardedClients ?: error(
+                "gateway needs a GuardedHttpClientProvider bound in NetonContext (module-system binds it from [egress]).",
             )
             val key = "${channel.id}|${channel.proxyUrl ?: ""}|${channel.ttfbTimeoutMs}|${channel.idleTimeoutMs}"
             clientMutex.withLock {

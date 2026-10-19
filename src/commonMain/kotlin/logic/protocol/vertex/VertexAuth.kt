@@ -27,10 +27,22 @@ object VertexAuth {
         return token.token
     }
 
+    /**
+     * 服务账号 JSON 的 token_uri（缺省 Google 的）。它是管理员录入的 Key 里的数据：写入时由
+     * [controller.admin.channel.ChannelController] 校验（https、出站策略），请求时换 token 走受控客户端，
+     * 地址同样按出站策略校验——这里再拒一次非 https，签名断言绝不走明文。
+     */
+    fun tokenUriOf(sa: JsonObject): String {
+        val uri = sa["token_uri"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+            ?: neton.ai.protocol.transport.google.GoogleAccessTokens.DEFAULT_TOKEN_URI
+        require(uri.startsWith("https://", ignoreCase = true)) { "服务账号 token_uri 必须是 https 地址" }
+        return uri
+    }
+
     private suspend fun exchange(sa: JsonObject, email: String, nowMs: Long): Cached {
-        val tokenUri = sa["token_uri"]?.jsonPrimitive?.contentOrNull ?: neton.ai.protocol.transport.google.GoogleAccessTokens.DEFAULT_TOKEN_URI
+        val tokenUri = tokenUriOf(sa)
         val assertion = neton.ai.protocol.transport.google.GoogleAccessTokens.assertion(sa, email, tokenUri, nowMs)
-        val provider = logic.RelayEngine.clientProvider ?: error("HttpClientProvider not bound")
+        val provider = logic.RelayEngine.guardedClients ?: error("GuardedHttpClientProvider not bound")
         val client = provider.create { connectMillis = 5_000; requestMillis = 15_000; socketMillis = 15_000 }
         try {
             val res = client.request(neton.http.client.HttpClientRequest(

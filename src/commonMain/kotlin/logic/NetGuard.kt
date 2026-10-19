@@ -1,5 +1,11 @@
 package logic
 
+import neton.http.client.HostResolver
+import neton.http.client.HttpClientError
+import neton.http.client.HttpClientException
+import neton.http.client.OutboundAddressPolicy
+import neton.http.client.TargetRejection
+
 /**
  * 网络侧准入的纯函数：上游地址 SSRF 校验 + 令牌 IP 白名单。
  *
@@ -7,98 +13,93 @@ package logic
  */
 object NetGuard {
 
-    // ===== SSRF：渠道 baseUrl / proxyUrl 校验 =====
+    // ===== SSRF：渠道 baseUrl / proxyUrl / 服务账号 token_uri 校验 =====
 
     sealed interface UrlVerdict {
         data object Ok : UrlVerdict
-        /** [code] 是 [GatewayErrorCodes] 的 UPSTREAM_URL_* 机器码（进响应）；[reason] 是给日志与测试看的细节。 */
+        /** [code] 是 [GatewayErrorCodes] 的 UPSTREAM_* 机器码（进响应）；[reason] 是给日志与测试看的细节。 */
         data class Rejected(val code: String, val reason: String) : UrlVerdict
     }
 
-    /**
-     * 主机名 → IP 字面量列表；空 = 解析不出来。
-     *
-     * 由调用方注入（生产 = 平台 getaddrinfo，单测 = 假解析器），NetGuard 因此保持纯函数、
-     * 能在 commonTest 里穷举边界。实现通常是**阻塞**的：只用于管理员写入渠道这类低频路径，
-     * 绝不可进中转热路径（每请求解析一次 = 把 DNS 变成延迟与故障源）。
-     */
-    fun interface HostResolver {
-        fun resolve(host: String): List<String>
+    /** 被校验的地址是什么：决定按目标规则（scheme + 端口 + 地址）还是代理规则（地址，端口不限）校验。 */
+    enum class UrlRole {
+        /** 渠道 baseUrl：http / https。 */
+        UPSTREAM,
+        /** 服务账号 JSON 里的 token_uri：只允许 https（里面带签名断言）。 */
+        TOKEN_ENDPOINT,
+        /** 渠道 proxyUrl：代理端点本身。 */
+        PROXY,
     }
 
     /**
-     * 校验管理员配置的上游地址。
+     * 写入时校验管理员配置的上游地址——**快速反馈**，不是强制点。强制点在请求时：渠道转发、探测、拉模型、
+     * Vertex 换 token 全部走 [RelayEngine.guardedClients] 建的受控客户端，每条连接解析一次、全部地址校验、
+     * 只连校验过的地址（DNS 重绑定、写库绕过本校验的渠道都挡在连接前）。
      *
-     * 拒绝：非 http(s)、缺主机、以及指向**回环/内网/链路本地/元数据服务**的主机——
-     * 否则网关会变成打内网的跳板（如 `169.254.169.254` 可取云厂商实例凭据）。
+     * 两处用的是**同一个** [policy]（运维出站策略 `[egress]`，见 neton-http `EgressSettings`）与同一个解析器，
+     * 所以这里通过的地址请求时也通过（除非 DNS 之后变了）。内网上游（自托管模型在 10.x）只能由运维在
+     * 部署配置里放行，后台改不了。
      *
-     * [allowPrivate] 供自托管/内网部署显式放行（默认关闭）。
-     *
-     * [resolver] 非空时对**域名**再做一次解析复查：字面量看不出 `http://upstream.example`
-     * 指向哪里，而它完全可以指向 169.254.169.254。多条 A 记录里混一个内网地址同样拒绝
-     * （攻击者正是靠「多数时候返回公网地址」躲过一次性检查）；解析失败一律 fail-closed——
-     * 把「DNS 挂了」当成「地址安全」是这类校验最典型的失效方式。
-     * 注意这是**写入时**检查，挡不住之后改 DNS 记录的重绑定；那一层要靠部署侧出网过滤
-     * （见 DEPLOY.md「SSRF」）。
+     * 先做语法检查（空、scheme、userinfo、主机、端口），再交给 [policy]：目标按 `admit`（scheme / 端口 / 地址），
+     * 代理按 `admitProxy`（地址，端口不限）。解析失败 fail-closed。
      */
-    fun checkUpstreamUrl(
+    suspend fun checkUpstreamUrl(
         url: String,
-        allowPrivate: Boolean = false,
-        resolver: HostResolver? = null,
+        policy: OutboundAddressPolicy,
+        resolver: HostResolver,
+        role: UrlRole = UrlRole.UPSTREAM,
     ): UrlVerdict {
         val u = url.trim()
         if (u.isEmpty()) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_EMPTY, "url is empty")
         val scheme = u.substringBefore("://", "").lowercase()
-        if (scheme != "http" && scheme != "https") return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_SCHEME_INVALID, "scheme must be http or https")
-        val hostPort = u.removePrefix("$scheme://").substringBefore('/').substringBefore('?')
+        val schemeOk = when (role) {
+            UrlRole.TOKEN_ENDPOINT -> scheme == "https"
+            else -> scheme == "http" || scheme == "https"
+        }
+        if (!schemeOk) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_SCHEME_INVALID, "scheme '$scheme' is not allowed for $role")
+        val hostPort = u.substring(scheme.length + 3).substringBefore('/').substringBefore('?').substringBefore('#')
         if (hostPort.contains('@')) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_USERINFO_NOT_ALLOWED, "userinfo in URL is not allowed")
-        val host = hostPort.substringBeforeLast(':').trim('[', ']').lowercase()
-        if (host.isEmpty()) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_HOST_EMPTY, "host is empty")
-        if (allowPrivate) return UrlVerdict.Ok
-        if (isPrivateHost(host)) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_PRIVATE_ADDRESS, "host '$host' resolves to a private or link-local address")
-        if (resolver != null && !isIpLiteral(host)) {
-            val addresses = runCatching { resolver.resolve(host) }.getOrDefault(emptyList())
-            if (addresses.isEmpty()) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_UNRESOLVABLE, "host '$host' could not be resolved")
-            val internal = addresses.mapNotNull { normalizeIp(it) }.firstOrNull { isPrivateHost(it) }
-            if (internal != null) {
-                return UrlVerdict.Rejected(
-                    GatewayErrorCodes.UPSTREAM_URL_PRIVATE_ADDRESS,
-                    "host '$host' resolves to a private or link-local address ($internal)",
-                )
+        val host: String
+        val portText: String?
+        if (hostPort.startsWith("[")) {
+            val close = hostPort.indexOf(']')
+            if (close < 0) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_HOST_EMPTY, "unterminated IPv6 literal")
+            host = hostPort.substring(1, close)
+            portText = hostPort.substring(close + 1).takeIf { it.isNotEmpty() }?.let {
+                if (!it.startsWith(':')) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_HOST_EMPTY, "garbage after IPv6 literal")
+                it.substring(1)
             }
+        } else {
+            host = hostPort.substringBefore(':')
+            portText = if (':' in hostPort) hostPort.substringAfter(':') else null
         }
-        return UrlVerdict.Ok
-    }
-
-    /** host 是否已是 IP 字面量（含 IPv6）——是则无需 DNS 就能判定。 */
-    fun isIpLiteral(host: String): Boolean = host.contains(':') || ipv4ToLong(host) != null
-
-    /** 主机是否属于内网/回环/链路本地（含云元数据地址）。仅字面量判断，不做 DNS 解析。 */
-    fun isPrivateHost(host: String): Boolean {
-        if (host == "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local")) return true
-        if (host == "::1" || host == "0:0:0:0:0:0:0:1") return true
-        // IPv6 唯一本地地址 fc00::/7 与链路本地 fe80::/10
-        if (host.contains(':')) {
-            val p = host.lowercase()
-            if (p.startsWith("fc") || p.startsWith("fd") || p.startsWith("fe8") ||
-                p.startsWith("fe9") || p.startsWith("fea") || p.startsWith("feb")) return true
-            return false
+        if (host.isEmpty()) return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_HOST_EMPTY, "host is empty")
+        val port = when (portText) {
+            null -> if (scheme == "https") 443 else 80
+            else -> portText.toIntOrNull()?.takeIf { it in 1..65535 }
+                ?: return UrlVerdict.Rejected(GatewayErrorCodes.UPSTREAM_URL_PORT_FORBIDDEN, "port '$portText' is not a port")
         }
-        val o = host.split('.')
-        if (o.size != 4 || o.any { it.isEmpty() || !it.all(Char::isDigit) }) return false  // 域名交由部署侧策略
-        val b = o.map { it.toIntOrNull() ?: return false }
-        if (b.any { it !in 0..255 }) return false
-        return when {
-            b[0] == 127 -> true                                   // 回环
-            b[0] == 10 -> true                                    // 私有 A
-            b[0] == 172 && b[1] in 16..31 -> true                 // 私有 B
-            b[0] == 192 && b[1] == 168 -> true                    // 私有 C
-            b[0] == 169 && b[1] == 254 -> true                    // 链路本地（含 169.254.169.254 元数据）
-            b[0] == 0 -> true                                     // 0.0.0.0/8
-            b[0] == 100 && b[1] in 64..127 -> true                // CGNAT 100.64/10
-            else -> false
+        return try {
+            if (role == UrlRole.PROXY) policy.admitProxy(host, port, resolver) else policy.admit(scheme, host, port, resolver)
+            UrlVerdict.Ok
+        } catch (e: HttpClientException) {
+            val rejected = e.error as? HttpClientError.TargetRejected ?: throw e
+            UrlVerdict.Rejected(rejectionCode(rejected.reason), rejected.message)
         }
     }
+
+    /** 受控客户端拒绝目标的原因 → 机器码（写入时与请求时同一套码）。 */
+    fun rejectionCode(reason: TargetRejection): String = when (reason) {
+        TargetRejection.SCHEME -> GatewayErrorCodes.UPSTREAM_URL_SCHEME_INVALID
+        TargetRejection.PORT -> GatewayErrorCodes.UPSTREAM_URL_PORT_FORBIDDEN
+        TargetRejection.ADDRESS -> GatewayErrorCodes.UPSTREAM_URL_PRIVATE_ADDRESS
+        TargetRejection.RESOLVE -> GatewayErrorCodes.UPSTREAM_URL_UNRESOLVABLE
+        TargetRejection.PROXY -> GatewayErrorCodes.UPSTREAM_PROXY_FORBIDDEN
+    }
+
+    /** [error] 是受控客户端拒绝目标时的机器码，否则 null（网络错误、超时、HTTP 状态另行处理）。 */
+    fun rejectionCode(error: HttpClientError): String? =
+        (error as? HttpClientError.TargetRejected)?.let { rejectionCode(it.reason) }
 
     // ===== 客户端 IP =====
 
@@ -119,20 +120,6 @@ object NetGuard {
                     "via NETON_ROUTING__RATELIMIT__TRUSTED_PROXIES (routing.conf [ratelimit] trusted_proxies) and unset it"
             )
         }
-    }
-
-    /** 归一化地址字面量：`1.2.3.4:7080` → `1.2.3.4`，`[::1]:7080` → `::1`，裸 IPv6 原样保留。 */
-    fun normalizeIp(raw: String): String? {
-        val s = raw.trim()
-        if (s.isEmpty()) return null
-        if (s.startsWith("[")) {
-            val end = s.indexOf(']')
-            if (end < 0) return null
-            return s.substring(1, end).trim().takeIf { it.isNotEmpty() }
-        }
-        // 恰好一个冒号才可能是 host:port；IPv6 字面量含多个冒号，截断会毁掉地址
-        if (s.count { it == ':' } == 1) return s.substringBefore(':').trim().takeIf { it.isNotEmpty() }
-        return s
     }
 
     // ===== 令牌 IP 白名单 =====

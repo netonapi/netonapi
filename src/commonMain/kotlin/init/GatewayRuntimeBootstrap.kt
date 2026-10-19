@@ -28,8 +28,13 @@ object GatewayRuntimeBootstrap {
         // 本模块的全局设置定义登记进注册表，后台可见可改
         ctx.getOrNull(setting.SettingDefinitionRegistry::class)?.register(setting.GatewaySettingKeys.definitions)
         logic.NetGuard.checkLegacyTrustedProxies(neton.core.config.getEnv(logic.NetGuard.ENV_TRUSTED_PROXIES))
-        // 渠道客户端按需创建（各自的代理与超时），建客户端的能力来自应用。
-        logic.RelayEngine.clientProvider = ctx.getOrNull(neton.http.client.HttpClientProvider::class) ?: error(
+        // 渠道客户端按需创建（各自的代理与超时），一律是受控客户端：地址来自后台运行期数据。
+        logic.RelayEngine.guardedClients = ctx.getOrNull(neton.http.client.GuardedHttpClientProvider::class) ?: error(
+            "module-gateway needs a GuardedHttpClientProvider bound in NetonContext (module-system binds it from " +
+                "application.conf [egress]; it must initialize before module-gateway).",
+        )
+        // 价目表同步的地址来自部署环境变量，用应用的普通客户端。
+        logic.RelayEngine.deployConfigClients = ctx.getOrNull(neton.http.client.HttpClientProvider::class) ?: error(
             "module-gateway needs an HttpClientProvider bound in NetonContext. Bind one in the application: " +
                 "bind(HttpClientProvider::class, HttpClientProvider { HttpClient.create(it) }).",
         )

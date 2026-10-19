@@ -30,15 +30,22 @@ object GatewayErrorCodes {
     /** 跨协议损耗策略不是 allow/safe/strict。字段 lossPolicy。 */
     const val CHANNEL_LOSS_POLICY_INVALID = "CHANNEL_LOSS_POLICY_INVALID"
 
-    // ── 上游地址（SSRF 校验，字段 baseUrl / proxyUrl）──
+    // ── 上游地址（SSRF：写入时字段 baseUrl / proxyUrl / apiKey 的 token_uri；请求时探测 / 拉模型结果的 errorCode）──
     const val UPSTREAM_URL_EMPTY = "UPSTREAM_URL_EMPTY"
+    /** 不是 http / https（服务账号 token_uri 只允许 https）。 */
     const val UPSTREAM_URL_SCHEME_INVALID = "UPSTREAM_URL_SCHEME_INVALID"
     const val UPSTREAM_URL_USERINFO_NOT_ALLOWED = "UPSTREAM_URL_USERINFO_NOT_ALLOWED"
     const val UPSTREAM_URL_HOST_EMPTY = "UPSTREAM_URL_HOST_EMPTY"
-    /** 地址指向回环 / 内网 / 链路本地（含云元数据地址）。 */
+    /** 端口不在运维出站策略 `[egress] allowed_ports` 里（默认 80、443），或不是合法端口。 */
+    const val UPSTREAM_URL_PORT_FORBIDDEN = "UPSTREAM_URL_PORT_FORBIDDEN"
+    /** 地址（字面量或解析结果之一）不在公网，且运维出站策略没有放行（回环 / 内网 / 链路本地 / 云元数据…）。 */
     const val UPSTREAM_URL_PRIVATE_ADDRESS = "UPSTREAM_URL_PRIVATE_ADDRESS"
     /** 域名解析不出地址。 */
     const val UPSTREAM_URL_UNRESOLVABLE = "UPSTREAM_URL_UNRESOLVABLE"
+    /** 代理地址不在公网且运维出站策略没有放行，或解析不出地址。字段 proxyUrl。 */
+    const val UPSTREAM_PROXY_FORBIDDEN = "UPSTREAM_PROXY_FORBIDDEN"
+    /** Key 以 `{` 开头却不是合法的服务账号 JSON 对象。字段 apiKey。 */
+    const val CHANNEL_KEY_SERVICE_ACCOUNT_INVALID = "CHANNEL_KEY_SERVICE_ACCOUNT_INVALID"
 
     // ── 价格 ──
     const val PRICE_NOT_FOUND = "PRICE_NOT_FOUND"
