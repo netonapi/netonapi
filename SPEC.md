@@ -127,6 +127,8 @@
 
 ## 定价管理（2026-10-20）
 
+> 规则全文见 neton-docs [网关计价与定价管理](../neton-docs/docs/zh-hans/spec/application/gateway-pricing-spec.md)（NETON-APP-GATEWAY-PRICING）；这里只记实现要点。
+
 - 全站加价率 / 最低毛利改为配置项 `gateway.pricing.markup` / `gateway.pricing.min_margin`（默认取 `NEWGATE_SALE_MARKUP` / `NEWGATE_MIN_MARGIN`），
   `PricingPolicy` 缓存 10 秒。单模型加价率写在 `sale_override.markup`；固定售价字段优先于加价率。
 - 成本按实际打给上游的模型计（`RelayEngine.costBasisFor`）：渠道 `model_mapping` 的目标有价格行就用它，否则用请求模型。
