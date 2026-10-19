@@ -139,6 +139,8 @@ NEWGATE_TARGET=linuxX64 bash harness/run.sh  # Linux
 
 - [`docs/ENGINEERING_RULES.md`](./docs/ENGINEERING_RULES.md) — the hard rules (module
   boundaries, what to grep before changing a public symbol, migration policy)
+- [`docs/gateway-pricing-spec.md`](./docs/gateway-pricing-spec.md) — pricing rules: sale price modes, billing groups,
+  margin protection, pricing check, official price calibration and price history
 - [`docs/rbac-spec.md`](./docs/rbac-spec.md) — User/Role/Menu, permission strings, wildcards
 - [`docs/module-template-spec.md`](./docs/module-template-spec.md) — how to add a module
 - [`docs/SPEC.md`](./docs/SPEC.md) — ⚠️ inherited scaffold, **partly stale**: it still says

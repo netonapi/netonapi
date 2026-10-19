@@ -125,6 +125,7 @@ NEWGATE_TARGET=linuxX64 bash harness/run.sh  # Linux
 
 - [`docs/ENGINEERING_RULES.md`](./docs/ENGINEERING_RULES.md) —— 硬规范（模块边界、改 public
   symbol 前要 grep 哪些仓、迁移策略）
+- [`docs/gateway-pricing-spec.md`](./docs/gateway-pricing-spec.md) —— 计价规则：售价方式、计费分组、毛利保护、定价体检、官方价校准与调价记录
 - [`docs/rbac-spec.md`](./docs/rbac-spec.md) —— User/Role/Menu、权限串、通配
 - [`docs/module-template-spec.md`](./docs/module-template-spec.md) —— 怎么加一个模块
 - [`docs/SPEC.md`](./docs/SPEC.md) —— ⚠️ 继承自上游脚手架，**部分已过时**：仍写着 Kotlin 2.3、
