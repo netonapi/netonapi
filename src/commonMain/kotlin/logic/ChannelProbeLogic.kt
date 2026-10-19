@@ -109,7 +109,7 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
         val start = kotlin.time.Clock.System.now().toEpochMilliseconds()
         fun elapsed() = kotlin.time.Clock.System.now().toEpochMilliseconds() - start
         return try {
-            val res = RelayEngine.clientFor(channel).request(request)
+            val res = RelayEngine.withChannelClient(channel) { it.request(request) }
             val ok = res.statusCode in 200..299
             if (!ok) log.warn("channel probe failed channel=${channel.id} status=${res.statusCode}")
             ChannelProbeResult(
@@ -155,7 +155,7 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
         val headers = upstream.upstreamHeaders(key.apiKey).filterKeys { !it.equals("Content-Type", ignoreCase = true) }
         val request = HttpClientRequest(method = HttpClientMethod.Get, url = url, headers = HttpHeaders.from(headers))
         return try {
-            val res = RelayEngine.clientFor(channel).request(request)
+            val res = RelayEngine.withChannelClient(channel) { it.request(request) }
             if (res.statusCode !in 200..299) {
                 ChannelModelsResult(ok = false, status = res.statusCode, error = res.body.take(500))
             } else {

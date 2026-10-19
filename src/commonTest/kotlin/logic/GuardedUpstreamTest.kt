@@ -26,16 +26,22 @@ import kotlin.test.fail
 class GuardedUpstreamTest {
 
     private fun install(settings: EgressSettings) {
-        RelayEngine.guardedClients = GuardedHttpClientProvider(settings, HttpClientProvider { HttpClient.create(it) })
+        val guarded = GuardedHttpClientProvider(settings, HttpClientProvider { HttpClient.create(it) })
+        RelayEngine.guardedClients = guarded
+        RelayEngine.channelClients = RelayEngine.channelClientCache(guarded)
     }
 
-    @AfterTest fun reset() { RelayEngine.guardedClients = null }
+    @AfterTest fun reset() = runBlocking {
+        RelayEngine.channelClients?.close()
+        RelayEngine.channelClients = null
+        RelayEngine.guardedClients = null
+    }
 
     private suspend fun send(channel: Channel): HttpClientError {
         try {
-            RelayEngine.clientFor(channel).request(
-                HttpClientRequest(method = HttpClientMethod.Get, url = channel.baseUrl.trimEnd('/') + "/v1/models"),
-            )
+            RelayEngine.withChannelClient(channel) {
+                it.request(HttpClientRequest(method = HttpClientMethod.Get, url = channel.baseUrl.trimEnd('/') + "/v1/models"))
+            }
         } catch (e: HttpClientException) {
             return e.error
         }

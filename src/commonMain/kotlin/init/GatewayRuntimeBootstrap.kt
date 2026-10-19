@@ -29,10 +29,18 @@ object GatewayRuntimeBootstrap {
         ctx.getOrNull(setting.SettingDefinitionRegistry::class)?.register(setting.GatewaySettingKeys.definitions)
         logic.NetGuard.checkLegacyTrustedProxies(neton.core.config.getEnv(logic.NetGuard.ENV_TRUSTED_PROXIES))
         // 渠道客户端按需创建（各自的代理与超时），一律是受控客户端：地址来自后台运行期数据。
-        logic.RelayEngine.guardedClients = ctx.getOrNull(neton.http.client.GuardedHttpClientProvider::class) ?: error(
+        val guarded = ctx.getOrNull(neton.http.client.GuardedHttpClientProvider::class) ?: error(
             "module-gateway needs a GuardedHttpClientProvider bound in NetonContext (module-system binds it from " +
                 "application.conf [egress]; it must initialize before module-gateway).",
         )
+        logic.RelayEngine.guardedClients = guarded
+        // 渠道客户端缓存：渠道改 / 删 / 停用即退役（ChannelLogic），空闲超时与超额回收，进程停止时全部关闭。
+        val channelClients = logic.RelayEngine.channelClientCache(guarded)
+        logic.RelayEngine.channelClients = channelClients
+        ctx.lifecycle.register("gateway-channel-http-clients", object : neton.core.component.NetonLifecycle {
+            override suspend fun start() = Unit
+            override suspend fun stop() = channelClients.close()
+        })
         // 价目表同步的地址来自部署环境变量，用应用的普通客户端。
         logic.RelayEngine.deployConfigClients = ctx.getOrNull(neton.http.client.HttpClientProvider::class) ?: error(
             "module-gateway needs an HttpClientProvider bound in NetonContext. Bind one in the application: " +

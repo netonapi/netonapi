@@ -4,8 +4,6 @@ import neton.core.http.HttpHeaders
 
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.channels.produce
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.contentOrNull
@@ -37,7 +35,7 @@ import kotlin.random.Random
 
 /**
  * 中转引擎（M1b）：同协议透传改写 → 渠道路由重试 → 直通/计费/日志。
- * 每请求由 RelayController 构造（controller 每请求实例化），渠道 HTTP client 缓存在 companion。
+ * 每请求由 RelayController 构造（controller 每请求实例化），渠道 HTTP client 缓存在 companion（[ChannelClientCache]，会驱逐与回收）。
  */
 class RelayEngine(
     private val log: Logger,
@@ -450,10 +448,25 @@ class RelayEngine(
         group: String,
         groupSource: GroupSource,
         startMs: Long,
+    ): RelayOutcome = withChannelClient(channel) { client ->
+        executeOn(client, ctx, channel, keyId, apiKey, transform, path, token, group, groupSource, startMs)
+    }
+
+    private suspend fun executeOn(
+        client: HttpClient,
+        ctx: HttpContext,
+        channel: Channel,
+        keyId: Long,
+        apiKey: String,
+        transform: RelayTransform,
+        path: String,
+        token: GatewayToken,
+        group: String,
+        groupSource: GroupSource,
+        startMs: Long,
     ): RelayOutcome {
         val rewritten = transform.rewritten
         val upstream = transform.upstream
-        val client = clientFor(channel)
         // 同协议时把客户端的 beta 头带给上游：Claude Code 靠 anthropic-beta 开 interleaved-thinking、
         // 1M 上下文、细粒度工具流等能力，丢了它请求会以另一种形状被服务。跨协议没有对应物，不带。
         val betaHeaders = if (transform.inbound.id == upstream.id) {
@@ -958,9 +971,6 @@ class RelayEngine(
         /** JSON 解析用的哑渠道（rewrite 首过只取 model/stream）。 */
         private val DUMMY = Channel(id = 0, name = "", type = "", baseUrl = "")
 
-        private val clientMutex = Mutex()
-        private val clients = mutableMapOf<String, HttpClient>()
-
         /**
          * 受控出站客户端的来源：由 [init.GatewayRuntimeBootstrap] 从 `NetonContext` 取（module-system 按
          * application.conf `[egress]` 绑定一次）。渠道的 baseUrl / proxyUrl、服务账号的 token_uri 都是后台
@@ -973,22 +983,28 @@ class RelayEngine(
         /** 价目表同步（地址来自部署环境变量 NEWGATE_PRICE_SYNC_URL）用的普通客户端来源；渠道流量绝不用它。 */
         var deployConfigClients: HttpClientProvider? = null
 
-        /** 渠道 client 缓存：key 含影响连接行为的字段；渠道配置变更后 key 变化自然重建。 */
-        suspend fun clientFor(channel: Channel): HttpClient {
-            val provider = guardedClients ?: error(
+        /**
+         * 渠道客户端缓存（[init.GatewayRuntimeBootstrap] 用 [guardedClients] 建、进程停止时关）。客户端只能经
+         * [withChannelClient] 借用：渠道被改 / 删 / 停用时旧客户端退役，在用的请求归还后才关闭。
+         */
+        var channelClients: ChannelClientCache? = null
+
+        /** [guarded] 建渠道客户端的缓存：渠道各自的代理与超时，一律受控（地址是后台运行期数据）。 */
+        fun channelClientCache(guarded: GuardedHttpClientProvider): ChannelClientCache = ChannelClientCache(create = { channel ->
+            guarded.create {
+                connectMillis = 5_000
+                requestMillis = 600_000               // 长流总上限 10 分钟
+                socketMillis = channel.idleTimeoutMs  // 块间空闲超时
+                proxyUrl = channel.proxyUrl
+            }
+        })
+
+        /** 借 [channel] 的受控客户端执行 [block]（转发、探测、拉模型、能力校验）。 */
+        suspend fun <T> withChannelClient(channel: Channel, block: suspend (HttpClient) -> T): T {
+            val cache = channelClients ?: error(
                 "gateway needs a GuardedHttpClientProvider bound in NetonContext (module-system binds it from [egress]).",
             )
-            val key = "${channel.id}|${channel.proxyUrl ?: ""}|${channel.ttfbTimeoutMs}|${channel.idleTimeoutMs}"
-            clientMutex.withLock {
-                return clients.getOrPut(key) {
-                    provider.create {
-                        connectMillis = 5_000
-                        requestMillis = 600_000               // 长流总上限 10 分钟
-                        socketMillis = channel.idleTimeoutMs  // 块间空闲超时
-                        proxyUrl = channel.proxyUrl
-                    }
-                }
-            }
+            return cache.use(channel, block)
         }
     }
 }

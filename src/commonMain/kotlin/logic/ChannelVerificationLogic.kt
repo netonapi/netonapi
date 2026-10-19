@@ -91,10 +91,12 @@ class ChannelVerificationLogic(private val log: Logger, private val channelLogic
             val path = RelayEngine.upstreamPathFor(upstream, channel, "/v1/chat/completions", upstreamModel, stream = false)
             val url = channel.baseUrl.trimEnd('/') + path
             val headers = upstream.requestHeaders(key.apiKey, "POST", url, body, channel)
-            val res = RelayEngine.clientFor(channel).request(HttpClientRequest(
-                method = HttpClientMethod.Post, url = url,
-                headers = HttpHeaders.from(headers), body = HttpClientBody.Json(body),
-            ))
+            val res = RelayEngine.withChannelClient(channel) {
+                it.request(HttpClientRequest(
+                    method = HttpClientMethod.Post, url = url,
+                    headers = HttpHeaders.from(headers), body = HttpClientBody.Json(body),
+                ))
+            }
             (res.statusCode in 200..299) to (if (res.statusCode in 200..299) null else "HTTP ${res.statusCode}: ${res.body.take(400)}")
         }.getOrElse { e ->
             val detail = when (e) {

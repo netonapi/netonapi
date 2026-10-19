@@ -126,7 +126,7 @@ class ChannelController(
     /**
      * 上游地址的写入时校验（快速反馈）：与请求时的受控客户端用**同一个**运维出站策略（application.conf
      * `[egress]`）和同一个解析器，拒绝指向回环 / 内网 / 链路本地（含云元数据 169.254.169.254）、端口不在放行
-     * 列表、解析不出的地址；代理地址按代理规则（地址，端口不限）。强制点在请求时（[logic.RelayEngine.clientFor]），
+     * 列表、解析不出的地址；代理地址按代理规则（地址，端口不限）。强制点在请求时（[logic.RelayEngine.withChannelClient]），
      * 写库绕过本接口的渠道、之后改了 DNS 的域名一样被挡在连接前。自托管连内网上游由运维在部署配置里放行。
      */
     private suspend fun requireSafeUrls(baseUrl: String, proxyUrl: String?) {

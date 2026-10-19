@@ -14,10 +14,15 @@ class ChannelLogic(private val log: Logger) {
 
     suspend fun get(id: Long): Channel? = ChannelTable.get(id)
 
-    suspend fun update(channel: Channel) { ChannelTable.update(channel) }
+    /** 改渠道（地址、代理、超时都可能变）：缓存的客户端随即退役，下一次请求按新配置建。 */
+    suspend fun update(channel: Channel) {
+        ChannelTable.update(channel)
+        RelayEngine.channelClients?.evict(channel.id)
+    }
 
     suspend fun delete(id: Long) {
         ChannelTable.destroy(id)
+        RelayEngine.channelClients?.evict(id)
         log.info("gateway channel deleted id=$id")
     }
 
@@ -26,9 +31,11 @@ class ChannelLogic(private val log: Logger) {
     suspend fun listEnabled(): List<Channel> =
         ChannelTable.query { where { Channel::status eq 1 } }.list()
 
+    /** 停用 / 挂起（status ≠ 1）的渠道不再有流量：客户端随即退役，不等空闲回收。 */
     suspend fun updateStatus(id: Long, status: Int) {
         val current = get(id) ?: return
         ChannelTable.update(current.copy(status = status))
+        if (status != 1) RelayEngine.channelClients?.evict(id)
     }
 
     // ===== Key 管理 =====
