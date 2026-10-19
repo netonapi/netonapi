@@ -20,7 +20,17 @@ data class PriceImportItem(
 )
 
 @Serializable
-data class PriceImportResult(val created: Int, val updated: Int, val skipped: Int, val errors: List<String> = emptyList())
+data class PriceImportResult(
+    val created: Int,
+    val updated: Int,
+    val skipped: Int,
+    val errors: List<String> = emptyList(),
+    /**
+     * 因为「新官方价 + 已有的售价设置」会亏本而没更新的模型。官方涨价、而这个模型的售价是写死的，
+     * 直接覆盖就是亏本卖 —— 留着旧价，等运营在价格页调完售价再同步。
+     */
+    val heldForLoss: List<String> = emptyList(),
+)
 
 /**
  * 价目表导入：管理台粘贴、`POST /admin/gateway/price/sync`、定时任务 gateway-price-sync 三处共用。
@@ -32,38 +42,53 @@ data class PriceImportResult(val created: Int, val updated: Int, val skipped: In
 @neton.core.annotations.Logic(logger = "logic.gateway-price-import")
 class PriceImportLogic(private val log: Logger) {
 
-    suspend fun importItems(items: List<PriceImportItem>, overwrite: Boolean, source: String = "import"): PriceImportResult {
+    suspend fun importItems(items: List<PriceImportItem>, overwrite: Boolean, source: String = "import", operatorId: Long? = null): PriceImportResult {
         val errors = mutableListOf<String>()
+        val policy = PricingPolicy.current()
         val parsed = items.mapIndexedNotNull { i, item ->
             if (item.model.isBlank()) { errors += "#${i + 1}: model 为空"; return@mapIndexedNotNull null }
-            runCatching { toModelPrice(item.copy(model = item.model.trim())).also { SalePricing.requireMargin(it) } }
+            runCatching { toModelPrice(item.copy(model = item.model.trim())).also { SalePricing.requireMargin(it, policy.markup, policy.minMargin) } }
                 .onFailure { errors += "#${i + 1} ${item.model}: ${it.message ?: it::class.simpleName}" }
                 .getOrNull()
         }
         if (errors.isNotEmpty()) return PriceImportResult(0, 0, 0, errors)
         var created = 0; var updated = 0; var skipped = 0
+        val held = mutableListOf<String>()
         // 价目表几百行，逐条查库是几百次往返；一次读全表建 model → 行的索引（定价表本身就是小表）
         val existing = ModelPriceTable.findAll().associateBy { it.model }
         for (price in parsed.distinctBy { it.model }) {
             val current = existing[price.model]
             when {
-                current == null -> { ModelPriceTable.insert(price.copy(source = source)); created++ }
+                current == null -> {
+                    val saved = ModelPriceTable.insert(price.copy(source = source))
+                    PriceHistoryLogic.record(source, null, saved, operatorId)
+                    created++
+                }
                 !overwrite -> skipped++
                 else -> {
-                    ModelPriceTable.update(current.copy(
+                    val merged = current.copy(
                         inputPrice = price.inputPrice, outputPrice = price.outputPrice,
                         cacheReadPrice = price.cacheReadPrice, cacheWritePrice = price.cacheWritePrice,
                         perRequestPrice = price.perRequestPrice ?: current.perRequestPrice,
                         defaultMaxOutputTokens = price.defaultMaxOutputTokens ?: current.defaultMaxOutputTokens,
                         saleOverride = price.saleOverride ?: current.saleOverride,
                         source = source,
-                    ))
+                    )
+                    // 上面校验的是导入条目本身（它通常不带售价设置）；真正要写进去的是「新官方价 + 旧售价设置」，
+                    // 这一行要再过一次毛利闸门，否则官方涨价时写死的售价会悄悄变成亏本价
+                    if (runCatching { SalePricing.requireMargin(merged, policy.markup, policy.minMargin) }.isFailure) {
+                        held += price.model
+                        continue
+                    }
+                    ModelPriceTable.update(merged)
+                    PriceHistoryLogic.record(source, current, merged, operatorId)
                     updated++
                 }
             }
         }
-        log.info("price import source=$source created=$created updated=$updated skipped=$skipped")
-        return PriceImportResult(created, updated, skipped)
+        if (held.isNotEmpty()) log.warn("price import held models whose sale price would fall below cost: ${held.joinToString(",")}")
+        log.info("price import source=$source created=$created updated=$updated skipped=$skipped held=${held.size}")
+        return PriceImportResult(created, updated, skipped, heldForLoss = held)
     }
 
     /** 从 NEWGATE_PRICE_SYNC_URL 拉价目表并导入；未配置返回 null。 */

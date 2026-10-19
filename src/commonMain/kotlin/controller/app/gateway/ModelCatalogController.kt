@@ -45,12 +45,13 @@ class ModelCatalogController(private val channelLogic: ChannelLogic) {
         }
         val servable = capsByModel.keys
         if (servable.isEmpty()) return emptyList()
+        val markup = logic.PricingPolicy.current().markup
         return ModelPriceTable.query { orderBy(ModelPrice::model.asc()) }.list()
             .filter { it.model in servable }
             .map {
                 // 展示售价轨（saleOverride 或官方价 × 全局加价率）——用户看到的就是会被扣的价，
                 // 官方成本价属运营内部信息，不外露。坏价模型降级展示官方价，不整个列表 500。
-                val sale = runCatching { logic.SalePricing.resolve(it) }.getOrDefault(it)
+                val sale = runCatching { logic.SalePricing.resolve(it, markup) }.getOrDefault(it)
                 PublicModelVO(
                     model = it.model,
                     inputPrice = sale.inputPrice,

@@ -27,6 +27,8 @@ object GatewayRuntimeBootstrap {
     fun initialize(ctx: NetonContext) {
         // 本模块的全局设置定义登记进注册表，后台可见可改
         ctx.getOrNull(setting.SettingDefinitionRegistry::class)?.register(setting.GatewaySettingKeys.definitions)
+        // 加价率、最低毛利改在后台配置；定价策略从这里读（带短缓存，见 PricingPolicy）
+        logic.PricingPolicy.settings = ctx.getOrNull(logic.SystemSettingLogic::class)
         logic.NetGuard.checkLegacyTrustedProxies(neton.core.config.getEnv(logic.NetGuard.ENV_TRUSTED_PROXIES))
         // 渠道客户端按需创建（各自的代理与超时），一律是受控客户端：地址来自后台运行期数据。
         val guarded = ctx.getOrNull(neton.http.client.GuardedHttpClientProvider::class) ?: error(

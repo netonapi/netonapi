@@ -15,7 +15,8 @@ import neton.core.http.ValidationException
  *
  * 两条轨道必须分清，否则毛利无从核算：
  *  - **成本轨** = 模型官方价 × 渠道折扣（`gateway_model_prices` 存的就是官方价）；
- *  - **售价轨** = `saleOverride` 逐字段覆盖，缺省字段 = 官方价 × 全局加价率（`NEWGATE_SALE_MARKUP`）。
+ *  - **售价轨** = `saleOverride` 逐字段覆盖，缺省字段 = 官方价 × 加价率。加价率优先取本模型的
+ *    `saleOverride.markup`，没有就用全站加价率（后台配置 `gateway.pricing.markup`，见 [PricingPolicy]）。
  *
  * reserve 与 finalize 全按售价轨收钱、按成本轨记账。充值赠送/返利只动钱包台账，
  * 绝不进请求计价——每一笔毛利都必须能从快照解释出来。
@@ -25,7 +26,7 @@ object SalePricing {
     const val ENV_MARKUP = "NEWGATE_SALE_MARKUP"
     const val ENV_MIN_MARGIN = "NEWGATE_MIN_MARGIN"
 
-    /** 全局加价倍率（decimal 串，(0,100]）；未配置 = "1"。配置非法直接抛——账务不允许静默猜价。 */
+    /** 环境变量里的全局加价倍率（decimal 串，(0,100]）；未配置 = "1"。运行时以 [PricingPolicy] 为准，这里只是它的默认值来源。 */
     fun markup(): String = ratioEnv(ENV_MARKUP) ?: "1"
 
     /** 毛利下限倍率（decimal 串，(0,100]）；未配置 = "1"，即售价不得低于官方成本。 */
@@ -45,10 +46,12 @@ object SalePricing {
         PricingCalc.requirePrice(official.cacheReadPrice, "cacheReadPrice")
         PricingCalc.requirePrice(official.cacheWritePrice, "cacheWritePrice")
         val o = parseOverride(official.saleOverride)
+        // 本模型单独的加价率优先于全站加价率：运营最常做的是「这个模型多加/少加一点」，不是逐项填价
+        val effective = modelMarkup(o) ?: markup
         fun field(key: String, officialValue: String): String =
             o?.get(key)?.jsonPrimitive?.contentOrNull
                 ?.let { PricingCalc.requirePrice(it, "saleOverride.$key") }
-                ?: PricingCalc.scalePrice(officialValue, markup)
+                ?: PricingCalc.scalePrice(officialValue, effective)
         // perRequest：override 显式给 null = 关闭按次计价；未给该键 = 官方按次价 × 加价率
         val perRequest = if (o != null && o.containsKey("perRequest")) {
             val p = o["perRequest"]?.jsonPrimitive
@@ -56,7 +59,7 @@ object SalePricing {
             if (p is JsonNull) null
             else p.longOrNull?.takeIf { it >= 0 }
                 ?: rejectField("saleOverride.perRequest", GatewayErrorCodes.SALE_PER_REQUEST_INVALID)
-        } else official.perRequestPrice?.let { scaleMicro(it, markup) }
+        } else official.perRequestPrice?.let { scaleMicro(it, effective) }
         return ModelPrice(
             model = official.model,
             inputPrice = field("input", official.inputPrice),
@@ -75,9 +78,8 @@ object SalePricing {
      * 折扣 >1 的渠道（转售加价）与倍率 <1 的用户组会把毛利压穿，由运行时 margin inversion
      * 告警兜底（见 RelayEngine.bill）——闸门挡的是「配错价」，不是「经营策略」。
      */
-    fun requireMargin(price: ModelPrice) {
-        val sale = resolve(price)
-        val floor = minMargin()
+    fun requireMargin(price: ModelPrice, markup: String = markup(), floor: String = minMargin()) {
+        val sale = resolve(price, markup)
         fun check(saleMicro: Long, officialMicro: Long, field: String) {
             if (saleMicro < scaleMicro(officialMicro, floor))
                 rejectField(field, GatewayErrorCodes.SALE_PRICE_BELOW_COST_FLOOR)
@@ -91,7 +93,24 @@ object SalePricing {
         if (sp != null && op != null) check(sp, op, "saleOverride.perRequest")
     }
 
-    private fun scaleMicro(micro: Long, ratio: String): Long {
+    /** `saleOverride.markup`：本模型的加价率；没设返回 null（跟随全站）。非法直接拒绝。 */
+    private fun modelMarkup(o: JsonObject?): String? =
+        o?.get("markup")?.jsonPrimitive?.contentOrNull?.let { PricingCalc.requireRatio(it, "saleOverride.markup") }
+
+    /** 这一行用的是哪种售价方式，给管理台展示。 */
+    enum class Mode { FOLLOW, MODEL_MARKUP, CUSTOM }
+
+    fun mode(price: ModelPrice): Mode {
+        val o = parseOverride(price.saleOverride) ?: return Mode.FOLLOW
+        val fixed = listOf("input", "output", "cacheRead", "cacheWrite", "perRequest").any { o.containsKey(it) }
+        return when {
+            fixed -> Mode.CUSTOM
+            o.containsKey("markup") -> Mode.MODEL_MARKUP
+            else -> Mode.FOLLOW
+        }
+    }
+
+    fun scaleMicro(micro: Long, ratio: String): Long {
         val r = PricingCalc.parseRatio(ratio).toLong()
         if (micro == 0L || r == 0L) return 0
         val prod = micro * r

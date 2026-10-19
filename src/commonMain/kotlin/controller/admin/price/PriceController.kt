@@ -27,11 +27,34 @@ data class SavePriceRequest(
 data class PriceImportRequest(val items: List<SavePriceRequest>, val overwrite: Boolean = true)
 
 @Controller("/gateway/price")
-class PriceController(private val importLogic: logic.PriceImportLogic) {
+class PriceController(
+    private val importLogic: logic.PriceImportLogic,
+    private val checkLogic: logic.PricingCheckLogic,
+    private val calibrationLogic: logic.PriceCalibrationLogic,
+) {
 
     @Get("/list")
     @Permission("gateway:price:query")
     suspend fun list(): List<ModelPrice> = ModelPriceTable.findAll()
+
+    /**
+     * 定价体检：每个模型在所有实际可能发生的「分组 × 渠道」组合里，最差的毛利是多少、有没有亏本。
+     * 见 [logic.PricingCheckLogic]。
+     */
+    @Get("/check")
+    @Permission("gateway:price:query")
+    suspend fun check(): logic.PricingCheckResult = checkLogic.check()
+
+    /** 校准官方价·预览：拉价源，逐个比对我们的官方价，列出差异与渠道已承载但没定价的模型。不写库。 */
+    @Get("/calibrate/preview")
+    @Permission("gateway:price:query")
+    suspend fun calibratePreview(): logic.CalibrationPreview = calibrationLogic.preview()
+
+    /** 校准官方价·应用：只写勾选的模型；整批校验与毛利闸门同批量导入。 */
+    @Post("/calibrate/apply")
+    @Permission("gateway:price:update")
+    suspend fun calibrateApply(@Body request: logic.CalibrationApplyRequest, identity: neton.core.interfaces.Identity): logic.PriceImportResult =
+        calibrationLogic.apply(request.models, identity.id.toLongOrNull())
 
     @Get("/get/{id}")
     @Permission("gateway:price:query")
@@ -44,40 +67,53 @@ class PriceController(private val importLogic: logic.PriceImportLogic) {
 
     @Post("/create")
     @Permission("gateway:price:create")
-    suspend fun create(@Body request: SavePriceRequest): Long {
+    suspend fun create(@Body request: SavePriceRequest, identity: neton.core.interfaces.Identity): Long {
         val price = toModelPrice(request)
-        logic.SalePricing.requireMargin(price)
-        return ModelPriceTable.insert(price).id
+        requireMargin(price)
+        val saved = ModelPriceTable.insert(price)
+        logic.PriceHistoryLogic.record("create", null, saved, identity.id.toLongOrNull())
+        return saved.id
     }
 
     @Put("/update")
     @Permission("gateway:price:update")
-    suspend fun update(@Body request: SavePriceRequest) {
+    suspend fun update(@Body request: SavePriceRequest, identity: neton.core.interfaces.Identity) {
         val current = ModelPriceTable.get(request.id)
             ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.PRICE_NOT_FOUND)
-        val price = toModelPrice(request)
-        logic.SalePricing.requireMargin(price)
-        ModelPriceTable.update(current.copy(
+        // 请求里没带 saleOverride（老前端、只改官方价的表单）= 保留原来的售价设置；传空串才是清除。
+        // 以前这里直接写 null，管理台改一次官方价，单独设的售价就悄悄没了。
+        val price = toModelPrice(request).let { p ->
+            if (request.saleOverride == null) p.copy(saleOverride = current.saleOverride) else p
+        }
+        requireMargin(price)
+        val next = current.copy(
             model = price.model,
             inputPrice = price.inputPrice, outputPrice = price.outputPrice,
             cacheReadPrice = price.cacheReadPrice, cacheWritePrice = price.cacheWritePrice,
             perRequestPrice = price.perRequestPrice, defaultMaxOutputTokens = price.defaultMaxOutputTokens,
             saleOverride = price.saleOverride,
-        ))
+        )
+        ModelPriceTable.update(next)
+        logic.PriceHistoryLogic.record("update", current, next, identity.id.toLongOrNull())
     }
 
     /** 官方价（成本轨）+ 售价覆盖；售价低于毛利底线由 [logic.SalePricing.requireMargin] 拒绝。 */
     /** 批量导入：见 [logic.PriceImportLogic]。 */
     @Post("/import")
     @Permission("gateway:price:create")
-    suspend fun import(@Body request: PriceImportRequest): logic.PriceImportResult =
-        importLogic.importItems(request.items.map { toItem(it) }, request.overwrite)
+    suspend fun import(@Body request: PriceImportRequest, identity: neton.core.interfaces.Identity): logic.PriceImportResult =
+        importLogic.importItems(request.items.map { toItem(it) }, request.overwrite, operatorId = identity.id.toLongOrNull())
 
     /** 立即从 NEWGATE_PRICE_SYNC_URL 拉一次价目表（定时任务 gateway-price-sync 每天也会做）。 */
     @Post("/sync")
     @Permission("gateway:price:create")
     suspend fun sync(): logic.PriceImportResult = importLogic.syncFromEnv()
         ?: throw HttpException(NetonErrorCode.OPERATION_NOT_ALLOWED, GatewayErrorCodes.PRICE_SYNC_NOT_CONFIGURED)
+
+    private suspend fun requireMargin(price: ModelPrice) {
+        val policy = logic.PricingPolicy.current()
+        logic.SalePricing.requireMargin(price, policy.markup, policy.minMargin)
+    }
 
     private fun toItem(r: SavePriceRequest) = logic.PriceImportItem(
         model = r.model, inputPrice = r.inputPrice, outputPrice = r.outputPrice,
@@ -91,11 +127,20 @@ class PriceController(private val importLogic: logic.PriceImportLogic) {
         outputPrice = logic.PricingCalc.requirePrice(request.outputPrice, "outputPrice"),
         cacheReadPrice = logic.PricingCalc.requirePrice(request.cacheReadPrice, "cacheReadPrice"),
         cacheWritePrice = logic.PricingCalc.requirePrice(request.cacheWritePrice, "cacheWritePrice"),
-        perRequestPrice = request.perRequestPrice, saleOverride = request.saleOverride,
+        perRequestPrice = request.perRequestPrice, saleOverride = request.saleOverride?.trim()?.takeIf { it.isNotEmpty() },
         defaultMaxOutputTokens = request.defaultMaxOutputTokens?.takeIf { it > 0 },
     )
 
     @Delete("/delete/{id}")
     @Permission("gateway:price:delete")
-    suspend fun delete(@PathVariable id: Long) { ModelPriceTable.destroy(id) }
+    suspend fun delete(@PathVariable id: Long, identity: neton.core.interfaces.Identity) {
+        val current = ModelPriceTable.get(id) ?: return
+        ModelPriceTable.destroy(id)
+        logic.PriceHistoryLogic.record("delete", current, null, identity.id.toLongOrNull())
+    }
+
+    /** 某个模型的调价记录（最近 50 条）。 */
+    @Get("/history")
+    @Permission("gateway:price:query")
+    suspend fun history(@Query model: String): List<model.PriceHistory> = logic.PriceHistoryLogic.list(model)
 }

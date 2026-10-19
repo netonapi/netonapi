@@ -24,6 +24,7 @@ class TokenLogic(private val log: Logger) {
         tpmLimit: Int? = null,
         concurrencyLimit: Int? = null,
     ): IssuedToken {
+        val group = liveGroupOrNull(groupOverride)
         val plaintext = generateKey()
         val record = GatewayTokenTable.insert(
             GatewayToken(
@@ -31,7 +32,7 @@ class TokenLogic(private val log: Logger) {
                 keyHash = hashKey(plaintext), keyDisplay = display(plaintext),
                 quotaBudget = quotaBudget, expiresAt = expiresAt,
                 allowedModels = allowedModels, allowedIps = allowedIps,
-                groupOverride = groupOverride,
+                groupOverride = group,
                 rpmLimit = rpmLimit, tpmLimit = tpmLimit, concurrencyLimit = concurrencyLimit,
             )
         )
@@ -51,6 +52,24 @@ class TokenLogic(private val log: Logger) {
 
     suspend fun listByUser(userId: Long): List<GatewayToken> =
         GatewayTokenTable.query { where { GatewayToken::userId eq userId } }.list()
+
+    /**
+     * 运营给某个令牌指定专属计费组（优先级最高，见 BillingGroupResolver）。空 = 取消，回到用户/会员组的定价。
+     * 组必须存在：指向不存在的组会让这个令牌每次请求都 500（CONFIG_BROKEN），不如在写入时就拒绝。
+     */
+    suspend fun updateGroup(id: Long, groupCode: String?) {
+        val current = GatewayTokenTable.get(id) ?: return
+        GatewayTokenTable.update(current.copy(groupOverride = liveGroupOrNull(groupCode)))
+    }
+
+    /** 空 → null；非空必须是存在的计费组，否则拒绝（悬空组让这个令牌每次请求都 500）。 */
+    private suspend fun liveGroupOrNull(groupCode: String?): String? {
+        val code = groupCode?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        if (table.GatewayGroupTable.oneWhere { model.GatewayGroup::code eq code } == null) {
+            rejectField("groupCode", GatewayErrorCodes.GROUP_CODE_UNKNOWN)
+        }
+        return code
+    }
 
     suspend fun updateStatus(id: Long, status: Int) {
         val current = GatewayTokenTable.get(id) ?: return

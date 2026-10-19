@@ -39,7 +39,7 @@
 ## 已知边界/待办
 
 - SecureRandom：v1 令牌用 kotlin.random，安全强化列 M5
-- 价源同步（litellm/openrouter）与变价审计表：M3
+- 价源校准（LiteLLM / OpenRouter / 自定义）与调价记录表 `gateway_price_history`（V018）：已落地，见下文「定价管理」
 - 兑换码：M4
 
 ## 中转引擎（M1b 已落地）
@@ -52,7 +52,7 @@
 - 错误：OpenAI error 格式；429 insufficient_quota（对齐 OpenAI 语义，HttpStatus 无 402）/ 503 no_available_channel /
   上游 4xx body 语义透传（擦除上游 headers）；message 经 JsonPrimitive 转义
 - 计费：以上游 usage 为准（流式靠 include_usage 尾包）；无 usage 记 partial 计零（M3 收紧为估算）；
-  未定价模型放行计零并 warn（M3 加兜底策略配置）
+  未定价模型一律拒绝（`model_not_priced`），不再放行计零
 - E2E 已验证（python 假上游）：模型映射/未知字段保真/SSE 逐块直通/[DONE] 透传/charged=7500·cost=4500 精确命中/
   台账关联 usage:id/上游宕机 503/余额耗尽 429
 
@@ -124,6 +124,20 @@
   含经 hub 免费组合的 Gemini↔Anthropic 双跳。embeddings 目前仅 openai 透传。
 - （历史勘误：曾误将 Gemini 入站失败归为「框架 URI 损坏/sqlx4k 堆损坏」，实为测试脚本 zsh
   `$m:generateContent` 参数修饰符展开把 URL 改坏；服务端从无此问题。用 `${m}:...` 即正常。）
+
+## 定价管理（2026-10-20）
+
+- 全站加价率 / 最低毛利改为配置项 `gateway.pricing.markup` / `gateway.pricing.min_margin`（默认取 `NEWGATE_SALE_MARKUP` / `NEWGATE_MIN_MARGIN`），
+  `PricingPolicy` 缓存 10 秒。单模型加价率写在 `sale_override.markup`；固定售价字段优先于加价率。
+- 成本按实际打给上游的模型计（`RelayEngine.costBasisFor`）：渠道 `model_mapping` 的目标有价格行就用它，否则用请求模型。
+- `PUT /price/update` 不带 `saleOverride` = 保留原售价设置，传空串才清除（此前改官方价会把售价设置冲掉）。
+- 导入 / 同步 / 校准对「新官方价 + 已有售价设置」再过一次毛利闸门，不过的行扣下不写，结果里 `heldForLoss` 列出。
+- `GET /price/check`（`PricingCheckLogic`）：按渠道 `groups` 枚举真会发生的「分组 × 渠道」组合，算实收（售价 × 分组倍率）
+  与成本（上游模型官方价 × 渠道折扣），每个模型给出最差组合与 LOSS / THIN / OK / UNSERVED。
+- `GET /price/calibrate/preview`、`POST /price/calibrate/apply`（`PriceCalibrationLogic`）：价源格式 `gateway.pricing.source_format`，
+  地址 `gateway.pricing.source_url`；先精确匹配模型名，再按去掉厂商前缀的名字匹配；价源没给的字段保留现值；应用时重新拉价源，不信前端回传。
+- 概览新增按分组收入/成本、渠道收入，以及统计期内 `cost > charged` 的请求数与亏损额。令牌可经 `PUT /token/update-group` 设专属分组（须是存在的分组）。
+- harness：S88 体检与单模型加价率、S89 校准、S90 利润看板与令牌分组。
 
 ## M3-a：渠道容错（自动禁用 + 恢复，已落地）
 

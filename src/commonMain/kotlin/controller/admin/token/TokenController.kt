@@ -83,6 +83,12 @@ class TokenController(private val tokenLogic: TokenLogic) {
     suspend fun updateStatus(@Query id: Long, @Query status: Int) =
         tokenLogic.updateStatus(id, status)
 
+    /** 设置令牌的专属计费组；groupCode 留空 = 取消。 */
+    @Put("/update-group")
+    @Permission("gateway:token:update")
+    suspend fun updateGroup(@Query id: Long, @Query groupCode: String? = null) =
+        tokenLogic.updateGroup(id, groupCode)
+
     @Delete("/delete/{id}")
     @Permission("gateway:token:delete")
     suspend fun delete(@PathVariable id: Long) = tokenLogic.delete(id)
