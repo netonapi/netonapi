@@ -24,7 +24,7 @@ import bridge.GatewayQuotaRechargeRefundedListener
 import bridge.GatewayQuotaRechargeClosedListener
 import bridge.PayRechargeOrderBridge
 import channel.PayCallbackUrl
-import channel.PayPlatformRegistry
+import channel.PayCallbackHooks
 import channel.payNotifyUrlOf
 import job.PAY_RECONCILE_JOB_ID
 import logic.MemberDirectoryPort
@@ -66,8 +66,9 @@ fun main(args: Array<String>) {
         configRegistry(GeneratedNetonConfigRegistry)
 
         // ====== 出站 HTTP 客户端：应用创建、应用绑定、应用关闭 ======
-        // 借用方：module-system（短信）、module-payment（支付平台回调）、
-        // module-gateway（渠道客户端 —— 按各渠道自己的代理与超时，走下面的 provider 建）。
+        // 这里的普通客户端只给**地址写在部署配置里**的出站调用（人机验证、价目表同步）。
+        // 地址来自后台运行期数据的（短信 / 邮件渠道、支付平台网关、网关渠道）一律走受控客户端：
+        // module-system 按 application.conf [egress] 绑定 GuardedHttpClientProvider，经下面的 provider 建。
         //
         // 为什么由应用建而不是各模块自建：模块自建就得自带引擎，带引擎的模块一多，
         // 类路径上会出现多个 `create`。引擎是 neton-http 内置的（基于 netonstream io），
@@ -110,25 +111,25 @@ fun main(args: Array<String>) {
 
         // ====== 支付回调地址（module-payment 的 hook 由装配层给）======
         // 部署在哪个域名下是**部署事实**，payment 模块无从知道，所以它把 notifyUrlOf / returnUrlOf
-        // 留成默认空串的构造参数，等装配层填。此前没有任何地方 bind 过 PayPlatformRegistry，
-        // PaymentRuntimeBootstrap 于是静默回落到 `default(http)` —— 两个 hook 全空：
+        // 留成默认空串，等装配层经 PayCallbackHooks 填。不绑的话 PaymentRuntimeBootstrap 回落到两个 hook 全空：
         // 下单照样成功、支付照样到账（PayOrderReconcileJob 每十分钟查一次单兜底），
         // 只是渠道永不回调，而且用户付完停在渠道自己的页面上回不来。
         //
         // 必须在 bind 阶段就位：PaymentRuntimeBootstrap 在模块初始化（Neton.kt:320）里用 getOrNull
-        // 把注册表**读走一次**，晚一步就永远是 null（与下面邀请奖励注册表同一条时序）。
+        // 把 hook **读走一次**，晚一步就永远是 null（与下面邀请奖励注册表同一条时序）。
         // 两个值声明在这里而不是更靠后的 bind 区，是因为 onStart 要拿它们记日志 ——
         // lambda 捕获不到在它之后才声明的局部变量。
         //
-        // 平台清单不在这里重列，只把两个地址交给 PayPlatformRegistry.default：抄一份清单的话，
+        // 平台清单不在这里重列，只把两个地址交给 payment（它自己调 PayPlatformRegistry.default）：抄一份清单的话，
         // 日后 payment 多接一家支付公司，这份副本会静默过期 —— 表现是那家的渠道一律
         // 「不可用的支付通道」，而这条错误信息与「渠道被关了」完全一样。
         val notifyBase = PayCallbackUrl.of(neton.core.config.getEnv(ENV_PAY_NOTIFY_BASE))
         val returnUrl = PayCallbackUrl.of(neton.core.config.getEnv(ENV_PAY_RETURN_URL))
+        // 只给地址：平台请求用的受控出站客户端由 payment 自己按运维出站策略（application.conf [egress]）建，
+        // 渠道里的网关地址是后台数据，不能走这里的普通客户端。
         bind(
-            PayPlatformRegistry::class,
-            PayPlatformRegistry.default(
-                outboundHttp,
+            PayCallbackHooks::class,
+            PayCallbackHooks(
                 notifyUrlOf = payNotifyUrlOf(notifyBase.value),
                 // return_url 与渠道无关（付完都回控制台账单页），所以忽略入参。
                 // 订单号不用带在地址里：渠道回跳时会附上自己的商户单号（我们的 rechargeId 就在里面）。
