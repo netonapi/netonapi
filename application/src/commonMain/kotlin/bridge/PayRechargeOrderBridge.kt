@@ -51,6 +51,9 @@ class PayRechargeOrderBridge : RechargeOrderPort {
                 price = price,
                 channelCode = channelCode,
                 userIp = userIp,
+                // 不设就永不过期：单子一直挂在待支付，对账任务每十分钟去平台查一遍。
+                // 支付宝下单会带上同一时刻作为 time_expire，过期后收银台也不让付了。
+                expireTime = kotlin.time.Clock.System.now().toEpochMilliseconds() + ORDER_TTL_MILLIS,
             )
         )
         // displayMode 传枚举名而不是枚举本身：gateway 不 import payment 的 PayDisplayMode。
@@ -62,5 +65,10 @@ class PayRechargeOrderBridge : RechargeOrderPort {
             payload = prepay.payload,
             channelOrderNo = prepay.channelOrderNo,
         )
+    }
+
+    companion object {
+        /** 充值单有效期：够扫码付款，又不至于让废单长期占着对账。 */
+        const val ORDER_TTL_MILLIS = 30 * 60 * 1000L
     }
 }

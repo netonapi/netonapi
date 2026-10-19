@@ -20,6 +20,8 @@ import neton.security.security
 import neton.storage.storage
 import bridge.GatewayInviteRewardBridge
 import bridge.GatewayQuotaRechargePaidListener
+import bridge.GatewayQuotaRechargeRefundedListener
+import bridge.GatewayQuotaRechargeClosedListener
 import bridge.PayRechargeOrderBridge
 import channel.PayCallbackUrl
 import channel.PayPlatformRegistry
@@ -182,6 +184,20 @@ fun main(args: Array<String>) {
                 "用户付完停在渠道自己的页面上回不来，「跳出去 → 回来看到已到账」的体验不成立。",
             )
 
+            // 充值汇率：不设 = 充值功能整个不可用（每次下单 500），而下单要等用户真来点才会发现。
+            // 格式错是明确的配置错误，直接拒绝启动；没设则可能是有意不开放充值（只用兑换码），记 ERROR 不拦。
+            val rateRaw = neton.core.config.getEnv(QuotaRechargeLogic.ENV_QUOTA_PER_PRICE_UNIT)?.trim()
+            when {
+                rateRaw.isNullOrEmpty() -> payLog.error(
+                    "${QuotaRechargeLogic.ENV_QUOTA_PER_PRICE_UNIT} 未设置：充值功能不可用，用户每次下单都会失败。" +
+                        "要收钱就设成「每 1 单位支付金额（人民币为分）发放多少 μUSD 额度」的正整数。"
+                )
+                (rateRaw.toLongOrNull() ?: 0L) <= 0L -> error(
+                    "${QuotaRechargeLogic.ENV_QUOTA_PER_PRICE_UNIT} 必须是正整数（μUSD / 支付金额最小单位），当前是 '$rateRaw'"
+                )
+                else -> payLog.info("充值汇率 ${QuotaRechargeLogic.ENV_QUOTA_PER_PRICE_UNIT}=$rateRaw μUSD / 支付金额最小单位")
+            }
+
             // notify_url 没生效时（没配与写错两态 value 都是空串，见 PayCallbackUrl），到账只剩
             // 对账任务这一条路；而那条路在后台可以被停用 —— infra_jobs 是运行期调度真源，
             // 代码 @Job 只定义 handler。两条同时断掉的后果是「钱到账了、额度永远不发」，
@@ -213,6 +229,13 @@ fun main(args: Array<String>) {
             // 而事件总线在 :338 才 seal()，此刻登记监听者还来得及。
             ctx.get(DomainEventBus::class).register(
                 GatewayQuotaRechargePaidListener(ctx.get(QuotaRechargeLogic::class))
+            )
+            // 成对：退款时按比例扣回额度，否则「退了钱额度还在」
+            ctx.get(DomainEventBus::class).register(
+                GatewayQuotaRechargeRefundedListener(ctx.get(QuotaRechargeLogic::class))
+            )
+            ctx.get(DomainEventBus::class).register(
+                GatewayQuotaRechargeClosedListener(ctx.get(QuotaRechargeLogic::class))
             )
         }
 
