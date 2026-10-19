@@ -97,8 +97,9 @@ Configuration lives in `application/config/*.conf` (`application.conf`, `databas
 `routing.conf`, `storage.conf`, `geolite.conf`) and every value can be overridden by
 environment variables — `NETON_` prefix, `__` for a dot, path lowercased
 (`NETON_REDIS__HOST` → `redis.host`), plus `NEWGATE_*` for product knobs such as
-`NEWGATE_CHANNEL_KEY_ENC_KEY`, `NEWGATE_TRUSTED_PROXIES`, `NEWGATE_SALE_MARKUP` and
-`NEWGATE_MIN_MARGIN`. Only PostgreSQL is supported.
+`NEWGATE_CHANNEL_KEY_ENC_KEY`, `NEWGATE_SALE_MARKUP` and `NEWGATE_MIN_MARGIN`. Behind a
+reverse proxy set `NETON_ROUTING__RATELIMIT__TRUSTED_PROXIES` (e.g. `127.0.0.1,::1`) so rate
+limits, audit and token IP allowlists see the real client. Only PostgreSQL is supported.
 
 Route groups (see `application/config/routing.conf`):
 

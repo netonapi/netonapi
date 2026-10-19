@@ -87,7 +87,8 @@ Kotlin/Native 的测试任务只能在架构匹配的宿主上运行——Apple 
 配置在 `application/config/*.conf`（`application.conf`、`database.conf`、`routing.conf`、
 `storage.conf`、`geolite.conf`），每一项都能用环境变量覆盖——`NETON_` 前缀、`__` 表示点、路径小写
 （`NETON_REDIS__HOST` → `redis.host`）；产品自身的开关用 `NEWGATE_*`，如
-`NEWGATE_CHANNEL_KEY_ENC_KEY`、`NEWGATE_TRUSTED_PROXIES`、`NEWGATE_SALE_MARKUP`、`NEWGATE_MIN_MARGIN`。
+`NEWGATE_CHANNEL_KEY_ENC_KEY`、`NEWGATE_SALE_MARKUP`、`NEWGATE_MIN_MARGIN`。部署在反代之后须配
+`NETON_ROUTING__RATELIMIT__TRUSTED_PROXIES`（如 `127.0.0.1,::1`），限流、审计与令牌 IP 白名单才能拿到真实客户端。
 数据库只支持 PostgreSQL。
 
 路由组（见 `application/config/routing.conf`）：
