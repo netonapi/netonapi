@@ -44,6 +44,8 @@ envelope() {
 }
 
 export NETON_SECURITY__JWT__SECRETKEY="realm-e2e-only-jwt-secret-0123456789abcdef"
+# 验证码模拟通道只允许在显式声明的开发/测试环境里开启（SecuritySettings.requireSimulationAllowed）。
+export NETON_ENV=test
 export NETON_SECURITY__VERIFICATION__SIMULATE=true
 export NETON_SECURITY__VERIFICATION__RESEND_COOLDOWN_SECONDS=0
 export NETON_REDIS__PORT="$REDIS_PORT"
@@ -179,6 +181,26 @@ A1=$(admin_login admin admin12345 | json "['data']['accessToken']")
 A2=$(admin_login admin admin12345 | json "['data']['accessToken']")
 expect "管理员全端退出" "$(status POST /admin/system/auth/logout-all "$A1")" "200"
 expect "全端退出后其他会话也失效" "$(status GET /admin/system/user/profile/get "$A2")" "401"
+
+echo "[9] 请求体声明式校验必须执行（回归：多模块宿主里 account 的 DTO 注解曾被静默跳过）"
+PW_MOBILE="+8613900099003"
+PW_ACC=$(account_login "$PW_MOBILE" | json "['data']['accessToken']")
+pw_hash() { q "SELECT coalesce(password, '<null>') FROM account_users WHERE mobile = '$PW_MOBILE'"; }
+field_code() { python3 -c "import sys,json;d=json.load(sys.stdin);print(next((e.get('code') for e in (d.get('errors') or []) if e.get('field')==sys.argv[1]),''))" "$1" 2>/dev/null; }
+BEFORE=$(pw_hash)
+r=$(curl -s -w "\n%{http_code}" -X PUT "$U/app/member/user/update-password" -H "$CT" -H "Authorization: Bearer $PW_ACC" -d '{"newPassword":"abc"}')
+expect "过短新密码 → 400" "$(echo "$r" | tail -1)" "400"
+expect "过短新密码 → VALIDATION_FAILED" "$(echo "$r" | sed '$d' | json "['message']")" "VALIDATION_FAILED"
+expect "过短新密码 → newPassword TOO_SHORT" "$(echo "$r" | sed '$d' | field_code newPassword)" "TOO_SHORT"
+r=$(curl -s -w "\n%{http_code}" -X PUT "$U/app/member/user/update-password" -H "$CT" -H "Authorization: Bearer $PW_ACC" -d '{"newPassword":""}')
+expect "空新密码 → 400" "$(echo "$r" | tail -1)" "400"
+expect "空新密码 → newPassword REQUIRED" "$(echo "$r" | sed '$d' | field_code newPassword)" "REQUIRED"
+expect "被拒的改密请求没有改动密码" "$(pw_hash)" "$BEFORE"
+r=$(curl -s -w "\n%{http_code}" -X POST "$U/app/auth/login-username" -H "$CT" -d '{"username":"e2e_user","password":"abc"}')
+expect "用户名登录过短密码 → 400" "$(echo "$r" | tail -1)" "400"
+expect "用户名登录过短密码 → password TOO_SHORT" "$(echo "$r" | sed '$d' | field_code password)" "TOO_SHORT"
+expect "合法新密码可以设置" "$(status PUT /app/member/user/update-password "$PW_ACC" '{"newPassword":"newPassw0rd!"}')" "200"
+[ "$(pw_hash)" != "$BEFORE" ] && pass "合法改密写入了新密码" || fail "合法改密没有生效"
 
 echo
 echo "═══ 结果：$PASS passed, $FAIL failed ═══"
