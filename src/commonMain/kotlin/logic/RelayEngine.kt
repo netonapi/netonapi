@@ -786,21 +786,12 @@ class RelayEngine(
     /**
      * 客户端 IP（用于令牌 IP 白名单）。
      *
-     * 以**传输层对端** [neton.core.http.HttpRequest.peerAddress] 为起点，只有对端在
-     * `NEWGATE_TRUSTED_PROXIES` 名单内才采信 `X-Forwarded-For`；否则一个请求头就能伪造出
-     * 白名单里的 IP（`remoteAddress` 本身也会被 XFF 覆盖，不能当对端用）。剥链规则见
-     * [NetGuard.clientIp]。
+     * 用框架统一解析的 [neton.core.http.HttpRequest.clientAddress]：从传输层对端出发，只有对端在
+     * `routing.conf` 的 `ratelimit.trusted_proxies` 内才采信 `X-Forwarded-For`，从右往左剥掉可信跳。
+     * 限流、审计、白名单用同一个值，不再各自解析转发头。解析不出（`unknown`）时按 null 处理，白名单拒绝。
      */
-    private fun clientIp(ctx: HttpContext): String? = NetGuard.clientIp(
-        xff = ctx.request.header("X-Forwarded-For"),
-        realIp = ctx.request.header("X-Real-IP"),
-        peerAddress = ctx.request.peerAddress,
-        trustedProxies = trustedProxies(),
-    )
-
-    /** 可信代理名单（逗号分隔 IP / IPv4 CIDR）；未配置 = 不信任任何转发头。 */
-    private fun trustedProxies(): String =
-        neton.core.config.getEnv(NetGuard.ENV_TRUSTED_PROXIES)?.trim().orEmpty()
+    private fun clientIp(ctx: HttpContext): String? =
+        ctx.request.clientAddress.trim().takeIf { it.isNotEmpty() && it != "unknown" }
 
     /** 当前状态（RESERVED 或 UPSTREAM_STARTED）——释放时作为 CAS 的 from。 */
     private suspend fun bySettlementStatus(sid: String): String =

@@ -224,14 +224,12 @@
   未配置则明文直通（可先部署后启用）；配置后新写入加密、存量明文仍可读，无需停机迁移。管理台掩码前先解密。
 - **IP 白名单（此前只有字段无校验）**：`NetGuard.ipAllowed` 支持精确 IP 与 CIDR；取不到客户端 IP 即拒绝
   （白名单必须是「明确允许」）。
-- **客户端 IP 信任边界**：`X-Forwarded-For` / `X-Real-IP` 是客户端可控头，而框架的 `HttpRequest.remoteAddress`
-  本身就取 XFF 最左值——直接拿它做安全判定等于把白名单交给攻击者。为此框架新增 `HttpRequest.peerAddress`
-  （真实 TCP 对端，默认等于 remoteAddress，由 `BufferedHttpRequestView` 覆写），`NetGuard.clientIp` 只从
-  peerAddress 出发：peer 不在 `NEWGATE_TRUSTED_PROXIES`（逗号分隔 IP/CIDR）→ **完全忽略**转发头，用 peer；
-  peer 可信 → XFF **从右往左**剥掉可信跳数，第一个不可信地址即客户端；全可信/无 XFF → 退回 `X-Real-IP` → peer。
-  ⚠️ **空列表 = 谁都不信**，与 `ipAllowed` 的「空 = 不限制」语义相反（一个是取值、一个是准入，故意不同）。
-  S14 两阶段断言：未配可信代理时伪造 XFF 无效；配了之后真客户端能剥出，而把名单内 IP 塞在链首（反代追加
-  真实客户端后的形状）仍拒。
+- **客户端 IP 信任边界**：`X-Forwarded-For` / `X-Real-IP` 是客户端可控头，`HttpRequest.remoteAddress` 取 XFF 最左值，
+  不能做安全判定。白名单只用框架统一解析的 `HttpRequest.clientAddress`：从传输层对端出发，对端在
+  `routing.conf` `[ratelimit] trusted_proxies`（环境变量 `NETON_ROUTING__RATELIMIT__TRUSTED_PROXIES`，逗号分隔精确 IP）
+  内才采信 XFF，从右往左剥掉可信跳，第一个不可信地址即客户端；不采信 `X-Real-IP`。限流、审计、白名单共用这一个值。
+  旧变量 `NEWGATE_TRUSTED_PROXIES` 已废弃，仍配着就拒绝启动（静默忽略会让反代后所有带白名单的令牌 403）。
+  S14 两阶段断言：未配可信代理时伪造 XFF 无效；配了之后真客户端能剥出，而把名单内 IP 塞在链首仍拒。
 - **SSRF**：渠道 baseUrl/proxyUrl 写入时校验，拒绝回环/私网/链路本地/云元数据（169.254.169.254）与 userinfo 混淆；
   自托管可用 `NEWGATE_ALLOW_PRIVATE_UPSTREAM=true` 放行。
   **DNS 解析型校验**：只看主机名字面量挡不住 `http://attacker.com`（A 记录指向 127.0.0.1）。`NetGuard` 接受

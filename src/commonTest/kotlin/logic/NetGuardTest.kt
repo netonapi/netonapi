@@ -2,6 +2,7 @@ package logic
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -95,40 +96,15 @@ class NetGuardTest {
         assertFalse(NetGuard.ipAllowed("1.2.3.256", "1.2.3.256"))
     }
 
-    // ===== XFF 信任边界 =====
+    // ===== 旧可信代理变量 =====
 
-    @Test fun forwarding_headers_are_ignored_without_trusted_proxies() {
-        // 默认（未配可信代理）：XFF / X-Real-IP 一律忽略，只认 TCP 对端
-        assertEquals("203.0.113.9", NetGuard.clientIp("1.2.3.4", "5.6.7.8", "203.0.113.9:52111", ""))
-        assertEquals("203.0.113.9", NetGuard.clientIp("1.2.3.4", null, "203.0.113.9", "   "))
+    @Test fun legacy_trusted_proxies_variable_refuses_to_start() {
+        assertFailsWith<IllegalStateException> { NetGuard.checkLegacyTrustedProxies("127.0.0.1,::1") }
     }
 
-    @Test fun spoofed_xff_cannot_pass_the_token_allowlist() {
-        // 攻击者直连网关（对端是公网 IP），伪造 XFF 命中白名单 → 必须仍按对端判定
-        val ip = NetGuard.clientIp("203.0.113.7", null, "198.51.100.9:40000", "10.0.0.0/8,127.0.0.1")
-        assertEquals("198.51.100.9", ip)
-        assertFalse(NetGuard.ipAllowed("203.0.113.7", ip), "伪造的 XFF 不得让白名单放行")
-    }
-
-    @Test fun trusted_proxy_chain_is_peeled_right_to_left() {
-        // client → nginx(10.0.0.5) → lb(10.0.0.1) → 网关；每跳追加，最右项由最近一跳写入
-        val trusted = "10.0.0.0/8"
-        assertEquals(
-            "203.0.113.7",
-            NetGuard.clientIp("203.0.113.7, 10.0.0.5", null, "10.0.0.1:5000", trusted),
-        )
-        // 客户端自己塞的伪造项在更左边：剥到第一个不可信地址即停，不再往左采信
-        assertEquals(
-            "203.0.113.7",
-            NetGuard.clientIp("1.1.1.1, 2.2.2.2, 203.0.113.7, 10.0.0.5", null, "10.0.0.1", trusted),
-        )
-    }
-
-    @Test fun fully_trusted_chain_falls_back_to_real_ip_then_peer() {
-        val trusted = "10.0.0.0/8,127.0.0.1"
-        assertEquals("203.0.113.7", NetGuard.clientIp("10.0.0.5", "203.0.113.7", "127.0.0.1:1", trusted))
-        assertEquals("127.0.0.1", NetGuard.clientIp("10.0.0.5", null, "127.0.0.1:1", trusted))
-        assertEquals("127.0.0.1", NetGuard.clientIp(null, null, "127.0.0.1:1", trusted))
+    @Test fun unset_legacy_variable_is_fine() {
+        NetGuard.checkLegacyTrustedProxies(null)
+        NetGuard.checkLegacyTrustedProxies("  ")
     }
 
     @Test fun normalize_ip_strips_port_and_brackets_without_mangling_ipv6() {
@@ -222,14 +198,5 @@ class NetGuardTest {
             assertTrue(NetGuard.isIpLiteral(ip), "解析结果必须是数字字面量：$raw")
             assertTrue(NetGuard.isPrivateHost(ip), "localhost 的地址必须判为内网/回环：$raw")
         }
-    }
-
-    @Test fun trusted_proxy_list_defaults_to_trust_nobody() {
-        // 与 ipAllowed 的「空 = 不限」相反：代理名单为空必须谁都不信
-        assertFalse(NetGuard.isTrustedProxy("", "127.0.0.1"))
-        assertFalse(NetGuard.isTrustedProxy("   ", "127.0.0.1"))
-        assertFalse(NetGuard.isTrustedProxy("127.0.0.1", null))
-        assertTrue(NetGuard.isTrustedProxy("127.0.0.1", "127.0.0.1"))
-        assertTrue(NetGuard.isTrustedProxy("10.0.0.0/8", "10.9.8.7"))
     }
 }

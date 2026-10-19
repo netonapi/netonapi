@@ -100,43 +100,25 @@ object NetGuard {
         }
     }
 
-    // ===== 客户端 IP：X-Forwarded-For 信任边界 =====
+    // ===== 客户端 IP =====
 
+    /**
+     * 旧的网关专用可信代理变量。来源解析已统一到框架（`ratelimit.trusted_proxies`），
+     * 这个变量不再生效；仍配着它说明部署还按旧方式信任代理，启动时直接拒绝，见 [checkLegacyTrustedProxies]。
+     */
     const val ENV_TRUSTED_PROXIES = "NEWGATE_TRUSTED_PROXIES"
 
     /**
-     * 取「可用于安全决策」的客户端 IP。
-     *
-     * 无条件采信 XFF 最左项 = 任何人都能用一个请求头把自己伪装成白名单里的 IP，
-     * 令牌 IP 白名单形同虚设（比没有更糟：它给运营者虚假的安全感）。
-     *
-     * 正确顺序是「先判对端，再决定要不要采信转发头」：
-     *  - [peerAddress]（TCP 对端，不受 XFF 影响）不在 [trustedProxies] 内 → 只用对端地址，
-     *    XFF / X-Real-IP 一律忽略（默认行为：不配可信代理就不信任何转发头）；
-     *  - 对端可信 → 从 XFF **最右**项往左剥，跳过每一跳可信代理，第一个不可信地址即客户端
-     *    （最右项由最近一跳代理写入，越往左越可能是客户端自己塞进来的）；
-     *  - 整条链都可信、或压根没有 XFF → 退到 X-Real-IP，再退到对端地址。
-     *
-     * [trustedProxies] 为逗号分隔的精确 IP 或 IPv4 CIDR（如 `10.0.0.0/8, 127.0.0.1`）。
-     * **空 = 不信任任何代理**，与 [ipAllowed] 的「空 = 不限」相反：白名单空是放开限制，
-     * 代理名单空是收紧信任。IPv6 只能写精确地址（CIDR 匹配目前只实现 IPv4）。
+     * 配了旧变量就拒绝启动：静默忽略的话，反代后面所有请求的来源都变成反代自己，
+     * 配了 IP 白名单的令牌会全部 403 —— 而运营者以为白名单照常工作。
      */
-    fun clientIp(xff: String?, realIp: String?, peerAddress: String, trustedProxies: String): String? {
-        val peer = normalizeIp(peerAddress)
-        if (!isTrustedProxy(trustedProxies, peer)) return peer
-        val hops = xff.orEmpty().split(',').mapNotNull { normalizeIp(it) }
-        for (i in hops.indices.reversed()) {
-            val hop = hops[i]
-            if (!isTrustedProxy(trustedProxies, hop)) return hop
+    fun checkLegacyTrustedProxies(value: String?) {
+        if (!value.isNullOrBlank()) {
+            error(
+                "$ENV_TRUSTED_PROXIES is no longer supported; set the trusted proxies once for the whole app " +
+                    "via NETON_ROUTING__RATELIMIT__TRUSTED_PROXIES (routing.conf [ratelimit] trusted_proxies) and unset it"
+            )
         }
-        return normalizeIp(realIp.orEmpty()) ?: peer
-    }
-
-    /** 地址是否属于可信代理。名单为空即「谁都不信」——默认必须是否定的。 */
-    fun isTrustedProxy(trustedProxies: String, ip: String?): Boolean {
-        if (ip.isNullOrEmpty()) return false
-        val rules = trustedProxies.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-        return rules.isNotEmpty() && rules.any { matches(it, ip) }
     }
 
     /** 归一化地址字面量：`1.2.3.4:7080` → `1.2.3.4`，`[::1]:7080` → `::1`，裸 IPv6 原样保留。 */
