@@ -106,7 +106,9 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
                 ?: throw IllegalArgumentException("gateway quota recharge not found: $rechargeId")
             // 幂等：已入账直接返回（回调重投、对账补单都走这里）
             if (recharge.payStatus == PAY_STATUS_PAID) return@transaction
-            if (recharge.payStatus != PAY_STATUS_WAITING) {
+            // 已关闭（过期）的单也收：用户在过期临界点付了款、回调晚到时，钱确实收到了，
+            // 这里拒绝就是「收了钱不给额度」。已退款的单不再入账。
+            if (recharge.payStatus != PAY_STATUS_WAITING && recharge.payStatus != PAY_STATUS_CLOSED) {
                 throw IllegalStateException(
                     "gateway quota recharge $rechargeId cannot be paid (status=${recharge.payStatus})"
                 )
@@ -114,13 +116,14 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
             // ② 乐观锁占位：并发第二个回调在这里拿到 0 行 → 退出，不会重复 grant
             val claimed = db.execute(
                 "UPDATE gateway_quota_recharges SET pay_status = :paid, pay_channel_code = :cc, paid_at = :ts " +
-                    "WHERE id = :id AND pay_status = :waiting",
+                    "WHERE id = :id AND pay_status IN (:waiting, :closed)",
                 mapOf(
                     "paid" to PAY_STATUS_PAID,
                     "cc" to payChannelCode,
                     "ts" to nowMillis(),
                     "id" to rechargeId,
                     "waiting" to PAY_STATUS_WAITING,
+                    "closed" to PAY_STATUS_CLOSED,
                 ),
             )
             if (claimed == 0L) return@transaction
@@ -136,6 +139,38 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
     }
 
     /**
+     * 支付单被退款 → 扣回这笔充值发放的额度（按退款比例）。
+     *
+     * 钱已经退回用户手里，额度必须收回，否则就是「退了钱还能接着用」。余额不够扣时允许扣成负数：
+     * 负余额会挡住后续调用，这比让退款失败（钱已经出去了，回滚不了）或少扣更对。
+     * 与入账同样三层幂等：状态早退 → pay_status 乐观锁占位 → 台账 ref（[refundRef]）唯一约束。
+     * 未入账的单（待支付 / 已关闭）被退款不扣任何额度，只记一条日志 —— 那笔钱本来就没变成额度。
+     */
+    suspend fun markRefunded(rechargeId: Long, refundPrice: Long, orderPrice: Long) {
+        val db = neton.database.dbContext()
+        db.transaction {
+            val recharge = GatewayQuotaRechargeTable.get(rechargeId)
+                ?: throw IllegalArgumentException("gateway quota recharge not found: $rechargeId")
+            if (recharge.payStatus == PAY_STATUS_REFUNDED) return@transaction
+            if (recharge.payStatus != PAY_STATUS_PAID) {
+                log.warn("gateway quota recharge refunded before it was credited id=$rechargeId status=${recharge.payStatus}")
+                return@transaction
+            }
+            val claimed = db.execute(
+                "UPDATE gateway_quota_recharges SET pay_status = :refunded WHERE id = :id AND pay_status = :paid",
+                mapOf("refunded" to PAY_STATUS_REFUNDED, "id" to rechargeId, "paid" to PAY_STATUS_PAID),
+            )
+            if (claimed == 0L) return@transaction
+            val claw = clawbackMicro(recharge.amountMicro, refundPrice, orderPrice)
+            val balance = quotaLogic.debitInTx(recharge.userId, -claw, TYPE_REFUND, refundRef(rechargeId))
+            log.info(
+                "gateway quota recharge refunded id=$rechargeId user=${recharge.userId} " +
+                    "clawback=$claw refund=$refundPrice/$orderPrice balance=$balance"
+            )
+        }
+    }
+
+    /**
      * 关掉一张永远付不了的意图单。
      *
      * `:waiting` 必须真的绑上值：SQL 里有它而 map 里没有，sqlx4k 会抛
@@ -143,6 +178,9 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
      * （运维只看到一条 sqlx4k 内部错误，查不到是哪个渠道不可用），同时意图单停在待支付，
      * 正是这个方法本来要消除的那条对账噪声。
      */
+    /** 支付单过期关闭 → 充值单跟着关（只关待支付的；晚到的付款仍可经 [markPaid] 入账）。 */
+    suspend fun markClosed(rechargeId: Long) = close(rechargeId)
+
     private suspend fun close(rechargeId: Long) {
         neton.database.dbContext().execute(
             "UPDATE gateway_quota_recharges SET pay_status = :closed WHERE id = :id AND pay_status = :waiting",
@@ -181,6 +219,25 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
         const val PAY_STATUS_WAITING = 0
         const val PAY_STATUS_PAID = 1
         const val PAY_STATUS_CLOSED = 2
+        /** 已入账后又被退款，额度已按比例扣回（[markRefunded]）。 */
+        const val PAY_STATUS_REFUNDED = 3
+
+        /** 台账类型：充值退款扣回，amount 为负。 */
+        const val TYPE_REFUND = "refund"
+
+        /** 退款扣回的台账幂等键；与入账的 ref（`gateway:quota:{id}`）区分开，两者各只能出现一次。 */
+        fun refundRef(rechargeId: Long): String = "refund:${merchantOrderId(rechargeId)}"
+
+        /**
+         * 按比例扣回的额度：amountMicro × refundPrice ÷ orderPrice，向下取整，退款超过订单金额时按全额封顶。
+         * 拆成「整除部分 + 余数部分」计算，避免 μUSD × 分 溢出 Long（溢出是静默回绕的）。
+         */
+        fun clawbackMicro(amountMicro: Long, refundPrice: Long, orderPrice: Long): Long {
+            require(orderPrice > 0) { "orderPrice must be positive" }
+            if (refundPrice >= orderPrice) return amountMicro
+            if (refundPrice <= 0) return 0
+            return (amountMicro / orderPrice) * refundPrice + (amountMicro % orderPrice) * refundPrice / orderPrice
+        }
 
         /** μUSD / 法币最小单位（与 payment 的 pay_orders.price 同单位）。 */
         const val ENV_QUOTA_PER_PRICE_UNIT = "NEWGATE_QUOTA_PER_PRICE_UNIT"

@@ -90,6 +90,7 @@ class RechargeController(
     private val log: Logger,
     private val quotaLogic: QuotaLogic,
     private val rechargeLogic: QuotaRechargeLogic,
+    private val settings: logic.SystemSettingLogic,
 ) {
 
     /**
@@ -102,13 +103,22 @@ class RechargeController(
      * 两个都收等于让客户端自己定价。
      */
     @Post("")
-    suspend fun create(identity: Identity, @Body request: RechargeRequest): RechargeOrderVO {
+    suspend fun create(identity: Identity, @Body request: RechargeRequest, httpRequest: neton.core.http.HttpRequest): RechargeOrderVO {
         // 两个参数都在**建意图单之前**验完：payment 没有"默认渠道"这回事
         // （PayOrderLogic.resolveRoute 收到 null 直接判不可用），留空只会在下单那步才 400，
         // 白白在钱据表里留下一张开完就关的单 —— 对账时那是纯噪声。
         val errors = mutableListOf<ValidationError>()
         if (request.price <= 0) {
             errors += ValidationError("price", GatewayErrorCodes.RECHARGE_PRICE_INVALID, GatewayErrorCodes.RECHARGE_PRICE_INVALID)
+        } else {
+            val min = settings.get(setting.GatewaySettingKeys.RECHARGE_MIN_PRICE)
+            // 上限配得比下限还低时以下限为准，不至于让所有金额都下不了单
+            val max = maxOf(min, settings.get(setting.GatewaySettingKeys.RECHARGE_MAX_PRICE))
+            if (request.price < min) {
+                errors += ValidationError("price", GatewayErrorCodes.RECHARGE_PRICE_TOO_LOW, GatewayErrorCodes.RECHARGE_PRICE_TOO_LOW)
+            } else if (request.price > max) {
+                errors += ValidationError("price", GatewayErrorCodes.RECHARGE_PRICE_TOO_HIGH, GatewayErrorCodes.RECHARGE_PRICE_TOO_HIGH)
+            }
         }
         if (request.channelCode.isNullOrBlank()) {
             // 必须是可用的支付渠道码：payment 没有默认渠道
@@ -117,9 +127,9 @@ class RechargeController(
         if (errors.isNotEmpty()) throw ValidationException(errors, GatewayErrorCodes.RECHARGE_INVALID)
 
         val userId = identity.id.toLong()
-        // userIp 暂传 null：可信代理判定（NEWGATE_TRUSTED_PROXIES）在 RelayEngine 那条路径上，
-        // 这里不复制一份半吊子的取 IP 逻辑 —— 宁缺勿错，风控字段填错比不填更难查。
-        val created = rechargeLogic.create(userId, request.price, request.channelCode, userIp = null)
+        // 框架的 clientAddress 只认可信代理给的转发头（routing.conf 的 ratelimit.trusted_proxies），
+        // 传给支付平台做风控；不能用 remoteAddress —— 那个直接取 X-Forwarded-For 最左项，可伪造。
+        val created = rechargeLogic.create(userId, request.price, request.channelCode, userIp = httpRequest.clientAddress)
         return RechargeOrderVO(
             rechargeId = created.rechargeId,
             merchantOrderId = created.merchantOrderId,

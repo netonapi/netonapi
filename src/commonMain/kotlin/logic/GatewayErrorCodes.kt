@@ -98,6 +98,10 @@ object GatewayErrorCodes {
     /** 充值请求校验失败（字段错误见 errors）。 */
     const val RECHARGE_INVALID = "RECHARGE_INVALID"
     const val RECHARGE_PRICE_INVALID = "RECHARGE_PRICE_INVALID"
+    /** 低于后台设置的单笔下限（gateway.recharge.min_price）。 */
+    const val RECHARGE_PRICE_TOO_LOW = "RECHARGE_PRICE_TOO_LOW"
+    /** 高于后台设置的单笔上限（gateway.recharge.max_price）。 */
+    const val RECHARGE_PRICE_TOO_HIGH = "RECHARGE_PRICE_TOO_HIGH"
     /** 必须指定可用的支付渠道（payment 没有默认渠道）。 */
     const val RECHARGE_CHANNEL_REQUIRED = "RECHARGE_CHANNEL_REQUIRED"
     /** 充值单不存在（不是自己的单同样回这个）。 */

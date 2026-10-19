@@ -25,6 +25,8 @@ import neton.redis.RedisClient
  */
 object GatewayRuntimeBootstrap {
     fun initialize(ctx: NetonContext) {
+        // 本模块的全局设置定义登记进注册表，后台可见可改
+        ctx.getOrNull(setting.SettingDefinitionRegistry::class)?.register(setting.GatewaySettingKeys.definitions)
         // 渠道客户端按需创建（各自的代理与超时），建客户端的能力来自应用。
         logic.RelayEngine.clientProvider = ctx.getOrNull(neton.http.client.HttpClientProvider::class) ?: error(
             "module-gateway needs an HttpClientProvider bound in NetonContext. Bind one in the application: " +

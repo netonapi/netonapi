@@ -72,4 +72,28 @@ class QuotaRechargeLogicTest {
         assertNull(QuotaRechargeLogic.parse("gateway:quota:7 "))  // 尾随空格也不认
         assertEquals(7L, QuotaRechargeLogic.parse("gateway:quota:7"))
     }
+    // ---- 退款扣回 ----
+
+    /** 全额退款扣回全部额度；部分退款按「退款金额 / 订单金额」比例扣，向下取整（少扣一点不至于多扣用户的钱）。 */
+    @Test
+    fun clawbackIsProportionalToTheRefund() {
+        assertEquals(10_000_000L, QuotaRechargeLogic.clawbackMicro(amountMicro = 10_000_000, refundPrice = 1000, orderPrice = 1000))
+        assertEquals(5_000_000L, QuotaRechargeLogic.clawbackMicro(amountMicro = 10_000_000, refundPrice = 500, orderPrice = 1000))
+        assertEquals(3_333_333L, QuotaRechargeLogic.clawbackMicro(amountMicro = 10_000_000, refundPrice = 1, orderPrice = 3))
+        // 退款金额超过订单金额（不该发生）按全额封顶，不多扣
+        assertEquals(10_000_000L, QuotaRechargeLogic.clawbackMicro(amountMicro = 10_000_000, refundPrice = 2000, orderPrice = 1000))
+    }
+
+    /** 大额不溢出：μUSD 额度乘上「分」很容易超过 Long，Kotlin 的溢出是静默回绕的。 */
+    @Test
+    fun clawbackDoesNotOverflowOnLargeAmounts() {
+        val amount = 9_000_000_000_000L          // 900 万美元的 μUSD
+        assertEquals(amount / 2, QuotaRechargeLogic.clawbackMicro(amount, refundPrice = 50_000_000, orderPrice = 100_000_000))
+    }
+
+    @Test
+    fun refundRefUsesItsOwnPrefix() {
+        assertEquals("refund:gateway:quota:7", QuotaRechargeLogic.refundRef(7))
+    }
 }
+
