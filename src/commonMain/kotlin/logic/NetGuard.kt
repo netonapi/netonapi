@@ -101,27 +101,6 @@ object NetGuard {
     fun rejectionCode(error: HttpClientError): String? =
         (error as? HttpClientError.TargetRejected)?.let { rejectionCode(it.reason) }
 
-    // ===== 客户端 IP =====
-
-    /**
-     * 旧的网关专用可信代理变量。来源解析已统一到框架（`ratelimit.trusted_proxies`），
-     * 这个变量不再生效；仍配着它说明部署还按旧方式信任代理，启动时直接拒绝，见 [checkLegacyTrustedProxies]。
-     */
-    const val ENV_TRUSTED_PROXIES = "NEWGATE_TRUSTED_PROXIES"
-
-    /**
-     * 配了旧变量就拒绝启动：静默忽略的话，反代后面所有请求的来源都变成反代自己，
-     * 配了 IP 白名单的令牌会全部 403 —— 而运营者以为白名单照常工作。
-     */
-    fun checkLegacyTrustedProxies(value: String?) {
-        if (!value.isNullOrBlank()) {
-            error(
-                "$ENV_TRUSTED_PROXIES is no longer supported; set the trusted proxies once for the whole app " +
-                    "via NETON_ROUTING__RATELIMIT__TRUSTED_PROXIES (routing.conf [ratelimit] trusted_proxies) and unset it"
-            )
-        }
-    }
-
     // ===== 令牌 IP 白名单 =====
 
     /**

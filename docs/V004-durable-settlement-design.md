@@ -177,7 +177,7 @@ RESERVED ──T2──► UPSTREAM_STARTED ──T3──► FINALIZE_PENDING �
 
 | 轨道 | 公式 | 用途 |
 |---|---|---|
-| **售价轨**（收入） | `sale_override` 逐字段覆盖；缺省字段 = 官方价 × 全局加价率 `NEWGATE_SALE_MARKUP` | reserve 金额、`charged`（再 × 分组倍率） |
+| **售价轨**（收入） | `sale_override` 逐字段覆盖；缺省字段 = 官方价 × 全局加价率 `NETONAPI_SALE_MARKUP` | reserve 金额、`charged`（再 × 分组倍率） |
 | **成本轨** | 官方价 × 渠道折扣 `cost_discount` | `cost`（只用于毛利核算，不进用户账务） |
 
 `gateway_model_prices` 存的一律是**官方价**（成本轨基准）；售价由 `sale_override` 或全局加价率推导。
@@ -194,7 +194,7 @@ RESERVED ──T2──► UPSTREAM_STARTED ──T3──► FINALIZE_PENDING �
   **不建 settlement、不预留、不调上游**。用 500 而非 400：请求本身没问题，是运营侧定价数据坏了，
   归成客户端错误会掩盖事故。
 - **发布闸门（毛利底线）**：admin 写价时 `SalePricing.requireMargin` 校验售价每一维
-  ≥ 官方成本 × `NEWGATE_MIN_MARGIN`（默认 `1`，即不得低于官方成本），违者 400 拒绝发布。
+  ≥ 官方成本 × `NETONAPI_MIN_MARGIN`（默认 `1`，即不得低于官方成本），违者 400 拒绝发布。
 
 #### 7.1.1 `pricing_snapshot`（v2 双轨）
 

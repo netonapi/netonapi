@@ -91,7 +91,7 @@ class PriceImportLogic(private val log: Logger) {
         return PriceImportResult(created, updated, skipped, heldForLoss = held)
     }
 
-    /** 从 NEWGATE_PRICE_SYNC_URL 拉价目表并导入；未配置返回 null。 */
+    /** 从 NETONAPI_PRICE_SYNC_URL 拉价目表并导入；未配置返回 null。 */
     suspend fun syncFromEnv(): PriceImportResult? {
         val url = neton.core.config.getEnv(ENV_SYNC_URL)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val overwrite = neton.core.config.getEnv(ENV_SYNC_OVERWRITE)?.trim()?.lowercase() != "false"
@@ -140,7 +140,7 @@ class PriceImportLogic(private val log: Logger) {
     )
 
     companion object {
-        const val ENV_SYNC_URL = "NEWGATE_PRICE_SYNC_URL"
-        const val ENV_SYNC_OVERWRITE = "NEWGATE_PRICE_SYNC_OVERWRITE"
+        const val ENV_SYNC_URL = "NETONAPI_PRICE_SYNC_URL"
+        const val ENV_SYNC_OVERWRITE = "NETONAPI_PRICE_SYNC_OVERWRITE"
     }
 }

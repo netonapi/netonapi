@@ -97,7 +97,7 @@
 
 **实施状态（2026-10-15）**：占位值只写当前轮（与框架规格 §4.5.2 一致），缺失诊断只对 gemini-3 及之后的型号报。第 1、2、4 条已实现（`GeminiThoughtSignatures`、`ThoughtSignatureVault`、`ChannelVerificationLogic`、V016、定时任务 `gateway-capability-verify`），单测 13 例覆盖两种客户端格式的整链路往返、绑定校验与过期、流式改写。**尚未完成**：harness 对真实 Gemini 上游的复现与回归。
 
-环境变量：`NEWGATE_GEMINI_SIGNATURE_ECHO`（默认开，给 OpenAI 客户端输出官方 `extra_content`）、`NEWGATE_GEMINI_SIGNATURE_BYPASS`（默认开，仍需验证记录才生效）、`NEWGATE_GEMINI_SIGNATURE_TTL_HOURS`（默认 24）。
+环境变量：`NETONAPI_GEMINI_SIGNATURE_ECHO`（默认开，给 OpenAI 客户端输出官方 `extra_content`）、`NETONAPI_GEMINI_SIGNATURE_BYPASS`（默认开，仍需验证记录才生效）、`NETONAPI_GEMINI_SIGNATURE_TTL_HOURS`（默认 24）。
 
 **现状（已核对代码）**：两个方向都会丢签名。`GeminiToOpenAiResponse` 拆分文本、推理和工具调用时不保留签名；`OpenAiToGeminiRequest` 重新构造工具调用时也不写回签名。同协议透传不受影响。
 

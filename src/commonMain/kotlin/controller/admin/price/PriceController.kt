@@ -104,7 +104,7 @@ class PriceController(
     suspend fun import(@Body request: PriceImportRequest, identity: neton.core.interfaces.Identity): logic.PriceImportResult =
         importLogic.importItems(request.items.map { toItem(it) }, request.overwrite, operatorId = identity.id.toLongOrNull())
 
-    /** 立即从 NEWGATE_PRICE_SYNC_URL 拉一次价目表（定时任务 gateway-price-sync 每天也会做）。 */
+    /** 立即从 NETONAPI_PRICE_SYNC_URL 拉一次价目表（定时任务 gateway-price-sync 每天也会做）。 */
     @Post("/sync")
     @Permission("gateway:price:create")
     suspend fun sync(): logic.PriceImportResult = importLogic.syncFromEnv()

@@ -82,7 +82,7 @@ data class RechargeStatusVO(
  * 用户送出站付款之后靠 [status] 回读结果 —— 到账不在这个请求里发生，所以必须有个地方能问。
  *
  * [mock] 是**模拟充值**，用于打通「付款 → 额度到账 → 能用」这条链路的联调；
- * 它凭空发放额度，因此默认关闭，必须显式设置 `NEWGATE_ENABLE_MOCK_RECHARGE=true` 才可用，
+ * 它凭空发放额度，因此默认关闭，必须显式设置 `NETONAPI_ENABLE_MOCK_RECHARGE=true` 才可用，
  * 否则一律拒绝——绝不能在生产环境被误开成免费领额度的接口。
  */
 @Controller("/gateway/recharge")
@@ -99,7 +99,7 @@ class RechargeController(
      * 到账不在这个请求里发生：支付平台回调 payment、payment 发布支付成功事件、
      * 装配层的监听者按 merchantOrderId 前缀认单后调 QuotaRechargeLogic.markPaid 入账。
      *
-     * 只收 price、不收 amount —— 额度按服务端汇率算（NEWGATE_QUOTA_PER_PRICE_UNIT）。
+     * 只收 price、不收 amount —— 额度按服务端汇率算（NETONAPI_QUOTA_PER_PRICE_UNIT）。
      * 两个都收等于让客户端自己定价。
      */
     @Post("")
@@ -174,7 +174,7 @@ class RechargeController(
     @Post("/mock")
     suspend fun mock(identity: Identity, @Body request: MockRechargeRequest): RechargeResultVO {
         if (!mockEnabled()) {
-            // 测试环境设 NEWGATE_ENABLE_MOCK_RECHARGE=true 才开
+            // 测试环境设 NETONAPI_ENABLE_MOCK_RECHARGE=true 才开
             throw HttpException(NetonErrorCode.OPERATION_NOT_ALLOWED, GatewayErrorCodes.MOCK_RECHARGE_DISABLED)
         }
         if (request.amount <= 0) {
@@ -189,5 +189,5 @@ class RechargeController(
     }
 
     private fun mockEnabled(): Boolean =
-        neton.core.config.getEnv("NEWGATE_ENABLE_MOCK_RECHARGE")?.lowercase() == "true"
+        neton.core.config.getEnv("NETONAPI_ENABLE_MOCK_RECHARGE")?.lowercase() == "true"
 }

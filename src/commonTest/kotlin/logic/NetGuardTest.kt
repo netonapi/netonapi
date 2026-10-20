@@ -169,17 +169,4 @@ class NetGuardTest {
         assertFalse(NetGuard.ipAllowed("10.0.0.0/99", "10.0.0.1"))
         assertFalse(NetGuard.ipAllowed("1.2.3.256", "1.2.3.256"))
     }
-
-    // ===== 旧可信代理变量 =====
-
-    @Test fun legacy_trusted_proxies_variable_refuses_to_start() {
-        assertFailsWith<IllegalStateException> { NetGuard.checkLegacyTrustedProxies("127.0.0.1,::1") }
-    }
-
-    @Test fun unset_legacy_variable_is_fine() {
-        NetGuard.checkLegacyTrustedProxies(null)
-        NetGuard.checkLegacyTrustedProxies("  ")
-    }
-
-
 }

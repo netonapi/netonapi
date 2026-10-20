@@ -16,7 +16,7 @@ class ChannelProbeJob(private val log: Logger, private val ctx: NetonContext) : 
     }
 }
 
-/** 价源同步：每天 03:10 从 NEWGATE_PRICE_SYNC_URL 拉一次价目表；没配就什么都不做。 */
+/** 价源同步：每天 03:10 从 NETONAPI_PRICE_SYNC_URL 拉一次价目表；没配就什么都不做。 */
 @Job(id = "gateway-price-sync", cron = "10 3 * * *", lockTtlMs = 300_000)
 class PriceSyncJob(private val log: Logger, private val ctx: NetonContext) : JobExecutor {
     override suspend fun run(context: JobContext) {

@@ -8,14 +8,14 @@ import neton.core.http.HttpStatus
 /**
  * Prometheus 文本指标。数字从库里现算（日志表按 created_at 有索引，一次抓取几条聚合查询），
  * 不在进程里攒计数器 —— 多实例部署时进程内计数各说各话，而库里的口径与概览页一致。
- * 默认匿名；设了 NEWGATE_METRICS_TOKEN 就要求 `Authorization: Bearer <token>`。
+ * 默认匿名；设了 NETONAPI_METRICS_TOKEN 就要求 `Authorization: Bearer <token>`。
  */
 @Controller("/metrics")
 @AllowAnonymous
 class MetricsController {
     @Get("")
     suspend fun metrics(ctx: HttpContext, response: HttpResponse) {
-        val token = neton.core.config.getEnv("NEWGATE_METRICS_TOKEN")?.trim()?.takeIf { it.isNotEmpty() }
+        val token = neton.core.config.getEnv("NETONAPI_METRICS_TOKEN")?.trim()?.takeIf { it.isNotEmpty() }
         if (token != null && ctx.request.header("Authorization") != "Bearer $token") {
             response.status = HttpStatus.UNAUTHORIZED
             response.text("unauthorized\n"); return

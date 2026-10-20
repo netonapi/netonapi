@@ -240,7 +240,7 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
         }
 
         /** μUSD / 法币最小单位（与 payment 的 pay_orders.price 同单位）。 */
-        const val ENV_QUOTA_PER_PRICE_UNIT = "NEWGATE_QUOTA_PER_PRICE_UNIT"
+        const val ENV_QUOTA_PER_PRICE_UNIT = "NETONAPI_QUOTA_PER_PRICE_UNIT"
 
         /**
          * 本业务的商户订单号前缀。监听者只认它 —— 钱包充值用 `wallet:recharge:`，

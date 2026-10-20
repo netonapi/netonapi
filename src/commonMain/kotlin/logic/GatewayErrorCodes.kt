@@ -61,7 +61,7 @@ object GatewayErrorCodes {
     const val SALE_PER_REQUEST_INVALID = "SALE_PER_REQUEST_INVALID"
     /** 售价低于毛利底线（官方成本 × 毛利下限倍率）。 */
     const val SALE_PRICE_BELOW_COST_FLOOR = "SALE_PRICE_BELOW_COST_FLOOR"
-    /** 未配置 NEWGATE_PRICE_SYNC_URL，不能立即同步。 */
+    /** 未配置 NETONAPI_PRICE_SYNC_URL，不能立即同步。 */
     const val PRICE_SYNC_NOT_CONFIGURED = "PRICE_SYNC_NOT_CONFIGURED"
 
     // ── 计费组 ──
@@ -113,7 +113,7 @@ object GatewayErrorCodes {
     const val RECHARGE_CHANNEL_REQUIRED = "RECHARGE_CHANNEL_REQUIRED"
     /** 充值单不存在（不是自己的单同样回这个）。 */
     const val RECHARGE_NOT_FOUND = "RECHARGE_NOT_FOUND"
-    /** 模拟充值未开启（NEWGATE_ENABLE_MOCK_RECHARGE）。 */
+    /** 模拟充值未开启（NETONAPI_ENABLE_MOCK_RECHARGE）。 */
     const val MOCK_RECHARGE_DISABLED = "MOCK_RECHARGE_DISABLED"
     const val RECHARGE_AMOUNT_INVALID = "RECHARGE_AMOUNT_INVALID"
 

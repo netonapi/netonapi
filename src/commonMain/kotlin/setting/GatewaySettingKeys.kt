@@ -34,24 +34,24 @@ object GatewaySettingKeys {
 
     /**
      * 全站加价率：售价 = 官方价 × 它（单个模型可以单独设，见价格页）。
-     * 默认取环境变量 NEWGATE_SALE_MARKUP（旧部署的配置照常生效），都没配就是 1，即按官方价卖。
+     * 默认取环境变量 NETONAPI_SALE_MARKUP（旧部署的配置照常生效），都没配就是 1，即按官方价卖。
      */
     val PRICING_MARKUP: SettingDefinition<String> = SettingDefinition.decimal(
         category = CATEGORY,
         key = "gateway.pricing.markup",
-        default = envDecimal("NEWGATE_SALE_MARKUP") ?: "1",
+        default = envDecimal("NETONAPI_SALE_MARKUP") ?: "1",
         name = "全站加价率",
         description = "售价 = 官方价 × 加价率。1.2 表示在官方价基础上加 20%；单个模型可在「模型定价」里单独设置。取值 (0, 100]。",
     )
 
     /**
      * 最低毛利：任何组合下的实收都不得低于「成本 × 它」，否则价格保存不了、定价体检标红。
-     * 默认取环境变量 NEWGATE_MIN_MARGIN，都没配就是 1，即不许亏本卖。
+     * 默认取环境变量 NETONAPI_MIN_MARGIN，都没配就是 1，即不许亏本卖。
      */
     val PRICING_MIN_MARGIN: SettingDefinition<String> = SettingDefinition.decimal(
         category = CATEGORY,
         key = "gateway.pricing.min_margin",
-        default = envDecimal("NEWGATE_MIN_MARGIN") ?: "1",
+        default = envDecimal("NETONAPI_MIN_MARGIN") ?: "1",
         name = "最低毛利倍率",
         description = "实收不得低于成本 × 该值。1 = 不亏本，1.1 = 至少 10% 毛利。取值 (0, 100]。",
     )

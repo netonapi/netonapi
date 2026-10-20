@@ -990,7 +990,7 @@ class RelayEngine(
          */
         var guardedClients: GuardedHttpClientProvider? = null
 
-        /** 价目表同步（地址来自部署环境变量 NEWGATE_PRICE_SYNC_URL）用的普通客户端来源；渠道流量绝不用它。 */
+        /** 价目表同步（地址来自部署环境变量 NETONAPI_PRICE_SYNC_URL）用的普通客户端来源；渠道流量绝不用它。 */
         var deployConfigClients: HttpClientProvider? = null
 
         /**

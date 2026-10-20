@@ -54,8 +54,8 @@ Key（Bedrock 为 `AK:SK[:TOKEN]`，Vertex 为服务账号 JSON 或裸 access to
 ## 4. 运维任务与指标
 
 - `gateway-channel-probe`（*/5）：并发 4 探测启用渠道，写 `last_probe_*`。
-- `gateway-price-sync`（每日 03:10）：`NEWGATE_PRICE_SYNC_URL` → `PriceImportLogic`（整批校验、按 model upsert）。
-- `/metrics`：从日志表现算的 Prometheus 指标；`NEWGATE_METRICS_TOKEN` 可选鉴权。
+- `gateway-price-sync`（每日 03:10）：`NETONAPI_PRICE_SYNC_URL` → `PriceImportLogic`（整批校验、按 model upsert）。
+- `/metrics`：从日志表现算的 Prometheus 指标；`NETONAPI_METRICS_TOKEN` 可选鉴权。
 
 ## 5. 性能注意点
 

@@ -5,7 +5,7 @@ import neton.security.crypto.SecretBox
 /**
  * 渠道 API Key 的静态加密。
  *
- * 主密钥来自环境变量 `NEWGATE_CHANNEL_KEY_ENC_KEY`（base64，解码后 32 字节 = AES-256）。
+ * 主密钥来自环境变量 `NETONAPI_CHANNEL_KEY_ENC_KEY`（base64，解码后 32 字节 = AES-256）。
  * **未配置时不加密**——保持可运行并原样读写明文，便于先部署再启用；一旦配置，新写入即加密，
  * 存量明文仍可读（[SecretBox.open] 对非密文原样返回），无需停机迁移。
  *
@@ -13,7 +13,7 @@ import neton.security.crypto.SecretBox
  */
 object GatewayCrypto {
 
-    const val ENV_KEY_NAME = "NEWGATE_CHANNEL_KEY_ENC_KEY"
+    const val ENV_KEY_NAME = "NETONAPI_CHANNEL_KEY_ENC_KEY"
 
     private val box: SecretBox? by lazy {
         val raw = neton.core.config.getEnv(ENV_KEY_NAME)?.takeIf { it.isNotBlank() } ?: return@lazy null

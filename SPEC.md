@@ -129,7 +129,7 @@
 
 > 规则全文见 NetonAPI 仓库的 `docs/gateway-pricing-spec.md`（NETONAPI-GATEWAY-PRICING）；这里只记实现要点。
 
-- 全站加价率 / 最低毛利改为配置项 `gateway.pricing.markup` / `gateway.pricing.min_margin`（默认取 `NEWGATE_SALE_MARKUP` / `NEWGATE_MIN_MARGIN`），
+- 全站加价率 / 最低毛利改为配置项 `gateway.pricing.markup` / `gateway.pricing.min_margin`（默认取 `NETONAPI_SALE_MARKUP` / `NETONAPI_MIN_MARGIN`），
   `PricingPolicy` 缓存 10 秒。单模型加价率写在 `sale_override.markup`；固定售价字段优先于加价率。
 - 成本按实际打给上游的模型计（`RelayEngine.costBasisFor`）：渠道 `model_mapping` 的目标有价格行就用它，否则用请求模型。
 - `PUT /price/update` 不带 `saleOverride` = 保留原售价设置，传空串才清除（此前改官方价会把售价设置冲掉）。
@@ -236,7 +236,7 @@
 ### A 安全与账务（已完成）
 
 - **V004 durable settlement**：见上（预留先行 / 稳定幂等键 / 硬预算 / worker 恢复）。
-- **渠道 Key 加密（V005 前）**：`SecretBox`（AES-256-GCM，框架 neton-security）+ `NEWGATE_CHANNEL_KEY_ENC_KEY`。
+- **渠道 Key 加密（V005 前）**：`SecretBox`（AES-256-GCM，框架 neton-security）+ `NETONAPI_CHANNEL_KEY_ENC_KEY`。
   未配置则明文直通（可先部署后启用）；配置后新写入加密、存量明文仍可读，无需停机迁移。管理台掩码前先解密。
 - **IP 白名单（此前只有字段无校验）**：`NetGuard.ipAllowed` 支持精确 IP 与 CIDR；取不到客户端 IP 即拒绝
   （白名单必须是「明确允许」）。
@@ -244,7 +244,6 @@
   不能做安全判定。白名单只用框架统一解析的 `HttpRequest.clientAddress`：从传输层对端出发，对端在
   `routing.conf` `[ratelimit] trusted_proxies`（环境变量 `NETON_ROUTING__RATELIMIT__TRUSTED_PROXIES`，逗号分隔精确 IP）
   内才采信 XFF，从右往左剥掉可信跳，第一个不可信地址即客户端；不采信 `X-Real-IP`。限流、审计、白名单共用这一个值。
-  旧变量 `NEWGATE_TRUSTED_PROXIES` 已废弃，仍配着就拒绝启动（静默忽略会让反代后所有带白名单的令牌 403）。
   S14 两阶段断言：未配可信代理时伪造 XFF 无效；配了之后真客户端能剥出，而把名单内 IP 塞在链首仍拒。
 - **SSRF / 出站策略**（neton-docs spec/egress.md）：渠道 baseUrl / proxyUrl、服务账号 Key 的 `token_uri` 是后台运行期数据，
   渠道转发、探测、拉模型、能力校验、Vertex 换 token **全部**走 `GuardedHttpClientProvider` 建的受控客户端
@@ -254,7 +253,7 @@
   503 `no_available_channel`（消息带机器码）；探测 / 拉模型结果带 `errorCode`。
   写入时（create / update / addKey）用同一个策略与 `systemHostResolver()` 先判一遍，不过 400 不落库（快速反馈）。
   `token_uri` 只许 https（写入时与换 token 时都拒）。内网上游只能由运维在 `[egress]` 精确放行（`allowed_networks` /
-  `allowed_hosts` / `allowed_ports`），`NEWGATE_ALLOW_PRIVATE_UPSTREAM` 已删除。价目表同步地址来自环境变量，走普通客户端。
+  `allowed_hosts` / `allowed_ports`），`NETONAPI_ALLOW_PRIVATE_UPSTREAM` 已删除。价目表同步地址来自环境变量，走普通客户端。
   S25 断言写入时（元数据、`[::1]`、非放行端口被拒，公网放行）；S25b 断言请求时（直接写库的 `localhost` 别名与元数据渠道 503、
   Key 不计失败、探测 errorCode，放行的 127.0.0.1 照常可用）。
 - **速率限制（V005）**：令牌级 RPM/TPM/并发。Redis 优先（多实例共享），无 Redis 退化为**进程内**计数（单实例

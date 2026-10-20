@@ -23,8 +23,8 @@ import neton.core.http.ValidationException
  */
 object SalePricing {
 
-    const val ENV_MARKUP = "NEWGATE_SALE_MARKUP"
-    const val ENV_MIN_MARGIN = "NEWGATE_MIN_MARGIN"
+    const val ENV_MARKUP = "NETONAPI_SALE_MARKUP"
+    const val ENV_MIN_MARGIN = "NETONAPI_MIN_MARGIN"
 
     /** 环境变量里的全局加价倍率（decimal 串，(0,100]）；未配置 = "1"。运行时以 [PricingPolicy] 为准，这里只是它的默认值来源。 */
     fun markup(): String = ratioEnv(ENV_MARKUP) ?: "1"

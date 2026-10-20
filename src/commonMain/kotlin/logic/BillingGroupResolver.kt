@@ -72,7 +72,7 @@ object BillingGroupResolver {
     const val DEFAULT_CODE = "default"
 
     /** 会员分组集成的开关。开着却没绑定 [MemberGroupPort] → 启动失败（见 GatewayRuntimeBootstrap）。 */
-    const val ENV_MEMBER_GROUP_BILLING = "NEWGATE_MEMBER_GROUP_BILLING"
+    const val ENV_MEMBER_GROUP_BILLING = "NETONAPI_MEMBER_GROUP_BILLING"
 
     /** 装配期可变、服务期只读（与 RelayEngine.guardedClients 同一套约定）。 */
     var memberPort: MemberGroupPort? = null

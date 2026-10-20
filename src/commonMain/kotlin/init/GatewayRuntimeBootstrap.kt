@@ -29,7 +29,6 @@ object GatewayRuntimeBootstrap {
         ctx.getOrNull(setting.SettingDefinitionRegistry::class)?.register(setting.GatewaySettingKeys.definitions)
         // 加价率、最低毛利改在后台配置；定价策略从这里读（带短缓存，见 PricingPolicy）
         logic.PricingPolicy.settings = ctx.getOrNull(logic.SystemSettingLogic::class)
-        logic.NetGuard.checkLegacyTrustedProxies(neton.core.config.getEnv(logic.NetGuard.ENV_TRUSTED_PROXIES))
         // 渠道客户端按需创建（各自的代理与超时），一律是受控客户端：地址来自后台运行期数据。
         val guarded = ctx.getOrNull(neton.http.client.GuardedHttpClientProvider::class) ?: error(
             "module-gateway needs a GuardedHttpClientProvider bound in NetonContext (module-system binds it from " +
@@ -65,9 +64,9 @@ object GatewayRuntimeBootstrap {
         }
         fun envFlag(name: String, default: Boolean): Boolean =
             neton.core.config.getEnv(name)?.trim()?.lowercase()?.let { it in setOf("1", "true", "yes", "on") } ?: default
-        logic.ThoughtSignatureVaults.echoToOpenAiClients = envFlag("NEWGATE_GEMINI_SIGNATURE_ECHO", true)
-        logic.ThoughtSignatureBypassPolicy.enabled = envFlag("NEWGATE_GEMINI_SIGNATURE_BYPASS", true)
-        neton.core.config.getEnv("NEWGATE_GEMINI_SIGNATURE_TTL_HOURS")?.trim()?.toLongOrNull()?.takeIf { it > 0 }?.let {
+        logic.ThoughtSignatureVaults.echoToOpenAiClients = envFlag("NETONAPI_GEMINI_SIGNATURE_ECHO", true)
+        logic.ThoughtSignatureBypassPolicy.enabled = envFlag("NETONAPI_GEMINI_SIGNATURE_BYPASS", true)
+        neton.core.config.getEnv("NETONAPI_GEMINI_SIGNATURE_TTL_HOURS")?.trim()?.toLongOrNull()?.takeIf { it > 0 }?.let {
             logic.ThoughtSignatureVaults.ttl = kotlin.time.Duration.parse("${it}h")
         }
 

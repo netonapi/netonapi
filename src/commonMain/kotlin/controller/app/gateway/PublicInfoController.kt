@@ -8,7 +8,7 @@ data class PublicEndpointVO(val path: String, val protocol: String, val capabili
 
 @Serializable
 data class PublicInfoVO(
-    /** 网关对外地址（NEWGATE_PUBLIC_API_URL）；没配为 null，控制台据此提示用户去问管理员 */
+    /** 网关对外地址（NETONAPI_PUBLIC_API_URL）；没配为 null，控制台据此提示用户去问管理员 */
     val apiBase: String? = null,
     val endpoints: List<PublicEndpointVO>,
 )
@@ -42,6 +42,6 @@ class PublicInfoController {
     )
 
     companion object {
-        const val ENV_PUBLIC_API_URL = "NEWGATE_PUBLIC_API_URL"
+        const val ENV_PUBLIC_API_URL = "NETONAPI_PUBLIC_API_URL"
     }
 }

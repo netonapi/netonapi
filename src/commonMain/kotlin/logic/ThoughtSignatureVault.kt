@@ -260,7 +260,7 @@ class ThoughtSignatureVault(
 
 /**
  * 占位兼容的产品开关（neton-docs spec/ai.md §4.5.2）。默认开启，但只在渠道与模型有有效验证记录时实际生效；
- * 环境变量 NEWGATE_GEMINI_SIGNATURE_BYPASS=0 可整体关闭。
+ * 环境变量 NETONAPI_GEMINI_SIGNATURE_BYPASS=0 可整体关闭。
  */
 object ThoughtSignatureBypassPolicy {
     var enabled: Boolean = true
