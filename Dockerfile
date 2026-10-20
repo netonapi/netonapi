@@ -47,7 +47,7 @@ EXPOSE 8800
 # 配置一律用环境变量覆盖（镜像内的默认值只适用于本地起步）：
 #   NETON_DATABASE__DEFAULT__URI       PostgreSQL 连接串
 #   NETON_SECURITY__JWT__SECRETKEY     管理台 JWT 签名密钥（必须改）
-#   NEWGATE_CHANNEL_KEY_ENC_KEY        渠道 Key 加密主密钥（base64 32 字节，强烈建议配置）
+#   NETONAPI_CHANNEL_KEY_ENC_KEY        渠道 Key 加密主密钥（base64 32 字节，强烈建议配置）
 # /health 是匿名端点（gateway 组其余路由都要 Bearer sk-）：进程活着且数据库能应答 SELECT 1 才 200，
 # 数据库不可达返回 503。带 -f 让 503 判成不健康——网关每个请求都要落库，DB 挂了就不该接流量。
 # compose 里 caddy / 前端对本服务的 depends_on 用 service_healthy，靠的就是这条。

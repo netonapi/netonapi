@@ -86,8 +86,8 @@ Kotlin/Native 的测试任务只能在架构匹配的宿主上运行——Apple 
 
 配置在 `application/config/*.conf`（`application.conf`、`database.conf`、`routing.conf`、
 `storage.conf`、`geolite.conf`），每一项都能用环境变量覆盖——`NETON_` 前缀、`__` 表示点、路径小写
-（`NETON_REDIS__HOST` → `redis.host`）；产品自身的开关用 `NEWGATE_*`，如
-`NEWGATE_CHANNEL_KEY_ENC_KEY`、`NEWGATE_SALE_MARKUP`、`NEWGATE_MIN_MARGIN`。部署在反代之后须配
+（`NETON_REDIS__HOST` → `redis.host`）；产品自身的开关用 `NETONAPI_*`，如
+`NETONAPI_CHANNEL_KEY_ENC_KEY`、`NETONAPI_SALE_MARKUP`、`NETONAPI_MIN_MARGIN`。部署在反代之后须配
 `NETON_ROUTING__RATELIMIT__TRUSTED_PROXIES`（如 `127.0.0.1,::1`），限流、审计与令牌 IP 白名单才能拿到真实客户端。
 数据库只支持 PostgreSQL。
 
@@ -118,7 +118,7 @@ KSP 生成 `GeneratedApplicationModules`，`migrate` 子命令、启动 precheck
 ```bash
 cd ..          # 含 harness/ 的工作区根目录
 bash harness/run.sh                          # macOS：默认构建 macosArm64
-NEWGATE_TARGET=linuxX64 bash harness/run.sh  # Linux
+NETONAPI_TARGET=linuxX64 bash harness/run.sh  # Linux
 ```
 
 ## 文档

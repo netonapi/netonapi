@@ -160,10 +160,10 @@ class GatewayInviteRewardBridge : MemberInviteRewardListener {
 
     companion object {
         /** 邀请人奖励（μUSD）。未配置 = 0 = 不奖励。 */
-        const val ENV_INVITER = "NEWGATE_INVITE_REWARD_INVITER"
+        const val ENV_INVITER = "NETONAPI_INVITE_REWARD_INVITER"
 
         /** 被邀请人奖励（μUSD）。未配置 = 0 = 不奖励。 */
-        const val ENV_INVITEE = "NEWGATE_INVITE_REWARD_INVITEE"
+        const val ENV_INVITEE = "NETONAPI_INVITE_REWARD_INVITEE"
 
         /**
          * 台账类型。[model.QuotaTransaction] 的 KDoc 原本只列 grant/consume/refund/redeem，

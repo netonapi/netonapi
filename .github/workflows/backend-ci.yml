@@ -269,7 +269,7 @@ jobs:
       - name: Run reliability harness
         working-directory: NewGate
         env:
-          NEWGATE_TARGET: linuxX64
+          NETONAPI_TARGET: linuxX64
           PGUSER: netonapi
           PGPASS: netonapi
           PGHOST: localhost

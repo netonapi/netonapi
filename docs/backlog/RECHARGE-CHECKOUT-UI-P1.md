@@ -27,7 +27,7 @@ The checkout contract is not the gap, and it is worth stating precisely so nobod
   table) and `payChannelCode` (the user picked it seconds ago). Harness S53 holds all of this,
   including that a *closed* order stays readable instead of being filtered into a 404.
 - It takes `price` and **not** `amount`: quota is computed server-side from
-  `NEWGATE_QUOTA_PER_PRICE_UNIT`. Accepting both would let the client set its own price.
+  `NETONAPI_QUOTA_PER_PRICE_UNIT`. Accepting both would let the client set its own price.
 - Both parameters are validated **before** the intent row is created, so a rejected attempt leaves no
   `gateway_quota_recharges` row. Harness S30 asserts this (`缺 channelCode → 400 且不留意图单`).
 - `payment` has **no default channel** — `PayOrderLogic.resolveRoute` treats null as unusable, and the
@@ -135,7 +135,7 @@ be built on a real completion state rather than on balance-polling.
   ledger row. S32/S33 already hold the backend half; what is new is the read-back and the fact that
   the UI drove it.
 - Replay the callback: still exactly one ledger row, and the read-back endpoint still reports paid.
-- With `NEWGATE_QUOTA_PER_PRICE_UNIT` unset, the user sees the decided message from ②, not
+- With `NETONAPI_QUOTA_PER_PRICE_UNIT` unset, the user sees the decided message from ②, not
   `Internal Server Error`.
 - ~~Cross-user read-back returns 404/403, not another user's order.~~ Held by S53 block C. It is 404,
   not 403: 403 would confirm the order exists, and `rechargeId` is autoincrement, so that confirmation

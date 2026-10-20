@@ -43,7 +43,21 @@ import table.MemberProfileTable
 // migrate / precheck / serve 三处共用 —— 不再手写 import + 三份列表。
 import neton.application.generated.GeneratedApplicationModules
 
+/**
+ * 产品环境变量前缀统一为 `NETONAPI_`（2026-10-20 起，原 `NEWGATE_`）。旧名不再读取：
+ * 环境里还留着任何 `NEWGATE_` 开头的变量，说明部署配置没跟着改 —— 直接拒绝启动并列出要改的名字，
+ * 而不是带着被忽略的配置跑起来（比如渠道密钥的加密主密钥没读到、充值换算没设，后果都在事后才暴露）。
+ */
+private fun refuseLegacyEnv() {
+    val legacy = neton.core.config.getEnvMap().keys.filter { it.startsWith("NEWGATE_") }.sorted()
+    if (legacy.isEmpty()) return
+    val hint = legacy.joinToString(", ") { "$it → ${it.replaceFirst("NEWGATE_", "NETONAPI_")}" }
+    println("NetonAPI refuses to start: environment variables were renamed from NEWGATE_* to NETONAPI_*. Rename: $hint")
+    exitProcess(78)
+}
+
 fun main(args: Array<String>) {
+    refuseLegacyEnv()
     // ====== Migrate 子命令路径 ======
     // `./application.kexe migrate <status|up|verify>` — 只跑 migration engine,
     // 不启动 HTTP / scheduler / WebSocket / controllers / seed。SPEC §五。
@@ -146,7 +160,7 @@ fun main(args: Array<String>) {
         // 而桥需要的 QuotaLogic 在 bind 阶段还不存在，所以照旧走 deferred-attach：
         // 注册表按引用持有这个实例，onStart 里挂上 ctx 后，它后续的变化注册表看得见。
         //
-        // 额度默认 0 = 不奖励，必须显式设 NEWGATE_INVITE_REWARD_INVITER / _INVITEE 才发。
+        // 额度默认 0 = 不奖励，必须显式设 NETONAPI_INVITE_REWARD_INVITER / _INVITEE 才发。
         val inviteRewards = GatewayInviteRewardBridge()
         bind(MemberInviteRewardRegistry::class, MemberInviteRewardRegistry(listOf(inviteRewards)))
 
@@ -244,7 +258,7 @@ fun main(args: Array<String>) {
         // gateway 与 member 之间没有编译依赖：gateway 只问「这个用户属于哪个会员组」，
         // 而「由谁回答、按什么规则回答」是**产品策略**，不是通用模块的职责，所以放在这里。
         //
-        // 默认**不启用**：设 NEWGATE_MEMBER_GROUP_BILLING=true 才生效（开关在 gateway 的
+        // 默认**不启用**：设 NETONAPI_MEMBER_GROUP_BILLING=true 才生效（开关在 gateway 的
         // GatewayRuntimeBootstrap 里门控；开着却没绑定下面这个 port 会直接启动失败）。
         //
         // 启用前必须先把会员组映射到 gateway_groups.member_group_id：映射缺失时，有分组的
@@ -336,10 +350,10 @@ fun main(args: Array<String>) {
  * 这是**渠道能访问到我们的地址**，不是容器内部地址 —— 填 `http://localhost:7080`
  * 在本地跑得通、上线后一律回调失败，所以部署时要填反向代理对外的 origin。
  */
-private const val ENV_PAY_NOTIFY_BASE = "NEWGATE_PAY_NOTIFY_BASE"
+private const val ENV_PAY_NOTIFY_BASE = "NETONAPI_PAY_NOTIFY_BASE"
 
 /** 用户付完跳回的控制台页面绝对地址（通常是账单页）。 */
-private const val ENV_PAY_RETURN_URL = "NEWGATE_PAY_RETURN_URL"
+private const val ENV_PAY_RETURN_URL = "NETONAPI_PAY_RETURN_URL"
 
 /**
  * 把一个回调地址的配置状态记进启动日志。三态三个级别，判据见 [PayCallbackUrl]：

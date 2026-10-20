@@ -96,8 +96,8 @@ so there are no SQL files to ship and no working-directory assumptions.
 Configuration lives in `application/config/*.conf` (`application.conf`, `database.conf`,
 `routing.conf`, `storage.conf`, `geolite.conf`) and every value can be overridden by
 environment variables — `NETON_` prefix, `__` for a dot, path lowercased
-(`NETON_REDIS__HOST` → `redis.host`), plus `NEWGATE_*` for product knobs such as
-`NEWGATE_CHANNEL_KEY_ENC_KEY`, `NEWGATE_SALE_MARKUP` and `NEWGATE_MIN_MARGIN`. Behind a
+(`NETON_REDIS__HOST` → `redis.host`), plus `NETONAPI_*` for product knobs such as
+`NETONAPI_CHANNEL_KEY_ENC_KEY`, `NETONAPI_SALE_MARKUP` and `NETONAPI_MIN_MARGIN`. Behind a
 reverse proxy set `NETON_ROUTING__RATELIMIT__TRUSTED_PROXIES` (e.g. `127.0.0.1,::1`) so rate
 limits, audit and token IP allowlists see the real client. Only PostgreSQL is supported.
 
@@ -132,7 +132,7 @@ it did not start.
 ```bash
 cd ..          # the workspace root that holds harness/
 bash harness/run.sh                          # macOS: builds macosArm64 by default
-NEWGATE_TARGET=linuxX64 bash harness/run.sh  # Linux
+NETONAPI_TARGET=linuxX64 bash harness/run.sh  # Linux
 ```
 
 ## Documentation

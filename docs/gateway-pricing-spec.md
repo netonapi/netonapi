@@ -61,7 +61,7 @@
 
 ### 3.3 全站参数
 
-- `gateway.pricing.markup`、`gateway.pricing.min_margin` 是后台「配置管理」里的配置项，默认值取环境变量 `NEWGATE_SALE_MARKUP` / `NEWGATE_MIN_MARGIN`，都没有则为 `1`。
+- `gateway.pricing.markup`、`gateway.pricing.min_margin` 是后台「配置管理」里的配置项，默认值取环境变量 `NETONAPI_SALE_MARKUP` / `NETONAPI_MIN_MARGIN`，都没有则为 `1`。
 - 运行时读取带 10 秒缓存（`PricingPolicy`），改完最多 10 秒生效；配置值越界时回退默认值并记日志。
 
 ### 3.4 必须拒绝的情形
@@ -82,7 +82,7 @@
 
 1. 令牌专属分组（`gateway_tokens.group_override`）
 2. 用户例外（`gateway_group_overrides`，大客户谈判价）
-3. 会员组映射（`gateway_groups.member_group_id`，需 `NEWGATE_MEMBER_GROUP_BILLING=true`）
+3. 会员组映射（`gateway_groups.member_group_id`，需 `NETONAPI_MEMBER_GROUP_BILLING=true`）
 4. `default` 组
 
 ### 4.2 写入约束
@@ -155,7 +155,7 @@
 
 ### 7.4 定时同步
 
-定时任务 `gateway-price-sync`（每天 03:10）仍从环境变量 `NEWGATE_PRICE_SYNC_URL` 拉取并导入（`NEWGATE_PRICE_SYNC_OVERWRITE=false` 则只补新模型），同样受 §5.1 合并闸门约束。
+定时任务 `gateway-price-sync`（每天 03:10）仍从环境变量 `NETONAPI_PRICE_SYNC_URL` 拉取并导入（`NETONAPI_PRICE_SYNC_OVERWRITE=false` 则只补新模型），同样受 §5.1 合并闸门约束。
 
 ## 8. 调价记录
 
