@@ -24,7 +24,7 @@ import neton.database.annotations.*
  * （20 字符 / 31 字符集 ≈ 99 bit，见 [logic.RedemptionCodeLogic.ALPHABET]，它支撑的是 app 侧
  * 兑换接口不挂限流），防不了「读」—— 库被读走时码就在里面。真正兜住这条的只有库访问控制；
  * 要根治得改成存哈希（新码只存哈希、兑换按哈希比对，存量明文码需要过渡期），那是一次带数据
- * 迁移的改动，记在 newgate/docs/backlog/REDEMPTION-CODE-HASH-AT-REST-P2.md。
+ * 迁移的改动，记在 netonapi-backend/docs/backlog/REDEMPTION-CODE-HASH-AT-REST-P2.md。
  * 另外兑换失败一律不回面额。
  */
 @Serializable

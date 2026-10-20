@@ -7,7 +7,7 @@ import neton.core.interfaces.Identity
 import neton.core.interfaces.RequestContext
 
 /**
- * gateway 组认证器：把三家客户端的原生认证载体统一映射到 NewGate 令牌。
+ * gateway 组认证器：把三家客户端的原生认证载体统一映射到 NetonAPI 令牌。
  *
  * 支持 `Authorization: Bearer sk-`（OpenAI）、`x-api-key`（Anthropic）、
  * `x-goog-api-key` 与 `?key=`（Gemini）——官方 SDK 只会按各自协议发认证头，

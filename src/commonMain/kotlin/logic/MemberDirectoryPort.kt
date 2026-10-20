@@ -35,7 +35,7 @@ interface MemberDirectoryPort {
  * 所以 [init.GatewayRuntimeBootstrap] 在 null 时会 warn 一行。这是权衡后的取舍：absent 就
  * **启动失败**，会给「只跑 gateway、不跑 member」的部署凭空加一道墙；absent 就**拒绝写入**，
  * 会让例外功能在没有 member 的部署上整个消失。两者都比退化更难接受，而退化至少是可发现的
- * （有日志），且 NetonAPI 的装配层一定会绑（见 newgate 的 `Main.kt`）。
+ * （有日志），且 NetonAPI 的装配层一定会绑（见 netonapi-backend 的 `Main.kt`）。
  */
 object MemberDirectory {
     var port: MemberDirectoryPort? = null

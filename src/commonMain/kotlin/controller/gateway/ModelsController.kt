@@ -55,7 +55,7 @@ class ModelsController(
             is GroupResolution.Resolved -> r.group.code
         }
         val data = availableModels(token, groupCode).joinToString(",") { m ->
-            """{"id":${quote(m)},"object":"model","created":$created,"owned_by":"nanogate"}"""
+            """{"id":${quote(m)},"object":"model","created":$created,"owned_by":"netonapi"}"""
         }
         response.json("""{"object":"list","data":[$data]}""")
     }

@@ -26,31 +26,31 @@ class MetricsController {
         fun line(name: String, value: Any, labels: String = "") { sb.append(name).append(labels).append(' ').append(value).append('\n') }
         val byStatus = db.fetchAll(
             "SELECT status, COUNT(*) AS n, COALESCE(SUM(charged),0)::BIGINT AS ch, COALESCE(SUM(cost),0)::BIGINT AS co FROM gateway_usage_logs GROUP BY status", emptyMap())
-        sb.append("# HELP nanogate_requests_total Relay requests recorded in usage logs.\n# TYPE nanogate_requests_total counter\n")
-        for (r in byStatus) line("nanogate_requests_total", r.longOrNull("n") ?: 0, "{status=\"${r.stringOrNull("status")}\"}")
-        sb.append("# TYPE nanogate_charged_micro_total counter\n")
-        line("nanogate_charged_micro_total", byStatus.sumOf { it.longOrNull("ch") ?: 0 })
-        sb.append("# TYPE nanogate_cost_micro_total counter\n")
-        line("nanogate_cost_micro_total", byStatus.sumOf { it.longOrNull("co") ?: 0 })
+        sb.append("# HELP netonapi_requests_total Relay requests recorded in usage logs.\n# TYPE netonapi_requests_total counter\n")
+        for (r in byStatus) line("netonapi_requests_total", r.longOrNull("n") ?: 0, "{status=\"${r.stringOrNull("status")}\"}")
+        sb.append("# TYPE netonapi_charged_micro_total counter\n")
+        line("netonapi_charged_micro_total", byStatus.sumOf { it.longOrNull("ch") ?: 0 })
+        sb.append("# TYPE netonapi_cost_micro_total counter\n")
+        line("netonapi_cost_micro_total", byStatus.sumOf { it.longOrNull("co") ?: 0 })
         val recent = db.fetchAll(
             "SELECT status, COUNT(*) AS n, COALESCE(AVG(latency_ms),0)::BIGINT AS lat FROM gateway_usage_logs WHERE created_at >= :from GROUP BY status", mapOf("from" to now - 300_000))
-        sb.append("# HELP nanogate_requests_5m Requests in the last five minutes.\n# TYPE nanogate_requests_5m gauge\n")
+        sb.append("# HELP netonapi_requests_5m Requests in the last five minutes.\n# TYPE netonapi_requests_5m gauge\n")
         for (r in recent) {
-            line("nanogate_requests_5m", r.longOrNull("n") ?: 0, "{status=\"${r.stringOrNull("status")}\"}")
-            line("nanogate_latency_ms_avg_5m", r.longOrNull("lat") ?: 0, "{status=\"${r.stringOrNull("status")}\"}")
+            line("netonapi_requests_5m", r.longOrNull("n") ?: 0, "{status=\"${r.stringOrNull("status")}\"}")
+            line("netonapi_latency_ms_avg_5m", r.longOrNull("lat") ?: 0, "{status=\"${r.stringOrNull("status")}\"}")
         }
         val channels = db.fetchAll("SELECT id, name, status, last_probe_ms, last_probe_ok FROM gateway_channels WHERE deleted = 0", emptyMap())
-        sb.append("# TYPE nanogate_channel_status gauge\n# TYPE nanogate_channel_probe_ms gauge\n# TYPE nanogate_channel_probe_ok gauge\n")
+        sb.append("# TYPE netonapi_channel_status gauge\n# TYPE netonapi_channel_probe_ms gauge\n# TYPE netonapi_channel_probe_ok gauge\n")
         for (c in channels) {
             val l = "{channel=\"${(c.stringOrNull("name") ?: "").replace("\"", "'")}\",id=\"${c.longOrNull("id")}\"}"
-            line("nanogate_channel_status", c.intOrNull("status") ?: 0, l)
-            c.longOrNull("last_probe_ms")?.let { line("nanogate_channel_probe_ms", it, l) }
-            c.intOrNull("last_probe_ok")?.let { line("nanogate_channel_probe_ok", it, l) }
+            line("netonapi_channel_status", c.intOrNull("status") ?: 0, l)
+            c.longOrNull("last_probe_ms")?.let { line("netonapi_channel_probe_ms", it, l) }
+            c.intOrNull("last_probe_ok")?.let { line("netonapi_channel_probe_ok", it, l) }
         }
         val manual = db.fetchAll("SELECT COUNT(*) AS n FROM gateway_settlements WHERE status = 'MANUAL_REVIEW'", emptyMap()).firstOrNull()?.longOrNull("n") ?: 0
-        sb.append("# TYPE nanogate_settlements_manual_review gauge\n"); line("nanogate_settlements_manual_review", manual)
+        sb.append("# TYPE netonapi_settlements_manual_review gauge\n"); line("netonapi_settlements_manual_review", manual)
         val pending = db.fetchAll("SELECT COUNT(*) AS n FROM gateway_settlements WHERE status IN ('FINALIZE_PENDING','RELEASE_PENDING')", emptyMap()).firstOrNull()?.longOrNull("n") ?: 0
-        sb.append("# TYPE nanogate_settlements_pending gauge\n"); line("nanogate_settlements_pending", pending)
+        sb.append("# TYPE netonapi_settlements_pending gauge\n"); line("netonapi_settlements_pending", pending)
         response.contentType = "text/plain; version=0.0.4; charset=utf-8"
         response.text(sb.toString())
     }

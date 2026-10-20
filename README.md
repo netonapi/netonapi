@@ -38,7 +38,7 @@ NetonAPI 是唯一装配 gateway 的发行版（canonical 脚手架装的是 `cs
 ## 测试
 
 ```bash
-./gradlew :module-gateway:macosArm64Test -Pneton.database.driver=postgres   # 从 NewGate/newgate 目录
+./gradlew :module-gateway:macosArm64Test -Pneton.database.driver=postgres   # 从 NewGate/netonapi-backend 目录
 ```
 
 单测覆盖编解码器（Anthropic / OpenAI / Gemini 三向）、SigV4、AWS event-stream 解帧、multipart、计价与预留、路由、限流。

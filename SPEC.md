@@ -281,14 +281,14 @@
   升级默认 `chat`——确实提供向量的渠道必须补声明，宁可明确报无渠道，也不把向量请求送进 chat 上游。
 - ✅ **原生认证载体**：Bearer / `x-api-key`(Anthropic) / `x-goog-api-key` 与 `?key=`(Gemini)。
 - ✅ **未定价模型拒绝**：无定价或无法确定输出上限一律拒绝，不再免费放行。
-- ❌ **用户控制台**（newgate-client 的 gateway 业务）：未开始——用户仍无法自助建 Key / 查用量 / 充值。
+- ❌ **用户控制台**（netonapi-client 的 gateway 业务）：未开始——用户仍无法自助建 Key / 查用量 / 充值。
 - ❌ **支付与兑换打通**：payment/member 的充值与 gateway 额度未接通，付款不会到账。
 
 ### C 可交付（已完成）
 
 - **CI**：补 gateway 模块 checkout + 单元测试；新增 Linux job 用真实 PostgreSQL service 跑可靠性 harness，
   失败上传日志（此前只编译，21 条断言从不在 CI 运行）。
-- **Docker**：`newgate/Dockerfile`（Kotlin/Native 静态二进制，运行阶段无 JVM，非 root，带健康检查）；
+- **Docker**：`netonapi-backend/Dockerfile`（Kotlin/Native 静态二进制，运行阶段无 JVM，非 root，带健康检查）；
   `docker-compose.yml` 内置 PostgreSQL + Redis，迁移作为一次性服务先跑通再起网关；
   三个密钥无默认值，缺失即拒绝启动。`DEPLOY.md` 含上线检查清单与反代注意事项。
 
