@@ -50,7 +50,7 @@ The checkout contract is not the gap, and it is worth stating precisely so nobod
 **1. No checkout entry point anywhere in the user console.** Grepping every client module, the
 console app, and the workspace packages for a real recharge call returns nothing but the mock one.
 
-**2. ~~`newgate-client/README.md` already promises it.~~ CLOSED, and it was worse than recorded.**
+**2. ~~`netonapi-client/README.md` already promises it.~~ CLOSED, and it was worse than recorded.**
 Line 3 did say users "领 API Key、看用量与账单、充值" — three of four real, 充值 not — and the README
 is the first file a prospective operator reads. Fixing it also uncovered a second stale claim in the
 same file: its 已知缺口 section still described `console.nav.ts` as an empty array after the nav had
@@ -122,7 +122,7 @@ be built on a real completion state rather than on balance-polling.
 3. `displayMode` dispatch in `billing.tsx`, replacing the mock card rather than sitting next to it —
    the mock endpoint stays available for integration testing but should not be the primary affordance
    in a page a payer reads.
-4. Fix `newgate-client/README.md` whether or not the rest ships. **DONE ahead of the rest**: line 3 no
+4. Fix `netonapi-client/README.md` whether or not the rest ships. **DONE ahead of the rest**: line 3 no
    longer says 充值, and the 已知缺口 section now names the missing checkout instead of claiming the
    console nav is an empty array (that was fixed separately and the README had gone stale). A README
    that promises money movement the product cannot do is worse than one that lists less.

@@ -24,8 +24,8 @@ env:
 #   includeBuild("../../Neton/neton")
 #   project(":module-gateway").projectDir = file("../../Neton/neton-application-module-gateway")
 # 即「本仓必须在 workspace 下两层，canonical 仓必须在 workspace 的 Neton/ 下」，差一层就解析不到：
-#   dist/newgate    ← 本仓（compile job）
-#   NewGate/newgate ← 本仓（harness job；外层 NewGate = zoujiaqing/nanogate，harness 住在那儿）
+#   dist/netonapi-backend    ← 本仓（compile job）
+#   NewGate/netonapi-backend ← 本仓（harness job；外层 NewGate = zoujiaqing/nanogate，harness 住在那儿）
 #   Neton/*         ← 框架 + 六个模块 + geolite4k
 # 少 checkout 任何一个模块都会在 Gradle **配置期**直接失败（include 指向的目录不存在）。
 # 六个模块都是 include(...) 子项目而非 composite build，KSP 随正常任务图生成，
@@ -41,7 +41,7 @@ jobs:
       - name: Checkout this repository
         uses: actions/checkout@v4
         with:
-          path: dist/newgate
+          path: dist/netonapi-backend
 
       - name: Checkout framework
         uses: actions/checkout@v4
@@ -118,21 +118,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.konan
-          key: konan-${{ runner.os }}-${{ hashFiles('dist/newgate/gradle/libs.versions.toml') }}
+          key: konan-${{ runner.os }}-${{ hashFiles('dist/netonapi-backend/gradle/libs.versions.toml') }}
           restore-keys: konan-${{ runner.os }}-
 
       - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v4
         with:
-          build-root-directory: dist/newgate
+          build-root-directory: dist/netonapi-backend
 
       - name: Compile application
-        working-directory: dist/newgate
+        working-directory: dist/netonapi-backend
         run: ./gradlew :application:compileKotlinMacosArm64
 
       # 只编译不跑测试等于没有回归保护：账务、流式、限流、IP 信任边界、SSRF 全靠这些断言守住。
       - name: Unit tests
-        working-directory: dist/newgate
+        working-directory: dist/netonapi-backend
         run: ./gradlew :module-gateway:macosArm64Test :module-system:macosArm64Test
 
       - name: Upload test results on failure
@@ -156,8 +156,8 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: newgate
-          POSTGRES_PASSWORD: newgate
+          POSTGRES_USER: netonapi
+          POSTGRES_PASSWORD: netonapi
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
@@ -178,7 +178,7 @@ jobs:
       - name: Checkout this repository
         uses: actions/checkout@v4
         with:
-          path: NewGate/newgate
+          path: NewGate/netonapi-backend
 
       - name: Checkout framework
         uses: actions/checkout@v4
@@ -255,7 +255,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.konan
-          key: konan-${{ runner.os }}-${{ hashFiles('NewGate/newgate/gradle/libs.versions.toml') }}
+          key: konan-${{ runner.os }}-${{ hashFiles('NewGate/netonapi-backend/gradle/libs.versions.toml') }}
           restore-keys: konan-${{ runner.os }}-
 
       - name: Install PostgreSQL client
@@ -270,8 +270,8 @@ jobs:
         working-directory: NewGate
         env:
           NEWGATE_TARGET: linuxX64
-          PGUSER: newgate
-          PGPASS: newgate
+          PGUSER: netonapi
+          PGPASS: netonapi
           PGHOST: localhost
         run: bash harness/run.sh
 
@@ -279,9 +279,9 @@ jobs:
       # macOS+brew job 移植为本 job 的一步：同一 PG 服务、同一 checkout，不另起 runner）。
       # postgresContractTest 需要一个有 CREATEDB 的角色；官方镜像的 POSTGRES_USER 是超级用户。
       - name: Outbox store contract (real PostgreSQL)
-        working-directory: NewGate/newgate
+        working-directory: NewGate/netonapi-backend
         env:
-          EVENT_DB_URI: postgresql://newgate:newgate@localhost:5432/postgres
+          EVENT_DB_URI: postgresql://netonapi:netonapi@localhost:5432/postgres
         run: ./gradlew :module-infra:postgresContractTest --no-daemon
 
       - name: Upload harness logs on failure

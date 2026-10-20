@@ -32,11 +32,11 @@ it expensive: the message reads like a configuration mistake, so the first insti
    `commonMain` and at `:45` depends on exactly one sqlx4k artifact. The reason (`:8-10`) is real:
    each driver klib carries a full Rust runtime, and a K/N executable linking two of them dies in
    `ld.lld` with duplicate symbols. So the driver is a **build-time** choice baked into the klib.
-2. Consumers include the framework as a composite build — `NewGate/newgate/settings.gradle.kts:12`
+2. Consumers include the framework as a composite build — `NewGate/netonapi-backend/settings.gradle.kts:12`
    `includeBuild("../../Neton/neton")`; `privchat/privchat-application/settings.gradle.kts` does the
    same. An included build has one build directory regardless of how many roots include it, so
    `Neton/neton/neton-database/build/` is **shared** by every consumer on the machine.
-3. Up-to-date state is per *root* build (`newgate/.gradle/`, `privchat-application/.gradle/`).
+3. Up-to-date state is per *root* build (`netonapi-backend/.gradle/`, `privchat-application/.gradle/`).
    Neither root can see the other's history, and neither re-checks whether a foreign build overwrote
    the shared outputs.
 4. So after consumer B compiles the sqlite variant into that shared directory, consumer A's next
@@ -71,7 +71,7 @@ cd privchat/privchat-application && ./gradlew :module-game:macosArm64Test \
 | 05:11:47 vs 05:12:05 | inside that heal, the sibling rewrote the shared klib to sqlite 18 s before the kexe was written; the binary still came out postgres (probed afterwards: `migrate up` applied 12 migrations, exit 0), so the link had already taken its inputs | klib = sqlite, kexe = postgres |
 
 The 05:06:08 control is what rules out the boring explanations: the property is honoured, nothing in
-`newgate/gradle.properties`, `Neton/neton/gradle.properties` or `~/.gradle/gradle.properties` sets
+`netonapi-backend/gradle.properties`, `Neton/neton/gradle.properties` or `~/.gradle/gradle.properties` sets
 it, and no init script exists. The 05:04:08 row is what bounds the fix: `--rerun-tasks` inside one
 invocation is still a race, because the framework compile and the app link are ~1 minute apart.
 

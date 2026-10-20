@@ -19,7 +19,7 @@ NetonAPI 是一个自托管的 LLM API 网关：自己签发一套 Key，背后�
 | 默认端口 | `7080` |
 | 许可 | [Apache-2.0](./LICENSE) |
 
-配套仓：**nanogate-admin**（管理台）与 **nanogate-client**（用户控制台）。
+配套仓：[**netonapi-frontend**](https://github.com/netonapi/netonapi-frontend)（管理台）与 [**netonapi-client**](https://github.com/netonapi/netonapi-client)（用户控制台）。
 部署、密钥、反向代理与 SSRF 说明见 `nanogate` 仓的
 [`DEPLOY.md`](https://github.com/zoujiaqing/nanogate/blob/main/DEPLOY.md)，端到端测试 harness 也在那里。
 
@@ -41,7 +41,7 @@ projects/
 │   ├── neton-application-module-platform/
 │   └── neton-application-module-gateway/   # NetonAPI 的核心模块
 └── <workspace>/                            # Gradle 不关心这层叫什么…
-    └── newgate/                            # ← 本仓
+    └── netonapi-backend/                   # ← 本仓
 ```
 
 框架与模块是以**源码子项目**方式引入的（`include(...)` + `projectDir`），不是 `includeBuild`——

@@ -44,7 +44,7 @@ bound during the DSL phase, then `attach(ctx)` runs inside the single existing `
 ## Gap (as it was)
 
 There was no `bind(MemberInviteRewardRegistry::class, ...)` in any Neton module repository or in
-`newgate/application`. `getOrNull` therefore always returned null, the registry was always absent,
+`netonapi-backend/application`. `getOrNull` therefore always returned null, the registry was always absent,
 and `dispatchInviteReward` had nothing to iterate.
 
 Consequences:

@@ -6,7 +6,7 @@ pluginManagement {
     }
 }
 
-rootProject.name = "newgate"
+rootProject.name = "netonapi-backend"
 
 // 框架依赖（composite build）—— canonical 仓位于 ../../Neton/，所有下游 fork 共用这个布局约定
 includeBuild("../../Neton/neton")

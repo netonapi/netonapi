@@ -4,13 +4,13 @@
 #
 # 构建上下文必须是**同时含 `Neton/` 与 `NewGate/` 的那一层**（docker-compose 里写的是
 # `context: ..`），且这两个外层目录名是构建契约的一部分：
-#   docker build -f NewGate/newgate/Dockerfile -t nanogate:latest .
+#   docker build -f NewGate/netonapi-backend/Dockerfile -t netonapi-backend:latest .
 
 FROM eclipse-temurin:17-jdk AS build
 WORKDIR /src
 
 # 镜像内必须复刻宿主布局：settings.gradle.kts 用 `../../Neton/<repo>` 引框架与 canonical
-# 模块，所以应用要落在两层深处（/src/NewGate/newgate），依赖落在同层的 /src/Neton/ 下。
+# 模块，所以应用要落在两层深处（/src/NewGate/netonapi-backend），依赖落在同层的 /src/Neton/ 下。
 # 下面八个仓一个都不能少——少任何一个，Gradle 在 configuration 阶段就因找不到
 # included build / projectDir 而失败（module-system、module-infra、geolite4k 曾被漏掉）。
 COPY Neton/neton                             /src/Neton/neton
@@ -22,9 +22,9 @@ COPY Neton/neton-application-module-member   /src/Neton/neton-application-module
 COPY Neton/neton-application-module-payment  /src/Neton/neton-application-module-payment
 COPY Neton/neton-application-module-platform /src/Neton/neton-application-module-platform
 COPY Neton/neton-application-module-gateway  /src/Neton/neton-application-module-gateway
-COPY NewGate/newgate                         /src/NewGate/newgate
+COPY NewGate/netonapi-backend                         /src/NewGate/netonapi-backend
 
-WORKDIR /src/NewGate/newgate
+WORKDIR /src/NewGate/netonapi-backend
 # libcurl 头文件：SMTP 发信（smtps / STARTTLS）通过 cinterop 调系统 libcurl；运行镜像的 curl 包自带 libcurl4
 RUN apt-get update && apt-get install -y --no-install-recommends libcurl4-openssl-dev && rm -rf /var/lib/apt/lists/*
 RUN ./gradlew :application:linkReleaseExecutableLinuxX64 --no-daemon
@@ -35,13 +35,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # 不用 root 跑服务
-RUN useradd --system --create-home --uid 10001 newgate
+RUN useradd --system --create-home --uid 10001 netonapi
 WORKDIR /app
 
-COPY --from=build /src/NewGate/newgate/application/build/bin/linuxX64/releaseExecutable/application.kexe /app/newgate
-COPY --from=build /src/NewGate/newgate/application/config /app/config
+COPY --from=build /src/NewGate/netonapi-backend/application/build/bin/linuxX64/releaseExecutable/application.kexe /app/netonapi
+COPY --from=build /src/NewGate/netonapi-backend/application/config /app/config
 
-USER newgate
+USER netonapi
 EXPOSE 8800
 
 # 配置一律用环境变量覆盖（镜像内的默认值只适用于本地起步）：
@@ -54,4 +54,4 @@ EXPOSE 8800
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8800/health || exit 1
 
-ENTRYPOINT ["/app/newgate"]
+ENTRYPOINT ["/app/netonapi"]

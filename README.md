@@ -22,8 +22,8 @@ logic lives in the module repositories, not here.
 | Default port | `8800` |
 | License | [Apache-2.0](./LICENSE) |
 
-Companion repositories: **nanogate-admin** (operator console) and **nanogate-client**
-(self-service console). Deployment, secrets, reverse-proxy and SSRF notes:
+Companion repositories: [**netonapi-frontend**](https://github.com/netonapi/netonapi-frontend) (operator console) and
+[**netonapi-client**](https://github.com/netonapi/netonapi-client) (self-service console). Deployment, secrets, reverse-proxy and SSRF notes:
 [`DEPLOY.md`](https://github.com/zoujiaqing/nanogate/blob/main/DEPLOY.md) in the `nanogate`
 repository, which also carries the end-to-end test harness.
 
@@ -45,7 +45,7 @@ projects/
 │   ├── neton-application-module-platform/
 │   └── neton-application-module-gateway/   # the NetonAPI core
 └── <workspace>/                            # any name for Gradle…
-    └── newgate/                            # ← this repository
+    └── netonapi-backend/                   # ← this repository
 ```
 
 The framework and the modules are pulled in as **source subprojects** (`include(...)` +
