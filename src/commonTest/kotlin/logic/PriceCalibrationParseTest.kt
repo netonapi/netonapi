@@ -61,4 +61,16 @@ class PriceCalibrationParseTest {
         assertEquals("3", p.input)
         assertEquals("3.75", p.cacheWrite)
     }
+
+    @Test
+    fun sourceWithoutTierInfoRescalesExistingTiers() {
+        val p = model.ModelPrice(model = "g", inputPrice = "1.25", outputPrice = "10",
+            tiers = """[{"maxPromptTokens":200000,"input":"1.25","output":"10","cacheRead":"0","cacheWrite":"0"},
+                        {"maxPromptTokens":null,"input":"2.5","output":"15","cacheRead":"0","cacheWrite":"0"}]""")
+        val next = PriceCalibrationLogic.mergeSource(p, SourcePrice("g", input = "2.5", output = "20"))
+        assertEquals("2.5", next.inputPrice, "基础价按价源更新，不能被旧的第一档盖回去")
+        val tiers = PricingTiers.parse(next.tiers)!!
+        assertEquals("5", tiers[1].input)
+        assertEquals("30", tiers[1].output)
+    }
 }

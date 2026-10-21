@@ -17,7 +17,7 @@ class UpstreamPricingParserTest {
         assertEquals("2.5", p.input)
         assertEquals("20", p.output)
         assertEquals("0.25", p.cacheRead)
-        assertEquals("0", p.cacheWrite)
+        assertEquals("3.125", p.cacheWrite, "没给 create_cache_ratio → new-api 默认 1.25")
         assertNull(p.perRequest)
     }
 
@@ -78,5 +78,21 @@ class UpstreamPricingParserTest {
         assertEquals("2", tiers[1].input)
         assertEquals("12", tiers[1].output)
         assertNull(UpstreamPricingParser.withOfficialTiers(UpstreamPrice("g", "1", "8", "0", "0", null), official.copy(tiers = null)))
+    }
+
+    @Test
+    fun missingCacheRatiosUseNewApiDefaults() {
+        // new-api 对没配缓存倍率的模型按缓存读 1、缓存写 1.25 计（setting/ratio_setting/cache_ratio.go）
+        val p = one("newapi", """{"success":true,"data":[{"model_name":"m","quota_type":0,"model_ratio":1,"completion_ratio":1}]}""")
+        assertEquals("2", p.cacheRead)
+        assertEquals("2.5", p.cacheWrite)
+    }
+
+    @Test
+    fun absurdValuesAreSkippedNotThrown() {
+        val r = UpstreamPricingParser.parse("newapi", """{"success":true,"data":[
+            {"model_name":"ok","quota_type":0,"model_ratio":1,"completion_ratio":1},
+            {"model_name":"huge","quota_type":0,"model_ratio":1e12,"completion_ratio":1}]}""").getOrThrow()
+        assertEquals(listOf("ok"), r.map { it.upstreamModel })
     }
 }

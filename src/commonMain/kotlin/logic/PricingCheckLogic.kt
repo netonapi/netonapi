@@ -52,6 +52,8 @@ data class ChannelRouteVO(
     val configuredSource: String,
     val discount: String,
     val stale: Boolean,
+    /** 渠道成本来源是上游价目接口，但最近一次同步失败、或超过 [SYNC_STALE_MILLIS] 没成功过：成本数据可能已过期。 */
+    val syncFailing: Boolean = false,
 )
 
 @Serializable
@@ -75,6 +77,8 @@ data class PricingCheckRow(
     val flagged: List<PricingCombo> = emptyList(),
     val comboCount: Int = 0,
     val displayName: String? = null,
+    /** 售价分档（第一档 = saleInput/saleOutput）；单档为空。 */
+    val saleTiers: List<PriceTier>? = null,
     /** 承载这个模型的渠道（按优先级从高到低）。 */
     val channels: List<ChannelRouteVO> = emptyList(),
     /** 体检提示：PRIORITY_COST_INVERSION / UPSTREAM_NOT_PRICED / COST_STALE / OFFICIAL_ONLY。 */
@@ -153,6 +157,8 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
                 costOutput = PricingCalc.microToDecimal(SalePricing.scaleMicro(PricingCalc.parseMicro(basis.price.outputPrice), basis.discount)),
                 costSource = basis.source, configuredSource = ch.costSource, discount = basis.discount,
                 stale = costs[ch.id to price.model]?.stale == 1,
+                syncFailing = ch.costSource == "upstream" &&
+                    (ch.costSyncError != null || (ch.costSyncedAt ?: 0L) < now - SYNC_STALE_MILLIS),
             )
             for (code in ch.groups.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
                 val g = groups[code] ?: continue
@@ -177,6 +183,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
             flagged = combos.filter { it.status != OK }.sortedBy { it.marginBp }.take(MAX_FLAGGED),
             comboCount = combos.size,
             displayName = price.displayName,
+            saleTiers = PricingTiers.parse(sale.tiers),
             channels = routes.sortedByDescending { it.priority },
             hints = hintsFor(routes, now),
         )
@@ -243,6 +250,9 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         const val HINT_COST_STALE = "COST_STALE"
         const val HINT_OFFICIAL_ONLY = "OFFICIAL_ONLY"
 
+        /** 上游成本超过这么久没同步成功就算过期（同步每 6 小时一次，留两个周期的余量）。 */
+        const val SYNC_STALE_MILLIS = 13L * 3_600_000
+
         /**
          * 体检提示（不改路由，只提醒）：
          *  - 优先级更高的渠道比某个健康的、更低优先级渠道贵（按基础档输入 + 输出价比较）；
@@ -261,7 +271,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
             }
             if (inverted) hints += HINT_PRIORITY_COST_INVERSION
             if (routes.any { it.configuredSource == "upstream" && it.costSource == ChannelCostLogic.SOURCE_OFFICIAL }) hints += HINT_UPSTREAM_NOT_PRICED
-            if (routes.any { it.stale }) hints += HINT_COST_STALE
+            if (routes.any { it.stale || it.syncFailing }) hints += HINT_COST_STALE
             if (routes.all { it.costSource == ChannelCostLogic.SOURCE_OFFICIAL && PricingCalc.parseRatio(it.discount) == 10_000 }) hints += HINT_OFFICIAL_ONLY
             return hints
         }

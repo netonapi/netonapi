@@ -52,4 +52,11 @@ class PricingTiersTest {
     fun totalInputCountsCacheOnce() {
         assertEquals(1050L, PricingTiers.totalInput(Usage(promptTokens = 1000, cacheReadTokens = 800, cacheWriteTokens = 50)))
     }
+
+    @Test
+    fun totalInputAddsCacheWhenPromptExcludesIt() {
+        // Anthropic：input_tokens 不含缓存
+        val u = Usage(promptTokens = 120_000, cacheReadTokens = 150_000, cacheWriteTokens = 10, promptIncludesCache = false)
+        assertEquals(270_010L, PricingTiers.totalInput(u))
+    }
 }

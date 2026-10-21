@@ -40,4 +40,10 @@ class PricingCheckHintsTest {
         assertTrue(PricingCheckLogic.HINT_UPSTREAM_NOT_PRICED in hints)
         assertTrue(PricingCheckLogic.HINT_COST_STALE in hints)
     }
+
+    @Test
+    fun failingUpstreamSyncIsFlagged() {
+        val r = route(1, 1, "3").copy(syncFailing = true)
+        assertTrue(PricingCheckLogic.HINT_COST_STALE in PricingCheckLogic.hintsFor(listOf(r), now = 0))
+    }
 }

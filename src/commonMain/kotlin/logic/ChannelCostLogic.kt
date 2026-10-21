@@ -63,7 +63,11 @@ object ChannelCostLogic {
         costs: Map<Pair<Long, String>, ChannelModelCost>,
         prices: Map<String, ModelPrice>,
     ): CostBasis? {
-        costs[channel.id to requestModel]?.let { return CostBasis(it.toModelPrice(requestModel), "1", SOURCE_CHANNEL) }
+        // 上游同步来的行只在成本来源仍是「上游价目接口」时生效：切回官方价后，界面写的是「官方价 × 折扣」，
+        // 旧的上游行（已冻结不再更新）不能继续悄悄决定成本。手填的行始终生效。
+        costs[channel.id to requestModel]
+            ?.takeIf { it.source != "upstream" || channel.costSource == "upstream" }
+            ?.let { return CostBasis(it.toModelPrice(requestModel), "1", SOURCE_CHANNEL) }
         val official = prices[upstreamModel] ?: requestPrice ?: prices[requestModel] ?: return null
         return CostBasis(official, channel.costDiscount, SOURCE_OFFICIAL)
     }

@@ -18,6 +18,7 @@ object AnthropicUsageExtractor {
         completionTokens = usage["output_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
         cacheReadTokens = usage["cache_read_input_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
         cacheWriteTokens = usage["cache_creation_input_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
+        promptIncludesCache = false,
     )
 
     fun accumulator(): StreamUsageAccumulator = AnthropicSseUsageAccumulator()
@@ -63,5 +64,5 @@ class AnthropicSseUsageAccumulator : StreamUsageAccumulator {
     }
 
     override fun usage(): Usage? =
-        if (seen) Usage(input, output, cacheRead, cacheWrite) else null
+        if (seen) Usage(input, output, cacheRead, cacheWrite, promptIncludesCache = false) else null
 }

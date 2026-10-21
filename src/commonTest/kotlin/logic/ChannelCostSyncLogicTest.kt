@@ -25,4 +25,12 @@ class ChannelCostSyncLogicTest {
         assertEquals(setOf("plain"), ChannelCostSyncLogic.requestModelsFor(ch, "plain"))
         assertEquals(emptySet(), ChannelCostSyncLogic.requestModelsFor(ch, "unknown"))
     }
+
+    @Test
+    fun mappedModelIsNotAlsoMatchedByItsOwnName() {
+        val ch = model.Channel(id = 1, name = "c", type = "openai_compatible", baseUrl = "http://x", models = "gpt-4o",
+            modelMapping = """{"gpt-4o":"gpt-4o-mini"}""")
+        assertEquals(emptySet(), ChannelCostSyncLogic.requestModelsFor(ch, "gpt-4o"), "gpt-4o 实际打的是 mini，不能再拿 gpt-4o 的价")
+        assertEquals(setOf("gpt-4o"), ChannelCostSyncLogic.requestModelsFor(ch, "gpt-4o-mini"))
+    }
 }

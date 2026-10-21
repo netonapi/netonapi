@@ -79,9 +79,10 @@ object PricingTiers {
         return apply(price, top)
     }
 
-    /** 总输入 token：上游的 prompt 有的已含缓存读（OpenAI），有的不含（Anthropic），取大者避免重复计。 */
+    /** 总输入 token = 新输入 + 缓存读 + 缓存写；prompt 是否已含缓存读看 [Usage.promptIncludesCache]（Anthropic 不含）。 */
     fun totalInput(usage: Usage): Long =
-        maxOf(usage.promptTokens, usage.cacheReadTokens).toLong() + usage.cacheWriteTokens
+        if (usage.promptIncludesCache) maxOf(usage.promptTokens, usage.cacheReadTokens).toLong() + usage.cacheWriteTokens
+        else usage.promptTokens.toLong() + usage.cacheReadTokens + usage.cacheWriteTokens
 
     /** 有分档时把四个单档价格列设成第一档：两处不一致时不同代码路径会读到不同的「基础价」。 */
     fun withBaseFromTiers(price: ModelPrice): ModelPrice {

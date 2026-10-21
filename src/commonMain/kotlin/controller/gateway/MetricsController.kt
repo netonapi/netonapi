@@ -54,6 +54,13 @@ class MetricsController {
         // 最近一次价源检查里待确认的官方价变动（有变化 + 可新增）；告警脚本据此提醒去「校准官方价」
         val sync = db.fetchAll("SELECT changed + new_models AS n FROM gateway_price_sync_runs ORDER BY id DESC LIMIT 1", emptyMap()).firstOrNull()?.longOrNull("n") ?: 0
         sb.append("# TYPE netonapi_price_pending_changes gauge\n"); line("netonapi_price_pending_changes", sync)
+        // 成本来源为上游价目接口、但最近同步失败或超过 24 小时没成功的渠道数：成本数据在变旧，告警脚本据此提醒
+        val dayAgo = now - 24L * 3_600_000
+        val failing = db.fetchAll(
+            "SELECT COUNT(*) AS n FROM gateway_channels WHERE deleted = 0 AND cost_source = 'upstream' AND (cost_sync_error IS NOT NULL OR COALESCE(cost_synced_at, 0) < :t)",
+            mapOf("t" to dayAgo),
+        ).firstOrNull()?.longOrNull("n") ?: 0
+        sb.append("# TYPE netonapi_channel_cost_sync_failing gauge\n"); line("netonapi_channel_cost_sync_failing", failing)
         response.contentType = "text/plain; version=0.0.4; charset=utf-8"
         response.text(sb.toString())
     }

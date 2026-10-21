@@ -180,7 +180,8 @@ class PriceCalibrationLogic(
     }
 
     private suspend fun fetch(format: String, url: String): Result<ParsedSource> {
-        val provider = RelayEngine.deployConfigClients ?: return Result.failure(IllegalStateException("HttpClientProvider 未绑定"))
+        // 价源地址是后台运行期配置：走受控客户端，按运维出站策略校验每次连接的目标地址
+        val provider = RelayEngine.guardedClients ?: return Result.failure(IllegalStateException("GuardedHttpClientProvider 未绑定"))
         val client = provider.create { connectMillis = 5_000; requestMillis = 60_000; socketMillis = 60_000 }
         return try {
             val res = client.request(neton.http.client.HttpClientRequest(method = neton.http.client.HttpClientMethod.Get, url = url))
@@ -206,14 +207,7 @@ class PriceCalibrationLogic(
         }
     }
 
-    /** 价源只覆盖它给出的字段；没给的（常见是缓存价）保留我们现在的值，不清零。 */
-    private fun merge(p: ModelPrice, src: SourcePrice): ModelPrice = p.copy(
-        inputPrice = src.input ?: p.inputPrice,
-        outputPrice = src.output ?: p.outputPrice,
-        cacheReadPrice = src.cacheRead ?: p.cacheReadPrice,
-        cacheWritePrice = src.cacheWrite ?: p.cacheWritePrice,
-        tiers = if (src.tiersKnown) src.tiers?.let { PricingTiers.render(it) } else p.tiers,
-    ).let { PricingTiers.withBaseFromTiers(it) }
+    private fun merge(p: ModelPrice, src: SourcePrice): ModelPrice = mergeSource(p, src)
 
     private fun same(a: ModelPrice, b: ModelPrice): Boolean =
         listOf(a.inputPrice to b.inputPrice, a.outputPrice to b.outputPrice, a.cacheReadPrice to b.cacheReadPrice, a.cacheWritePrice to b.cacheWritePrice)
@@ -327,6 +321,37 @@ class PriceCalibrationLogic(
             val v = (e as? JsonPrimitive)?.doubleOrNull ?: return null
             if (v < 0 || v.isNaN() || v.isInfinite()) return null
             return PricingCalc.microToDecimal((v * 1e6).roundToLong())
+        }
+
+        /**
+         * 价源只覆盖它给出的字段；没给的（常见是缓存价）保留我们现在的值，不清零。
+         * 价源给了分档信息就用它的分档；没给（LiteLLM、OpenRouter、models.dev）而我们原有分档时，
+         * 各档按「新基础价 ÷ 旧基础价」逐项等比缩放 —— 否则新基础价会被旧的第一档盖回去，价格永远显示「一致」。
+         */
+        fun mergeSource(p: ModelPrice, src: SourcePrice): ModelPrice {
+            val base = p.copy(
+                inputPrice = src.input ?: p.inputPrice,
+                outputPrice = src.output ?: p.outputPrice,
+                cacheReadPrice = src.cacheRead ?: p.cacheReadPrice,
+                cacheWritePrice = src.cacheWrite ?: p.cacheWritePrice,
+            )
+            val tiers = when {
+                src.tiersKnown -> src.tiers?.let { PricingTiers.render(it) }
+                else -> PricingTiers.parse(p.tiers)?.let { old ->
+                    fun scale(tierValue: String, oldBase: String, newBase: String): String {
+                        val o = PricingCalc.parseMicro(oldBase)
+                        if (o == 0L) return tierValue
+                        return PricingCalc.microToDecimal(PricingCalc.parseMicro(tierValue) * PricingCalc.parseMicro(newBase) / o)
+                    }
+                    PricingTiers.render(old.map { t ->
+                        t.copy(
+                            input = scale(t.input, p.inputPrice, base.inputPrice), output = scale(t.output, p.outputPrice, base.outputPrice),
+                            cacheRead = scale(t.cacheRead, p.cacheReadPrice, base.cacheReadPrice), cacheWrite = scale(t.cacheWrite, p.cacheWritePrice, base.cacheWritePrice),
+                        )
+                    })
+                }
+            }
+            return PricingTiers.withBaseFromTiers(base.copy(tiers = tiers))
         }
 
         const val UNPARSABLE = "UNPARSABLE"

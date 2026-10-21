@@ -8,6 +8,11 @@ data class Usage(
     val completionTokens: Int = 0,
     val cacheReadTokens: Int = 0,
     val cacheWriteTokens: Int = 0,
+    /**
+     * promptTokens 是否已包含缓存读（OpenAI / Gemini 口径为 true）。Anthropic 的 input_tokens 只是新输入，
+     * 缓存读、缓存写另计（false）：此时不能再从 prompt 里扣缓存读，总输入 = prompt + 缓存读 + 缓存写。
+     */
+    val promptIncludesCache: Boolean = true,
 )
 
 /**
@@ -117,8 +122,8 @@ object PricingCalc {
 
     private fun rawAmount(usage: Usage, price: ModelPrice): Long {
         price.perRequestPrice?.let { return it }
-        val cacheRead = usage.cacheReadTokens.coerceAtMost(usage.promptTokens)
-        val freshInput = usage.promptTokens - cacheRead
+        val cacheRead = if (usage.promptIncludesCache) usage.cacheReadTokens.coerceAtMost(usage.promptTokens) else usage.cacheReadTokens
+        val freshInput = if (usage.promptIncludesCache) usage.promptTokens - cacheRead else usage.promptTokens
         return tokenCost(freshInput, parseMicro(price.inputPrice)) +
             tokenCost(cacheRead, parseMicro(price.cacheReadPrice)) +
             tokenCost(usage.cacheWriteTokens, parseMicro(price.cacheWritePrice)) +

@@ -106,4 +106,16 @@ class PricingValidationTest {
             PricingCalc.tokenCost(Int.MAX_VALUE, PricingCalc.parseMicro("9999999"))
         }
     }
+
+    @Test
+    fun anthropicFreshInputIsNotReducedByCacheReads() {
+        // Anthropic 的 input_tokens 只是新输入，缓存读另计：不能再从里面扣掉缓存读
+        val price = model.ModelPrice(model = "c", inputPrice = "3", outputPrice = "15", cacheReadPrice = "0.3", cacheWritePrice = "3.75")
+        val u = Usage(promptTokens = 1000, completionTokens = 0, cacheReadTokens = 2000, cacheWriteTokens = 0, promptIncludesCache = false)
+        // 1000 × 3 + 2000 × 0.3 = 3000 + 600 μUSD
+        kotlin.test.assertEquals(3600L, PricingCalc.charge(u, price, "1"))
+        // OpenAI 口径（prompt 含缓存）不变：fresh = 3000 − 2000 = 1000
+        val o = Usage(promptTokens = 3000, cacheReadTokens = 2000)
+        kotlin.test.assertEquals(3600L, PricingCalc.charge(o, price, "1"))
+    }
 }

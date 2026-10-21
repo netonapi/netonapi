@@ -44,8 +44,14 @@ object UpstreamPricingParser {
             "newapi" -> parseNewApi(root)
             "openrouter" -> parseOpenRouter(root)
             else -> error("unknown pricing format $format")
-        }
+        }.filter { valid(it) }
     }
+
+    /** 价格串必须过 requirePrice（非负、整数部分 ≤ 7 位）：上游的怪数据跳过，不进入结算路径。 */
+    private fun valid(p: UpstreamPrice): Boolean = runCatching {
+        listOf(p.input, p.output, p.cacheRead, p.cacheWrite).forEach { PricingCalc.requirePrice(it) }
+        require((p.perRequest ?: 0) in 0..1_000_000_000_000L)
+    }.isSuccess
 
     /** × 上游分组倍率 × 上游额度单价：上游标价 → 我们实际付出的美元。 */
     fun scale(p: UpstreamPrice, groupRatio: String, creditRate: String): UpstreamPrice {
@@ -117,7 +123,8 @@ object UpstreamPricingParser {
     private fun fromRatios(name: String, modelRatio: Double, completion: Double, cache: Double?, createCache: Double?): UpstreamPrice {
         val inputMicro = (modelRatio * 2 * 1_000_000).roundToLong()
         fun times(r: Double?) = if (r == null) "0" else PricingCalc.microToDecimal((inputMicro * r).roundToLong())
-        return UpstreamPrice(name, PricingCalc.microToDecimal(inputMicro), times(completion), times(cache), times(createCache), null)
+        // 没配缓存倍率时按 new-api 的默认：缓存读 1（按输入原价）、缓存写 1.25（setting/ratio_setting/cache_ratio.go）
+        return UpstreamPrice(name, PricingCalc.microToDecimal(inputMicro), times(completion), times(cache ?: 1.0), times(createCache ?: 1.25), null)
     }
 
     private fun parseOpenRouter(root: JsonElement): List<UpstreamPrice> {

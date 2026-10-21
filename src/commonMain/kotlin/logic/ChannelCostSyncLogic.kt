@@ -52,8 +52,16 @@ class ChannelCostSyncLogic(private val log: Logger, private val channelLogic: Ch
 
     enum class Decision { APPLY, PENDING }
 
+    /** 逐条渠道各自隔离：一条渠道出错（数据库、上游怪数据）只记在它自己身上，不中断后面的渠道。 */
     suspend fun syncAll(): List<ChannelCostSyncResult> =
-        ChannelTable.findAll().filter { it.costSource == "upstream" }.map { syncChannel(it.id, null) }
+        ChannelTable.findAll().filter { it.costSource == "upstream" }.map { ch ->
+            runCatching { syncChannel(ch.id, null) }.getOrElse { e ->
+                val msg = (e.message ?: e::class.simpleName ?: "error").take(500)
+                log.error("channel cost sync crashed channel=${ch.id}: $msg")
+                runCatching { markSync(ch.id, null, msg) }
+                ChannelCostSyncResult(ch.id, 0, 0, 0, msg)
+            }
+        }
 
     @OptIn(ExperimentalTime::class)
     suspend fun syncChannel(channelId: Long, operatorId: Long?): ChannelCostSyncResult {
@@ -64,7 +72,7 @@ class ChannelCostSyncLogic(private val log: Logger, private val channelLogic: Ch
         val fetched = fetch(ch, format)
         val list = fetched.getOrElse { e ->
             val msg = (e.message ?: e::class.simpleName ?: "error").take(500)
-            channelLogic.update(ch.copy(costSyncError = msg))
+            markSync(ch.id, null, msg)
             log.warn("channel cost sync failed channel=${ch.id}: $msg")
             return ChannelCostSyncResult(channelId, 0, 0, 0, msg)
         }
@@ -76,7 +84,9 @@ class ChannelCostSyncLogic(private val log: Logger, private val channelLogic: Ch
         var updated = 0; var pending = 0
         val seen = mutableSetOf<String>()
         for (raw in list) {
-            val scaled = UpstreamPricingParser.scale(raw, ch.upstreamGroupRatio, ch.upstreamCreditRate)
+            // 换算后越界（倍率放大到超出价格上限）的条目跳过，不让一条怪数据打断整条渠道
+            val scaled = runCatching { UpstreamPricingParser.scale(raw, ch.upstreamGroupRatio, ch.upstreamCreditRate) }
+                .getOrElse { log.warn("channel cost sync skipped ${raw.upstreamModel} on channel ${ch.id}: ${it.message}"); continue }
             for (model in requestModelsFor(ch, raw.upstreamModel)) {
                 seen += model
                 val old = existing[model]
@@ -110,7 +120,7 @@ class ChannelCostSyncLogic(private val log: Logger, private val channelLogic: Ch
         existing.values.filter { it.source == SOURCE_UPSTREAM && it.model !in seen && it.stale == 0 }.forEach {
             ChannelModelCostTable.update(it.copy(stale = 1)); stale++
         }
-        channelLogic.update(ch.copy(costSyncedAt = now, costSyncError = null))
+        markSync(ch.id, now, null)
         log.info("channel cost sync channel=${ch.id} updated=$updated pending=$pending stale=$stale")
         return ChannelCostSyncResult(channelId, updated, pending, stale)
     }
@@ -159,26 +169,40 @@ class ChannelCostSyncLogic(private val log: Logger, private val channelLogic: Ch
         PriceHistoryTable.update(h.copy(status = STATUS_IGNORED, operatorId = operatorId ?: h.operatorId))
     }
 
+    /**
+     * 经渠道的**受控客户端**拉取（与转发、探测同一条出站路径）：地址是后台运行期数据，每次连接都按运维出站策略
+     * 校验解析出的地址，并走渠道配置的代理。写入时的地址检查只是快速反馈，挡不住 DNS 改指向内网。
+     * OpenRouter 的 /models 要带渠道 Key，但只发给渠道 Base URL 同一主机，不发给价目地址里写的任意主机。
+     */
     private suspend fun fetch(ch: Channel, format: String): Result<List<UpstreamPrice>> {
-        val provider = RelayEngine.deployConfigClients ?: return Result.failure(IllegalStateException("HttpClientProvider 未绑定"))
         val url = ch.upstreamPricingUrl ?: defaultPricingUrl(ch.baseUrl, format)
-        val client = provider.create { connectMillis = 5_000; requestMillis = 30_000; socketMillis = 30_000 }
         return try {
-            // OpenRouter 的 /models 要带渠道 Key；new-api 的 /api/pricing 是公开的
-            val headers = if (format == "openrouter") channelLogic.pickKey(ch.id)?.let {
+            val headers = if (format == "openrouter" && hostOf(url) == hostOf(ch.baseUrl)) channelLogic.pickKey(ch.id)?.let {
                 neton.core.http.HttpHeaders.of("Authorization" to "Bearer ${it.apiKey}")
             } else null
-            val res = client.request(neton.http.client.HttpClientRequest(
+            val request = neton.http.client.HttpClientRequest(
                 method = neton.http.client.HttpClientMethod.Get, url = url,
                 headers = headers ?: neton.core.http.HttpHeaders.EMPTY,
-            ))
+                timeout = neton.http.client.HttpClientTimeouts(requestMillis = 30_000),
+            )
+            val res = RelayEngine.withChannelClient(ch) { it.request(request) }
             if (res.statusCode !in 200..299) Result.failure(IllegalStateException("上游价目接口 HTTP ${res.statusCode}"))
             else UpstreamPricingParser.parse(format, res.body)
         } catch (e: Exception) {
             Result.failure(IllegalStateException("上游价目接口不可达：${e.message}"))
-        } finally {
-            runCatching { client.close() }
         }
+    }
+
+    private fun hostOf(url: String): String = url.substringAfter("://").substringBefore('/').substringBefore('?').lowercase()
+
+    /**
+     * 只改同步状态两列：拉取可能耗时几十秒，期间运营改了优先级、渠道被自动挂起、测速写了结果 ——
+     * 用之前读到的整行写回会把这些改动全部冲掉。成功时 [syncedAt] 非空并清掉错误；失败时只记错误。
+     */
+    private suspend fun markSync(channelId: Long, syncedAt: Long?, error: String?) {
+        val db = neton.database.dbContext()
+        if (syncedAt != null) db.execute("UPDATE gateway_channels SET cost_synced_at = :t, cost_sync_error = NULL WHERE id = :id", mapOf("t" to syncedAt, "id" to channelId))
+        else db.execute("UPDATE gateway_channels SET cost_sync_error = :e WHERE id = :id", mapOf("e" to error, "id" to channelId))
     }
 
     @OptIn(ExperimentalTime::class)
@@ -248,10 +272,11 @@ class ChannelCostSyncLogic(private val log: Logger, private val channelLogic: Ch
 
         /** 上游模型名 → 本渠道的请求模型名：model_mapping 里值等于它的所有键，加上渠道 models 里同名的。 */
         fun requestModelsFor(ch: Channel, upstreamModel: String): Set<String> {
-            val mapped = ch.modelMapping?.takeIf { it.isNotBlank() }
+            val mapping = ch.modelMapping?.takeIf { it.isNotBlank() }
                 ?.let { runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull() }
-                ?.filter { (_, v) -> (v as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == upstreamModel }?.keys.orEmpty()
-            val listed = ch.models.split(',').map { it.trim() }.filter { it == upstreamModel }
+            val mapped = mapping?.filter { (_, v) -> (v as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == upstreamModel }?.keys.orEmpty()
+            // 同名匹配只对没做映射的模型成立：gpt-4o 映射到 gpt-4o-mini 时，它的成本是 mini 的价，不能再拿 gpt-4o 的价
+            val listed = ch.models.split(',').map { it.trim() }.filter { it == upstreamModel && (mapping == null || !mapping.containsKey(it)) }
             return mapped + listed
         }
 

@@ -22,6 +22,8 @@ data class PublicModelVO(
     val capabilities: List<String> = emptyList(),
     /** 对外展示名（如「Opus 5.5」）；空 = 显示模型 ID。 */
     val displayName: String? = null,
+    /** 按上下文长度分档的售价（第一档 = 上面的价格）；单档为空。长输入按更贵的档收费，必须让用户看得到。 */
+    val tiers: List<logic.PriceTier>? = null,
 )
 
 /**
@@ -63,6 +65,7 @@ class ModelCatalogController(private val channelLogic: ChannelLogic) {
                     defaultMaxOutputTokens = it.defaultMaxOutputTokens,
                     capabilities = capsByModel[it.model]?.sorted() ?: emptyList(),
                     displayName = it.displayName,
+                    tiers = logic.PricingTiers.parse(sale.tiers),
                 )
             }
     }

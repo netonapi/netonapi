@@ -827,7 +827,7 @@ class RelayEngine(
 
     private fun usageJson(u: Usage): String =
         """{"prompt":${u.promptTokens},"completion":${u.completionTokens},""" +
-            """"cacheRead":${u.cacheReadTokens},"cacheWrite":${u.cacheWriteTokens}}"""
+            """"cacheRead":${u.cacheReadTokens},"cacheWrite":${u.cacheWriteTokens},"promptIncludesCache":${u.promptIncludesCache}}"""
 
     /**
      * 双轨定价快照（V004 §7.1）：`sale` = 售价轨（收入），`cost` = 官方价（成本轨），
