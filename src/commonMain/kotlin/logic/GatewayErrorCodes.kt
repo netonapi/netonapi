@@ -51,6 +51,8 @@ object GatewayErrorCodes {
     const val PRICE_NOT_FOUND = "PRICE_NOT_FOUND"
     /** 价格不是非负十进制数。字段为价格字段名。 */
     const val PRICE_INVALID = "PRICE_INVALID"
+    /** 分档价格不合法：不是数组、少于两档、门槛不严格递增、中间档没有门槛或价格非法。 */
+    const val PRICE_TIERS_INVALID = "PRICE_TIERS_INVALID"
     /** 倍率 / 折扣不是十进制数。 */
     const val RATIO_INVALID = "RATIO_INVALID"
     /** 倍率 / 折扣不在 (0, 100]。 */
