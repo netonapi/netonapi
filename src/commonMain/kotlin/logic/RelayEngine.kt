@@ -267,7 +267,9 @@ class RelayEngine(
             // T2：记录「已向上游发出」——崩溃后不可自动退款（可能已产生真实费用），由 worker TTL 转人工。
             // 渠道成本折扣此刻并入快照；重试换渠道则刷新为本次真正打的上游（否则成本记在没打过的那家头上）。
             settlement?.let { st ->
-                val snap = pricingSnapshot(salePrice, costBasisFor(transform.rewritten, officialPrice), ratio, channel.costDiscount)
+                // 成本：渠道成本表有这个模型就按它（实付价，折扣记 1），否则上游实际模型的官方价 × 渠道折扣
+                val basis = ChannelCostLogic.costFor(channel, transform.rewritten.requestModel, transform.rewritten.upstreamModel, officialPrice)
+                val snap = pricingSnapshot(salePrice, basis?.price, ratio, basis?.discount ?: channel.costDiscount)
                 settlementLogic.markUpstreamStarted(st.settlementId, channel.id, snap)
                 settlement = st.copy(pricingSnapshot = snap)
             }
@@ -832,15 +834,6 @@ class RelayEngine(
      * `ratio` = 分组倍率，`costDiscount` = 渠道折扣（选定/切换上游时并入，见 markUpstreamStarted）。
      * finalize 严格按它计价，不重查任何定价表。
      */
-    /**
-     * 成本按**实际打给上游的模型**算：渠道把 gpt-4o 映射成 gpt-4o-mini 时，我们付的是 mini 的钱。
-     * 映射目标没有价格行（如 Azure 的部署名）就退回请求模型的官方价 —— 那通常就是同一个模型。
-     */
-    private suspend fun costBasisFor(rewritten: Rewritten, requestPrice: ModelPrice?): ModelPrice? {
-        if (requestPrice == null || rewritten.upstreamModel == rewritten.requestModel) return requestPrice
-        return ModelPriceTable.oneWhere { ModelPrice::model eq rewritten.upstreamModel } ?: requestPrice
-    }
-
     private fun pricingSnapshot(
         sale: ModelPrice?, official: ModelPrice?, ratio: String, costDiscount: String? = null,
     ): String {

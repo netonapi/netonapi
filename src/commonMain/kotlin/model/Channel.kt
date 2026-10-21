@@ -48,6 +48,18 @@ data class Channel(
     val cooldownUntil: Long = 0,
     /** 成本折扣（如 "0.6" = 官方价 6 折），DECIMAL 字符串，毛利核算用（spec 决策 B2） */
     val costDiscount: String = "1.0",
+    /** 成本来源（V020）：official = 官方价 × 折扣；upstream = 上游价目接口；manual = 按模型手填（渠道成本表）。 */
+    val costSource: String = "official",
+    /** 上游价目格式：newapi（new-api / one-api 类）/ openrouter；costSource = upstream 时必填。 */
+    val upstreamPricingFormat: String? = null,
+    /** 上游价目接口地址；空 = 按格式推断（newapi：{baseUrl}/api/pricing；openrouter：{baseUrl}/v1/models）。 */
+    val upstreamPricingUrl: String? = null,
+    /** 我们在上游平台所属分组的倍率（new-api 类上游）。 */
+    val upstreamGroupRatio: String = "1",
+    /** 上游额度单价：每 1 美元上游额度实际花我们多少美元。 */
+    val upstreamCreditRate: String = "1",
+    val costSyncedAt: Long? = null,
+    val costSyncError: String? = null,
     /** 跨协议转换的损耗策略（V017）：allow / safe / strict。 */
     val lossPolicy: String = "allow",
     /** 1 = 解析模型名推理尾缀（V017），默认关闭。 */

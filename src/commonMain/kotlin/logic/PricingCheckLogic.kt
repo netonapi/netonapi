@@ -30,6 +30,8 @@ data class PricingCombo(
     val status: String,
     /** 最差的是第几档（0 起，单档恒为 0）。 */
     val tier: Int = 0,
+    /** 成本来自哪里：channel = 渠道成本表；official = 官方价 × 渠道折扣。 */
+    val costSource: String = ChannelCostLogic.SOURCE_OFFICIAL,
 )
 
 @Serializable
@@ -84,7 +86,8 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         val byModel = prices.associateBy { it.model }
         val groups = GatewayGroupTable.findAll().associateBy { it.code }
         val channels = channelLogic.listEnabled()
-        val rows = prices.sortedBy { it.model }.map { row(it, byModel, groups, channels, policy) }
+        val costs = table.ChannelModelCostTable.findAll().associateBy { it.channelId to it.model }
+        val rows = prices.sortedBy { it.model }.map { row(it, byModel, groups, channels, policy, costs) }
         return PricingCheckResult(
             markup = policy.markup,
             minMargin = policy.minMargin,
@@ -102,6 +105,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         groups: Map<String, GatewayGroup>,
         channels: List<Channel>,
         policy: PricingPolicy.Policy,
+        costs: Map<Pair<Long, String>, model.ChannelModelCost>,
     ): PricingCheckRow {
         val sale = runCatching { SalePricing.resolve(price, policy.markup) }.getOrNull()
             ?: return PricingCheckRow(
@@ -112,10 +116,10 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         val combos = mutableListOf<PricingCombo>()
         for (ch in channels) {
             val upstream = upstreamModel(ch, price.model) ?: continue
-            val costRow = byModel[upstream] ?: price
+            val basis = ChannelCostLogic.costForLoaded(ch, price.model, upstream, price, costs, byModel) ?: continue
             for (code in ch.groups.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
                 val g = groups[code] ?: continue
-                combos += tiered(sale, costRow, g, ch, policy.minMargin)
+                combos += tiered(sale, basis.price, g, ch, basis.discount, policy.minMargin).copy(costSource = basis.source)
             }
         }
         val worst = combos.minWithOrNull(compareBy<PricingCombo> { it.marginBp }.thenBy { it.revenue - it.cost })
@@ -142,16 +146,16 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
      * 分档模型逐档核算：用售价每一档的门槛作为代表输入长度，同一长度下分别选出售价档与成本档，
      * 取最差的一档。成本的分档结构可能与售价不同（渠道成本），所以按「长度」对齐而不是按序号。
      */
-    private fun tiered(sale: ModelPrice, cost: ModelPrice, g: GatewayGroup, ch: Channel, minMargin: String): PricingCombo {
+    private fun tiered(sale: ModelPrice, cost: ModelPrice, g: GatewayGroup, ch: Channel, discount: String, minMargin: String): PricingCombo {
         val points = (PricingTiers.parse(sale.tiers).orEmpty() + PricingTiers.parse(cost.tiers).orEmpty())
             .map { it.maxPromptTokens ?: Long.MAX_VALUE }.distinct().sorted().ifEmpty { listOf(0L) }
         return points.map { len ->
-            combo(PricingTiers.select(sale, len), PricingTiers.select(cost, len), g, ch, minMargin)
+            combo(PricingTiers.select(sale, len), PricingTiers.select(cost, len), g, ch, discount, minMargin)
                 .copy(tier = PricingTiers.tierIndex(sale, len))
         }.minWith(compareBy<PricingCombo> { it.marginBp }.thenBy { it.revenue - it.cost })
     }
 
-    private fun combo(sale: ModelPrice, cost: ModelPrice, g: GatewayGroup, ch: Channel, minMargin: String): PricingCombo {
+    private fun combo(sale: ModelPrice, cost: ModelPrice, g: GatewayGroup, ch: Channel, discount: String, minMargin: String): PricingCombo {
         // 按次计价：售价轨按次就只比按次；否则比 token 各维度（只比成本 > 0 的维度，免费维度不算亏）
         val dims: List<Triple<String, Long, Long>> = if (sale.perRequestPrice != null) {
             listOf(Triple("perRequest", sale.perRequestPrice, cost.perRequestPrice ?: 0L))
@@ -163,7 +167,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         )
         val evaluated = dims.map { (dim, saleMicro, officialMicro) ->
             val revenue = SalePricing.scaleMicro(saleMicro, g.ratio)
-            val c = SalePricing.scaleMicro(officialMicro, ch.costDiscount)
+            val c = SalePricing.scaleMicro(officialMicro, discount)
             val floor = SalePricing.scaleMicro(c, minMargin)
             val bp = when {
                 revenue > 0 -> ((revenue - c) * 10_000 / revenue).toInt()
@@ -175,7 +179,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
                 revenue < floor -> THIN
                 else -> OK
             }
-            PricingCombo(g.code, g.ratio, ch.id, ch.name, ch.costDiscount, cost.model, dim, revenue, c, bp, status)
+            PricingCombo(g.code, g.ratio, ch.id, ch.name, discount, cost.model, dim, revenue, c, bp, status)
         }
         // 只看真有成本的维度；全免费的模型取第一项展示
         return evaluated.filter { it.cost > 0 }.minByOrNull { it.marginBp } ?: evaluated.first()

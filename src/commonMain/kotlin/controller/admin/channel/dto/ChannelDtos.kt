@@ -20,6 +20,12 @@ data class CreateChannelRequest(
     /** 托管上游的厂商参数 JSON：Vertex {"project","location"}，Bedrock 可选 {"region"} */
     val providerConfig: String? = null,
     val costDiscount: String = "1.0",
+    /** official / upstream / manual；见 Channel.costSource。 */
+    val costSource: String = "official",
+    val upstreamPricingFormat: String? = null,
+    val upstreamPricingUrl: String? = null,
+    val upstreamGroupRatio: String = "1",
+    val upstreamCreditRate: String = "1",
     val lossPolicy: String = "allow",
     val reasoningSuffix: Int = 0,
     val remark: String? = null,
@@ -46,6 +52,12 @@ data class UpdateChannelRequest(
     /** 托管上游的厂商参数 JSON：Vertex {"project","location"}，Bedrock 可选 {"region"} */
     val providerConfig: String? = null,
     val costDiscount: String = "1.0",
+    /** 成本设置：不传（null）= 保留原值，老前端更新渠道时不会把上游成本设置冲回默认。 */
+    val costSource: String? = null,
+    val upstreamPricingFormat: String? = null,
+    val upstreamPricingUrl: String? = null,
+    val upstreamGroupRatio: String? = null,
+    val upstreamCreditRate: String? = null,
     val lossPolicy: String = "allow",
     val reasoningSuffix: Int = 0,
     val remark: String? = null,

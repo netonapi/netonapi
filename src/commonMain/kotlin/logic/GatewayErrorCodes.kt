@@ -53,6 +53,10 @@ object GatewayErrorCodes {
     const val PRICE_INVALID = "PRICE_INVALID"
     /** 分档价格不合法：不是数组、少于两档、门槛不严格递增、中间档没有门槛或价格非法。 */
     const val PRICE_TIERS_INVALID = "PRICE_TIERS_INVALID"
+    /** 渠道成本来源只能是 official / upstream / manual。 */
+    const val CHANNEL_COST_SOURCE_INVALID = "CHANNEL_COST_SOURCE_INVALID"
+    /** 成本来源为上游价目接口时必须选价目格式（newapi / openrouter）。 */
+    const val CHANNEL_PRICING_FORMAT_REQUIRED = "CHANNEL_PRICING_FORMAT_REQUIRED"
     /** 倍率 / 折扣不是十进制数。 */
     const val RATIO_INVALID = "RATIO_INVALID"
     /** 倍率 / 折扣不在 (0, 100]。 */

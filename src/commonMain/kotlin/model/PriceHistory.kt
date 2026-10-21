@@ -17,5 +17,9 @@ data class PriceHistory(
     val after: String? = null,
     /** 后台操作人；定时同步为空。 */
     val operatorId: Long? = null,
+    /** 渠道成本的变动（action = channel_cost）记渠道 id；官方价变动为空。 */
+    val channelId: Long? = null,
+    /** applied / pending（异常变动待确认）/ ignored */
+    val status: String = "applied",
     @CreatedAt val createdAt: Long? = null,
 )

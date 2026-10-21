@@ -29,6 +29,7 @@ class ChannelController(
     @Permission("gateway:channel:create")
     suspend fun create(@Body request: CreateChannelRequest): Long {
         requireSafeUrls(request.baseUrl, request.proxyUrl)
+        request.upstreamPricingUrl?.takeIf { it.isNotBlank() }?.let { requireSafeUrls(it, null) }
         request.keys.forEach { requireSafeKey(it) }
         val id = channelLogic.create(
             Channel(
@@ -40,7 +41,10 @@ class ChannelController(
                 proxyUrl = request.proxyUrl, apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, providerConfig = request.providerConfig?.trim()?.takeIf { it.isNotEmpty() }, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
                 lossPolicy = logic.ConversionPolicy.requirePolicy(request.lossPolicy), reasoningSuffix = if (request.reasoningSuffix == 1) 1 else 0,
                 remark = request.remark,
-            )
+                costSource = request.costSource, upstreamPricingFormat = request.upstreamPricingFormat,
+                upstreamPricingUrl = request.upstreamPricingUrl, upstreamGroupRatio = request.upstreamGroupRatio,
+                upstreamCreditRate = request.upstreamCreditRate,
+            ).let { logic.ChannelCostLogic.requireCostConfig(it) }
         )
         request.keys.forEach { channelLogic.addKey(id, it) }
         return id
@@ -50,6 +54,7 @@ class ChannelController(
     @Permission("gateway:channel:update")
     suspend fun update(@Body request: UpdateChannelRequest) {
         requireSafeUrls(request.baseUrl, request.proxyUrl)
+        request.upstreamPricingUrl?.takeIf { it.isNotBlank() }?.let { requireSafeUrls(it, null) }
         val current = channelLogic.get(request.id)
             ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.CHANNEL_NOT_FOUND)
         channelLogic.update(current.copy(
@@ -61,7 +66,12 @@ class ChannelController(
             proxyUrl = request.proxyUrl, apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, providerConfig = request.providerConfig?.trim()?.takeIf { it.isNotEmpty() }, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
             lossPolicy = logic.ConversionPolicy.requirePolicy(request.lossPolicy), reasoningSuffix = if (request.reasoningSuffix == 1) 1 else 0,
             remark = request.remark,
-        ))
+            costSource = request.costSource ?: current.costSource,
+            upstreamPricingFormat = if (request.costSource != null) request.upstreamPricingFormat else current.upstreamPricingFormat,
+            upstreamPricingUrl = if (request.costSource != null) request.upstreamPricingUrl else current.upstreamPricingUrl,
+            upstreamGroupRatio = request.upstreamGroupRatio ?: current.upstreamGroupRatio,
+            upstreamCreditRate = request.upstreamCreditRate ?: current.upstreamCreditRate,
+        ).let { logic.ChannelCostLogic.requireCostConfig(it) })
         request.status?.let { if (it != current.status) channelLogic.updateStatus(request.id, it) }
     }
 
