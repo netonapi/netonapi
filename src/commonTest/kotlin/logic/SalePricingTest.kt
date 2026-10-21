@@ -46,4 +46,32 @@ class SalePricingTest {
     fun invalidModelMarkupIsRejected() {
         assertFails { SalePricing.resolve(official.copy(saleOverride = """{"markup":"0"}"""), "1") }
     }
+
+    private val tiered = ModelPrice(
+        model = "t", inputPrice = "1.25", outputPrice = "10",
+        tiers = """[{"maxPromptTokens":200000,"input":"1.25","output":"10","cacheRead":"0","cacheWrite":"0"},
+                    {"maxPromptTokens":null,"input":"2.5","output":"15","cacheRead":"0","cacheWrite":"0"}]""",
+    )
+
+    @Test
+    fun markupAppliesToEveryTier() {
+        val sale = SalePricing.resolve(tiered, "2")
+        assertEquals("5", PricingTiers.select(sale, 300_000).inputPrice)
+        assertEquals("30", PricingTiers.select(sale, 300_000).outputPrice)
+        assertEquals("2.5", PricingTiers.select(sale, 100).inputPrice)
+    }
+
+    @Test
+    fun fixedSalePriceOnlyChangesBaseTier() {
+        val sale = SalePricing.resolve(tiered.copy(saleOverride = """{"input":"9"}"""), "2")
+        assertEquals("9", sale.inputPrice)
+        // 基础档（第一档）用固定售价；长上下文档不受固定售价影响，按加价率走
+        assertEquals("9", PricingTiers.select(sale, 100).inputPrice)
+        assertEquals("5", PricingTiers.select(sale, 300_000).inputPrice)
+    }
+
+    @Test
+    fun reserveUsesMostExpensiveSaleTier() {
+        assertEquals("5", PricingTiers.mostExpensive(SalePricing.resolve(tiered, "2")).inputPrice)
+    }
 }

@@ -60,14 +60,27 @@ object SalePricing {
             else p.longOrNull?.takeIf { it >= 0 }
                 ?: rejectField("saleOverride.perRequest", GatewayErrorCodes.SALE_PER_REQUEST_INVALID)
         } else official.perRequestPrice?.let { scaleMicro(it, effective) }
+        val input = field("input", official.inputPrice)
+        val output = field("output", official.outputPrice)
+        val cacheRead = field("cacheRead", official.cacheReadPrice)
+        val cacheWrite = field("cacheWrite", official.cacheWritePrice)
+        // 分档：每档 × 加价率；固定售价只覆盖基础档（第一档），长上下文档始终按加价率，免得在长上下文上亏本
+        val tiers = PricingTiers.parse(official.tiers)?.mapIndexed { i, t ->
+            fun pick(base: String, tierValue: String) = if (i == 0) base else PricingCalc.scalePrice(tierValue, effective)
+            t.copy(
+                input = pick(input, t.input), output = pick(output, t.output),
+                cacheRead = pick(cacheRead, t.cacheRead), cacheWrite = pick(cacheWrite, t.cacheWrite),
+            )
+        }?.let { PricingTiers.render(it) }
         return ModelPrice(
             model = official.model,
-            inputPrice = field("input", official.inputPrice),
-            outputPrice = field("output", official.outputPrice),
-            cacheReadPrice = field("cacheRead", official.cacheReadPrice),
-            cacheWritePrice = field("cacheWrite", official.cacheWritePrice),
+            inputPrice = input,
+            outputPrice = output,
+            cacheReadPrice = cacheRead,
+            cacheWritePrice = cacheWrite,
             perRequestPrice = perRequest,
             defaultMaxOutputTokens = official.defaultMaxOutputTokens,
+            tiers = tiers,
         )
     }
 

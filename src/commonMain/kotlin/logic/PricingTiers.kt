@@ -83,6 +83,12 @@ object PricingTiers {
     fun totalInput(usage: Usage): Long =
         maxOf(usage.promptTokens, usage.cacheReadTokens).toLong() + usage.cacheWriteTokens
 
+    /** 有分档时把四个单档价格列设成第一档：两处不一致时不同代码路径会读到不同的「基础价」。 */
+    fun withBaseFromTiers(price: ModelPrice): ModelPrice {
+        val first = parse(price.tiers)?.first() ?: return price
+        return price.copy(inputPrice = first.input, outputPrice = first.output, cacheReadPrice = first.cacheRead, cacheWritePrice = first.cacheWrite)
+    }
+
     private fun apply(price: ModelPrice, t: PriceTier): ModelPrice = price.copy(
         inputPrice = t.input, outputPrice = t.output, cacheReadPrice = t.cacheRead, cacheWritePrice = t.cacheWrite, tiers = null,
     )

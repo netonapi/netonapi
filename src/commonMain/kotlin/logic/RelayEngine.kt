@@ -198,7 +198,7 @@ class RelayEngine(
             }
         }
         val audio = path.startsWith("/v1/audio/")
-        val reserveAmount = when (val rc = ReserveCalc.compute(rawBody, salePrice, ratio, inputUpperBytes = extras.bodyBytes?.size, noOutput = audio)) {
+        val reserveAmount = when (val rc = ReserveCalc.compute(rawBody, salePrice?.let { PricingTiers.mostExpensive(it) }, ratio, inputUpperBytes = extras.bodyBytes?.size, noOutput = audio)) {
             is ReserveCalc.Result.NoPrice ->
                 return respondError(ctx, inbound, 400, "model_not_priced", "model '$requestModel' has no pricing configured")
             is ReserveCalc.Result.NoOutputCap ->
@@ -749,16 +749,20 @@ class RelayEngine(
         val terminal = usage != null || (status == null && perRequest)
         // 收入 = 售价轨 × 分组倍率；成本 = 官方价（成本轨）× 渠道折扣。四要素全部取自快照，
         // 结算时不重查任何定价表——改价、改折扣、改倍率只影响后续请求，不影响在途与重放。
-        val charged = PricingCalc.charge(effectiveUsage, snapped.sale, snapped.ratio)
-        val cost = PricingCalc.cost(effectiveUsage, snapped.official, snapped.costDiscount)
+        // 分档价格按本次实际的总输入 token 选档（售价轨与成本轨各自选）；单档价格原样
+        val totalInput = PricingTiers.totalInput(effectiveUsage)
+        val saleTier = PricingTiers.tierIndex(snapped.sale, totalInput)
+        val charged = PricingCalc.charge(effectiveUsage, PricingTiers.select(snapped.sale, totalInput), snapped.ratio)
+        val cost = PricingCalc.cost(effectiveUsage, PricingTiers.select(snapped.official, totalInput), snapped.costDiscount)
         // 毛利倒挂：发布闸门挡的是「配错价」，折扣 >1 的渠道与倍率 <1 的用户组仍可能压穿成本，必须可观测。
         if (cost > charged) {
             // 带上组与来源（V007）：同样是 ratio=3.0 倒挂，「谈判价配错了」与「标准价本身
             // 配错了」是两件完全不同的事，而此前这条告警只有倍率、区分不了。
             log.warn("margin inversion sid=${s.settlementId} model=${rewritten.requestModel} " +
                 "group=$group/${groupSource.name} charged=$charged cost=$cost " +
-                "ratio=${snapped.ratio} costDiscount=${snapped.costDiscount}")
+                "ratio=${snapped.ratio} costDiscount=${snapped.costDiscount} tier=$saleTier")
         }
+        if (saleTier > 0) log.info("relay tiered price applied sid=${s.settlementId} model=${rewritten.requestModel} tier=$saleTier totalInput=$totalInput")
 
         // T3：先把 usage payload 落库转入 durable 重试态。这一步失败且随后崩溃 = C3′（usage 永久丢失），
         // 故用 NonCancellable + 有界重试把概率压到最低；仍失败则留在 UPSTREAM_STARTED，由 worker TTL 转人工。
@@ -847,7 +851,8 @@ class RelayEngine(
 
     private fun priceTrack(p: ModelPrice): String =
         """{"input":"${p.inputPrice}","output":"${p.outputPrice}","cacheRead":"${p.cacheReadPrice}",""" +
-            """"cacheWrite":"${p.cacheWritePrice}","perRequest":${p.perRequestPrice}}"""
+            """"cacheWrite":"${p.cacheWritePrice}","perRequest":${p.perRequestPrice},""" +
+            """"tiers":${PricingTiers.normalize(p.tiers) ?: "null"}}"""
 
     /** [snapshotPrice] 解析出的双轨快照四要素；缺一即视为快照损坏。 */
     private data class SnapshotPricing(
@@ -872,11 +877,15 @@ class RelayEngine(
             val prPrim = t["perRequest"]?.jsonPrimitive ?: return null
             val perRequest = if (prPrim is JsonNull) null
                 else prPrim.longOrNull?.takeIf { it >= 0 } ?: return null
+            // tiers：旧快照没有这个键（单档）；有就必须是合法分档，否则视为快照损坏
+            val tiers = t["tiers"]?.takeIf { it !is JsonNull }?.toString()
+                ?.let { raw -> runCatching { PricingTiers.normalize(raw) }.getOrNull() ?: return null }
             return ModelPrice(
                 model = "",
                 inputPrice = input, outputPrice = output,
                 cacheReadPrice = cacheRead, cacheWritePrice = cacheWrite,
                 perRequestPrice = perRequest,
+                tiers = tiers,
             )
         }
         fun ratioField(key: String): String? = o[key]?.jsonPrimitive?.contentOrNull

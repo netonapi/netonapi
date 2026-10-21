@@ -17,6 +17,8 @@ data class PriceImportItem(
     val perRequestPrice: Long? = null,
     val defaultMaxOutputTokens: Int? = null,
     val saleOverride: String? = null,
+    /** 分档价格 JSON；null = 不改（覆盖已有模型时保留原分档）。 */
+    val tiers: String? = null,
 )
 
 @Serializable
@@ -72,8 +74,9 @@ class PriceImportLogic(private val log: Logger) {
                         perRequestPrice = price.perRequestPrice ?: current.perRequestPrice,
                         defaultMaxOutputTokens = price.defaultMaxOutputTokens ?: current.defaultMaxOutputTokens,
                         saleOverride = price.saleOverride ?: current.saleOverride,
+                        tiers = price.tiers ?: current.tiers,
                         source = source,
-                    )
+                    ).let { PricingTiers.withBaseFromTiers(it) }
                     // 上面校验的是导入条目本身（它通常不带售价设置）；真正要写进去的是「新官方价 + 旧售价设置」，
                     // 这一行要再过一次毛利闸门，否则官方涨价时写死的售价会悄悄变成亏本价
                     if (runCatching { SalePricing.requireMargin(merged, policy.markup, policy.minMargin) }.isFailure) {
@@ -137,7 +140,8 @@ class PriceImportLogic(private val log: Logger) {
         cacheWritePrice = PricingCalc.requirePrice(i.cacheWritePrice, "cacheWritePrice"),
         perRequestPrice = i.perRequestPrice, saleOverride = i.saleOverride,
         defaultMaxOutputTokens = i.defaultMaxOutputTokens?.takeIf { it > 0 },
-    )
+        tiers = PricingTiers.normalize(i.tiers),
+    ).let { PricingTiers.withBaseFromTiers(it) }
 
     companion object {
         const val ENV_SYNC_URL = "NETONAPI_PRICE_SYNC_URL"

@@ -21,6 +21,8 @@ data class SavePriceRequest(
     /** 按 token 计价的模型没配它、请求又不带 max_tokens 时会被拒（output_cap_required）。 */
     val defaultMaxOutputTokens: Int? = null,
     val saleOverride: String? = null,
+    /** 分档价格 JSON（见 PricingTiers）。update 时不带 = 保留原值，传空串 = 清除。 */
+    val tiers: String? = null,
 )
 
 @Serializable
@@ -83,7 +85,8 @@ class PriceController(
         // 请求里没带 saleOverride（老前端、只改官方价的表单）= 保留原来的售价设置；传空串才是清除。
         // 以前这里直接写 null，管理台改一次官方价，单独设的售价就悄悄没了。
         val price = toModelPrice(request).let { p ->
-            if (request.saleOverride == null) p.copy(saleOverride = current.saleOverride) else p
+            val kept = if (request.saleOverride == null) p.copy(saleOverride = current.saleOverride) else p
+            if (request.tiers == null) logic.PricingTiers.withBaseFromTiers(kept.copy(tiers = current.tiers)) else kept
         }
         requireMargin(price)
         val next = current.copy(
@@ -91,7 +94,7 @@ class PriceController(
             inputPrice = price.inputPrice, outputPrice = price.outputPrice,
             cacheReadPrice = price.cacheReadPrice, cacheWritePrice = price.cacheWritePrice,
             perRequestPrice = price.perRequestPrice, defaultMaxOutputTokens = price.defaultMaxOutputTokens,
-            saleOverride = price.saleOverride,
+            saleOverride = price.saleOverride, tiers = price.tiers,
         )
         ModelPriceTable.update(next)
         logic.PriceHistoryLogic.record("update", current, next, identity.id.toLongOrNull())
@@ -119,6 +122,7 @@ class PriceController(
         model = r.model, inputPrice = r.inputPrice, outputPrice = r.outputPrice,
         cacheReadPrice = r.cacheReadPrice, cacheWritePrice = r.cacheWritePrice,
         perRequestPrice = r.perRequestPrice, defaultMaxOutputTokens = r.defaultMaxOutputTokens, saleOverride = r.saleOverride,
+        tiers = r.tiers,
     )
 
     private fun toModelPrice(request: SavePriceRequest): ModelPrice = ModelPrice(
@@ -129,7 +133,8 @@ class PriceController(
         cacheWritePrice = logic.PricingCalc.requirePrice(request.cacheWritePrice, "cacheWritePrice"),
         perRequestPrice = request.perRequestPrice, saleOverride = request.saleOverride?.trim()?.takeIf { it.isNotEmpty() },
         defaultMaxOutputTokens = request.defaultMaxOutputTokens?.takeIf { it > 0 },
-    )
+        tiers = logic.PricingTiers.normalize(request.tiers),
+    ).let { logic.PricingTiers.withBaseFromTiers(it) }
 
     @Delete("/delete/{id}")
     @Permission("gateway:price:delete")

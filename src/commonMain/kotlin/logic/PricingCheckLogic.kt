@@ -28,6 +28,8 @@ data class PricingCombo(
     /** (实收 − 成本) / 实收，万分位；实收为 0 而成本 > 0 记 −10000。 */
     val marginBp: Int,
     val status: String,
+    /** 最差的是第几档（0 起，单档恒为 0）。 */
+    val tier: Int = 0,
 )
 
 @Serializable
@@ -113,7 +115,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
             val costRow = byModel[upstream] ?: price
             for (code in ch.groups.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
                 val g = groups[code] ?: continue
-                combos += combo(sale, costRow, g, ch, policy.minMargin)
+                combos += tiered(sale, costRow, g, ch, policy.minMargin)
             }
         }
         val worst = combos.minWithOrNull(compareBy<PricingCombo> { it.marginBp }.thenBy { it.revenue - it.cost })
@@ -134,6 +136,19 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
             flagged = combos.filter { it.status != OK }.sortedBy { it.marginBp }.take(MAX_FLAGGED),
             comboCount = combos.size,
         )
+    }
+
+    /**
+     * 分档模型逐档核算：用售价每一档的门槛作为代表输入长度，同一长度下分别选出售价档与成本档，
+     * 取最差的一档。成本的分档结构可能与售价不同（渠道成本），所以按「长度」对齐而不是按序号。
+     */
+    private fun tiered(sale: ModelPrice, cost: ModelPrice, g: GatewayGroup, ch: Channel, minMargin: String): PricingCombo {
+        val points = (PricingTiers.parse(sale.tiers).orEmpty() + PricingTiers.parse(cost.tiers).orEmpty())
+            .map { it.maxPromptTokens ?: Long.MAX_VALUE }.distinct().sorted().ifEmpty { listOf(0L) }
+        return points.map { len ->
+            combo(PricingTiers.select(sale, len), PricingTiers.select(cost, len), g, ch, minMargin)
+                .copy(tier = PricingTiers.tierIndex(sale, len))
+        }.minWith(compareBy<PricingCombo> { it.marginBp }.thenBy { it.revenue - it.cost })
     }
 
     private fun combo(sale: ModelPrice, cost: ModelPrice, g: GatewayGroup, ch: Channel, minMargin: String): PricingCombo {
