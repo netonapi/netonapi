@@ -37,5 +37,6 @@ object PriceHistoryLogic {
         put("cacheWrite", p.cacheWritePrice)
         put("perRequest", p.perRequestPrice?.let { JsonPrimitive(it) } ?: JsonPrimitive(null as String?))
         put("saleOverride", p.saleOverride)
+        put("tiers", PricingTiers.normalize(p.tiers))
     }.toString()
 }

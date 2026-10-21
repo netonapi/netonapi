@@ -28,6 +28,16 @@ class PriceSyncJob(private val log: Logger, private val ctx: NetonContext) : Job
     }
 }
 
+/** 渠道成本同步：每 6 小时拉一次成本来源为「上游价目接口」的渠道（异常变动挂起待确认，见 ChannelCostSyncLogic）。 */
+@Job(id = "gateway-channel-cost-sync", cron = "0 */6 * * *", lockTtlMs = 600_000)
+class ChannelCostSyncJob(private val log: Logger, private val ctx: NetonContext) : JobExecutor {
+    override suspend fun run(context: JobContext) {
+        val sync = ctx.getOrNull(logic.ChannelCostSyncLogic::class) ?: return
+        val r = sync.syncAll()
+        log.info("gateway.channel.cost.sync channels=${r.size} updated=${r.sumOf { it.updated }} pending=${r.sumOf { it.pending }} failed=${r.count { it.error != null }}")
+    }
+}
+
 /**
  * 能力验证：每 6 小时对 Gemini 渠道的每个模型做一次「带官方占位签名的两轮工具调用」探测，
  * 结果写入 V016 验证记录。占位兼容只在有效的通过记录下生效（neton-docs spec/ai.md §4.5.2）。
