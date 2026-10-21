@@ -2,7 +2,7 @@
 
 > 标识：NETONAPI-GATEWAY-PRICING
 > 日期：2026-10-20
-> 状态：已在 `neton-application-module-gateway` 与 `neton-application-front-gateway` 实现；harness S20–S22、S88–S90 覆盖。
+> 状态：已在 `neton-application-module-gateway` 与 `neton-application-front-gateway` 实现；harness S20–S22、S72、S88–S92 覆盖。
 > 归属：NetonAPI。实现在 `neton-application-module-gateway`（计价、结算、定价管理接口）与 `neton-application-front-gateway`（模型定价、概览、计价分组、令牌页面）。
 
 ## 1. 目标与原则
@@ -37,8 +37,11 @@
 ```
 售价(模型)  = 售价设置里的固定价  ?: 官方价 × (本模型加价率 ?: 全站加价率)      // 逐项
 实收(请求)  = Σ 各项 tokens × 售价 / 10⁶（逐项向上取整）× 分组倍率
-成本(请求)  = Σ 各项 tokens × 上游模型官方价 / 10⁶（逐项向上取整）× 渠道折扣
+成本(请求)  = Σ 各项 tokens × 渠道成本价 / 10⁶（逐项向上取整）              // 渠道成本表有这个模型时（§12）
+           = Σ 各项 tokens × 上游模型官方价 / 10⁶（逐项向上取整）× 渠道折扣  // 否则
 ```
+
+- **分档价格**：价格行可带 `tiers`（按上下文长度分档，JSON `[{maxPromptTokens, input, output, cacheRead, cacheWrite}]`，最后一档 `maxPromptTokens = null`）。按本次请求的**总输入 token**（`max(prompt, 缓存读) + 缓存写`）选第一个 `maxPromptTokens ≥ 总输入` 的档，恰好等于门槛落低档；售价轨、成本轨各自选档。预留按售价最贵档估上界。有分档时四个单档价格列强制等于第一档。加价率作用于每一档；固定售价只覆盖第一档，长上下文档始终按加价率。命中档位记入 `relay tiered price applied` 日志。
 
 - 各项：新输入 = prompt − min(缓存读, prompt)；缓存读；缓存写；输出。按次计价的模型直接取按次价。
 - **成本按实际打给上游的模型算**：渠道 `model_mapping` 把请求模型映射成别的模型时，取映射目标的官方价；映射目标没有价格行（如 Azure 部署名）则用请求模型的官方价。
@@ -132,10 +135,14 @@
 
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
-| `gateway.pricing.source_format` | `litellm` | `litellm`：LiteLLM 公开价目表；`openrouter`：OpenRouter `/api/v1/models`；`netonapi`：与批量导入同格式 |
-| `gateway.pricing.source_url` | LiteLLM `model_prices_and_context_window.json` 原始地址 | 可换 OpenRouter 或自建地址 |
+| `gateway.pricing.source_format` | `basellm` | `basellm`：GitHub basellm/llm-metadata 维护的官方价（new-api「官方倍率预设」同源）；`models_dev`：models.dev；`litellm`：LiteLLM 公开价目表；`openrouter`：OpenRouter `/api/v1/models`；`netonapi`：与批量导入同格式 |
+| `gateway.pricing.source_url` | `https://basellm.github.io/llm-metadata/api/newapi/ratio_config-v1-base.json` | 可换为其它格式对应的地址 |
 
 解析规则：
+
+- basellm：`data.billing_expr[model]` 计费表达式，只认 `tier("<name>", p * a + cr * b + cc * c + c * d)` 与 `len <= N ? <tier> : <同形状>`（可嵌套、可加括号）。`p` 输入、`c` 输出、`cr` 缓存读、`cc` 缓存写，系数为 USD / 1M；`cc1h`（1 小时缓存写）不计价；`len <= N` 生成分档。其它写法一律列为 `UNPARSABLE`、不写入。basellm 给出分档信息：单档时清除我们原有的分档。
+- models.dev：`{provider:{models:{id:{cost:{input,output,cache_read,cache_write}}}}}`（USD / 1M）；同名模型优先取 `openai` / `anthropic` / `google` / `deepseek`，否则按厂商名字典序取第一条。
+- LiteLLM、OpenRouter、models.dev 不提供分档信息：校准时保留我们原有的分档。
 
 - LiteLLM：每 token 美元价（`input_cost_per_token`、`output_cost_per_token`、`cache_read_input_token_cost`、`cache_creation_input_token_cost`）×10⁶ 换算为每 1M，按 μUSD 精度取整；跳过 `sample_spec` 与没有价格的条目；`max_output_tokens` 只用于新增模型的默认输出上限。
 - OpenRouter：`pricing.prompt / completion / input_cache_read / input_cache_write`，同样按每 token 换算；负数（`-1` 表示可变价）不当官方价。
@@ -144,7 +151,7 @@
 
 - 模型名先精确匹配价源条目；匹配不到时按去掉厂商前缀（`openai/`、`anthropic/` 等）的名字匹配，同名多条取 key 最短的一条，保证结果确定。
 - 价源只覆盖它给出的项，没给的（常见是缓存价）保留现值，不清零。
-- 每个模型给出状态：`SAME` 一致 / `CHANGED` 有变化（附最大涨跌幅）/ `NOT_FOUND` 价源没有 / `NEW` 渠道已承载但还没定价、价源里有价（建议新增）；`CHANGED` 同时标出按新官方价是否会因写死的售价而亏本（`wouldLose`）。
+- 每个模型给出状态：`SAME` 一致 / `CHANGED` 有变化（附最大涨跌幅）/ `NOT_FOUND` 价源没有 / `UNPARSABLE` 价源里的计费写法认不出 / `NEW` 渠道已承载但还没定价、价源里有价（建议新增）；`CHANGED` 同时标出按新官方价是否会因写死的售价而亏本（`wouldLose`）。
 - 预览不写库。
 
 ### 7.3 应用（`POST /admin/gateway/price/calibrate/apply`）
@@ -153,13 +160,13 @@
 - 走批量导入同一路径：整批校验、§5.1 的合并闸门、调价记录（`action=calibrate`）、`source=calibrate`。
 - 管理台默认勾选「有变化且不会亏本」与「建议新增」，会亏本的不默认勾选。
 
-### 7.4 定时同步
+### 7.4 定时检查
 
-定时任务 `gateway-price-sync`（每天 03:10）仍从环境变量 `NETONAPI_PRICE_SYNC_URL` 拉取并导入（`NETONAPI_PRICE_SYNC_OVERWRITE=false` 则只补新模型），同样受 §5.1 合并闸门约束。
+定时任务 `gateway-price-sync`（每天 03:10）与管理台「校准官方价」抽屉都调用 `POST /admin/gateway/price/sync`：按 §7.1 的价源做一次预览，**只记录结果、不写价格表**（表 `gateway_price_sync_runs`：时间、价源、changed、new_models、unparsable、error）。最近一次的「changed + new_models」出现在概览（`priceSync`）、`/metrics` 的 `netonapi_price_pending_changes`、告警脚本的 `prices` 检查项；运营确认后按 §7.3 写入。旧的 `NETONAPI_PRICE_SYNC_URL` / `NETONAPI_PRICE_SYNC_OVERWRITE` 已删除，设着则启动报错。
 
 ## 8. 调价记录
 
-- 表 `gateway_price_history`（V018）：模型、动作（create / update / delete / import / sync / calibrate）、变化前后的价格快照（输入、输出、缓存读、缓存写、按次、售价设置）、操作人、时间。
+- 表 `gateway_price_history`（V018，V020 加 `channel_id`、`status`）：模型、动作（create / update / delete / import / sync / calibrate / channel_cost）、变化前后的价格快照（输入、输出、缓存读、缓存写、按次、售价设置、分档）、操作人、时间；渠道成本变动记渠道 id，`status` 为 applied / pending（待确认）/ ignored。
 - 只在价格或售价设置**真的变化**时记录；同步时价源与库内一致不记。
 - 记录写入失败不影响调价本身。
 - `GET /admin/gateway/price/history?model=` 返回最近 50 条；管理台每行「调价记录」展示只变化的字段。
@@ -168,11 +175,13 @@
 
 | 接口 | 权限 |
 | --- | --- |
-| `GET /admin/gateway/price/list`、`get/{id}`、`check`、`calibrate/preview`、`history` | `gateway:price:query` |
-| `POST /admin/gateway/price/create`、`import`、`sync` | `gateway:price:create` |
+| `GET /admin/gateway/price/list`、`get/{id}`、`check`、`calibrate/preview`、`history`、`sync/last`；`POST /admin/gateway/price/sync`（检查价源，不改价） | `gateway:price:query` |
+| `POST /admin/gateway/price/create`、`import` | `gateway:price:create` |
 | `PUT /admin/gateway/price/update`、`POST /admin/gateway/price/calibrate/apply` | `gateway:price:update` |
 | `DELETE /admin/gateway/price/delete/{id}` | `gateway:price:delete` |
 | `PUT /admin/gateway/token/update-group?id=&groupCode=` | `gateway:token:update` |
+| `GET /admin/gateway/channel-cost/list?channelId=` | `gateway:channel:query` |
+| `POST /admin/gateway/channel-cost/sync?channelId=`、`PUT /channel-cost/manual`、`DELETE /channel-cost/delete?channelId=&model=`、`POST /channel-cost/pending/{id}/accept`、`/ignore` | `gateway:channel:update` |
 | `GET /app/gateway/model/list`（公开价格，匿名） | 无；只列有启用渠道承载且已定价的模型，价格为售价（未乘分组倍率） |
 
 ## 10. 验收
@@ -181,11 +190,47 @@
 | --- | --- |
 | S20–S22 | 双轨计价、保存闸门、全站加价率与最低毛利 |
 | S88 | VIP 倍率使实收低于成本时体检判 `LOSS`、最差组合为该分组；本模型加价率修复后转 `OK`；只改官方价保留售价设置；固定售价下同步更高官方价被扣下；渠道映射到便宜模型时体检与结算都按映射目标计成本 |
-| S89 | LiteLLM 价源识别 `CHANGED` / `SAME` / `NEW`；应用只写勾选的模型并记 `calibrate` 记录；OpenRouter 厂商前缀匹配 |
+| S72 | 定时检查只记差异不改价；`/metrics` 给出待确认数；设了已删除的 `NETONAPI_PRICE_SYNC_URL` 拒绝启动 |
+| S89 | basellm 价源识别 `CHANGED` / `SAME` / `UNPARSABLE` / `NEW`；应用只写勾选的模型并记 `calibrate` 记录；models.dev 同名取厂商自营；OpenRouter 厂商前缀匹配 |
 | S90 | 渠道折扣 > 1 的请求计入概览亏损；分组与渠道收入可见；令牌专属分组拒绝不存在的组、可设置、可取消 |
+| S91 | 总输入跨过门槛按高档收费与计成本；预留按最贵档 |
+| S92 | 渠道成本行优先且不乘折扣；上游价目格式必填；new-api `/api/pricing` 换算 × 上游分组倍率 × 额度单价；涨幅 > 50% 挂起、不重复挂起、接受后生效；上游下架标过期；上游报错保留旧值；对外模型视图（展示名、渠道按优先级、高优先级更贵提示） |
 
 ## 11. 未做与后续
 
-- 渠道 × 模型粒度的折扣（目前折扣按渠道一个值）。
-- 按 token 量阶梯定价、包月套餐。
-- 价源校准的定时提醒（目前只在打开校准时比对）。
+- 上游账单自动对账（拿上游账单或余额变化与我们记录的成本比对）。
+- 包月套餐、按用量阶梯折扣等用户侧计价形态。
+- 路由按成本自动排序（有意不做：路由由优先级决定，成本只提示，见 §12.4）。
+
+## 12. 渠道实际成本
+
+设计见 [channel-cost-and-price-sync-design.md](./channel-cost-and-price-sync-design.md)。
+
+### 12.1 成本来源
+
+渠道 `cost_source`：`official`（默认，官方价 × `cost_discount`）/ `upstream`（上游价目接口，`upstream_pricing_format` 必填：`newapi` 或 `openrouter`）/ `manual`（按模型手填）。渠道成本表 `gateway_channel_model_costs`（渠道 × 请求模型，唯一）有这一行时成本按它计、**不乘折扣**；没有时退回官方价 × 折扣。
+
+### 12.2 上游价目换算
+
+- new-api / one-api：`/api/pricing`（或 `/api/ratio_config`），输入价 = `model_ratio × 2`、输出 = 输入 × `completion_ratio`、缓存读 / 写 = 输入 × `cache_ratio` / `create_cache_ratio`，按次 = `model_price` 美元。`success != true` 视为失败。
+- OpenRouter：`/v1/models`（带渠道 Key），每 token 美元价 ×10⁶；`-1` 跳过。
+- 最终成本 = 上游价 × `upstream_group_ratio` × `upstream_credit_rate`（1 美元上游额度实际花我们多少美元）。
+- 上游模型名经渠道 `model_mapping` 反查对外模型名（值等于它的所有键）+ 渠道 `models` 里同名者。
+- 官方价有分档而上游只报单档：按官方各档相对第一档的比例放大上游价。
+- 地址留空时按格式推断：new-api 去掉末尾 `/v1` 再拼 `/api/pricing`；OpenRouter 以 `/v1` 结尾拼 `/models`，否则拼 `/v1/models`。
+
+### 12.3 同步规则
+
+定时任务 `gateway-channel-cost-sync`（每 6 小时）与渠道「成本」抽屉的「立即同步」：
+
+- 正常变动直接写入，记调价记录（`action = channel_cost`）。
+- 任一项单次涨跌超过 50%、或从非 0 变 0、或新价全为 0 → 不写入，记 `status = pending`；同一变动不重复挂起；挂起期间按旧值结算；接受后写入、忽略则丢弃。首次同步只有全 0 挂起。
+- 上游不再报的模型保留旧值并标 `stale`，体检提示「成本过期」。
+- 拉取失败：成本表不动，记 `cost_sync_error`。
+- 手填（`source = manual`）的行同步时不覆盖。
+
+### 12.4 对外模型视图与提示
+
+- 价格行可设展示名 `display_name`（如「Opus 5.5」），管理台、控制台与公开价格页显示它，模型 ID 作为副标题。
+- 体检每个模型列出承载渠道（按优先级从高到低）：优先级、权重、健康状态、实际成本（基础档，已乘折扣）、成本来源。
+- 提示（不改路由）：`PRIORITY_COST_INVERSION` 有更高优先级渠道比健康的更低优先级渠道贵；`UPSTREAM_NOT_PRICED` 上游价目渠道没报这个模型；`COST_STALE` 成本已过期；`OFFICIAL_ONLY` 只有按官方原价计成本的渠道。健康 = 启用、不在冷却、最近测速未失败。

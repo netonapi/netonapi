@@ -1,7 +1,7 @@
 # 渠道真实成本与官方价同步 · 设计
 
 > 日期：2026-10-21
-> 状态：设计稿，待确认
+> 状态：已实现（2026-10-22），规则以 [gateway-pricing-spec.md](./gateway-pricing-spec.md) §3.1、§7、§12 为准
 > 关联：[gateway-pricing-spec.md](./gateway-pricing-spec.md)（现行计价规则）
 
 ## 1. 意图
