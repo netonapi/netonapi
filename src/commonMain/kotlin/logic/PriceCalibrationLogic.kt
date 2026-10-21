@@ -28,7 +28,13 @@ data class SourcePrice(
     val cacheRead: String? = null,
     val cacheWrite: String? = null,
     val maxOutput: Int? = null,
+    /** 分档价格；[tiersKnown] 为 false 时价源不提供分档信息（保留我们现有的分档）。 */
+    val tiers: List<PriceTier>? = null,
+    val tiersKnown: Boolean = false,
 )
+
+/** 价源解析结果：能用的条目，以及认不出计费写法的模型名（不写入，在预览里列出）。 */
+data class ParsedSource(val entries: List<SourcePrice>, val unparsable: List<String> = emptyList())
 
 @Serializable
 data class CalibrationRow(
@@ -45,6 +51,8 @@ data class CalibrationRow(
     val sourceOutput: String? = null,
     val sourceCacheRead: String? = null,
     val sourceCacheWrite: String? = null,
+    /** 价源里这个模型的计费写法认不出（status = UNPARSABLE）等说明。 */
+    val note: String? = null,
     /** 各项里变化最大的相对幅度，万分位（+ 涨 / − 跌）。 */
     val changeBp: Int = 0,
     /** 按新官方价，这个模型现有的售价设置会低于最低毛利（应用时会被扣下）。 */
@@ -81,13 +89,18 @@ class PriceCalibrationLogic(
     suspend fun preview(): CalibrationPreview {
         val (format, url) = source()
         val fetched = fetch(format, url)
-        val entries = fetched.getOrElse { return CalibrationPreview(format, url, 0, emptyList(), it.message) }
+        val parsed = fetched.getOrElse { return CalibrationPreview(format, url, 0, emptyList(), it.message) }
+        val entries = parsed.entries
         val index = Index(entries)
+        val unparsable = parsed.unparsable.toSet()
+        fun isUnparsable(model: String) = model in unparsable || model.substringAfterLast('/') in unparsable.map { it.substringAfterLast('/') }
         val policy = PricingPolicy.current()
         val prices = ModelPriceTable.findAll().sortedBy { it.model }
         val rows = prices.map { p ->
             val src = index.find(p.model)
-                ?: return@map CalibrationRow(p.model, NOT_FOUND, currentInput = p.inputPrice, currentOutput = p.outputPrice,
+            if (src == null && isUnparsable(p.model)) return@map CalibrationRow(p.model, UNPARSABLE, note = "billing expression not supported",
+                currentInput = p.inputPrice, currentOutput = p.outputPrice, currentCacheRead = p.cacheReadPrice, currentCacheWrite = p.cacheWritePrice)
+            src ?: return@map CalibrationRow(p.model, NOT_FOUND, currentInput = p.inputPrice, currentOutput = p.outputPrice,
                     currentCacheRead = p.cacheReadPrice, currentCacheWrite = p.cacheWritePrice)
             val next = merge(p, src)
             val change = maxChangeBp(p, next)
@@ -116,7 +129,7 @@ class PriceCalibrationLogic(
         if (wanted.isEmpty()) return PriceImportResult(0, 0, 0)
         // 应用时重新拉一次：不信任前端回传的价格，写进去的一定是价源此刻的值
         val (format, url) = source()
-        val entries = fetch(format, url).getOrElse { return PriceImportResult(0, 0, 0, listOf(it.message ?: "fetch failed")) }
+        val entries = fetch(format, url).getOrElse { return PriceImportResult(0, 0, 0, listOf(it.message ?: "fetch failed")) }.entries
         val index = Index(entries)
         val current = ModelPriceTable.findAll().associateBy { it.model }
         val items = wanted.mapNotNull { m ->
@@ -124,9 +137,12 @@ class PriceCalibrationLogic(
             val p = current[m]
             if (p != null) {
                 val next = merge(p, src)
-                PriceImportItem(m, next.inputPrice, next.outputPrice, next.cacheReadPrice, next.cacheWritePrice)
+                // 价源明确给了分档信息才动分档：单档 → 传空串清掉，分档 → 传新分档；否则不传（保留）
+                PriceImportItem(m, next.inputPrice, next.outputPrice, next.cacheReadPrice, next.cacheWritePrice,
+                    tiers = if (src.tiersKnown) next.tiers.orEmpty() else null)
             } else {
-                PriceImportItem(m, src.input ?: "0", src.output ?: "0", src.cacheRead ?: "0", src.cacheWrite ?: "0", defaultMaxOutputTokens = src.maxOutput)
+                PriceImportItem(m, src.input ?: "0", src.output ?: "0", src.cacheRead ?: "0", src.cacheWrite ?: "0", defaultMaxOutputTokens = src.maxOutput,
+                    tiers = src.tiers?.let { PricingTiers.render(it) })
             }
         }
         return importLogic.importItems(items, overwrite = true, source = "calibrate", operatorId = operatorId)
@@ -139,7 +155,7 @@ class PriceCalibrationLogic(
         return format.trim().lowercase() to url.trim()
     }
 
-    private suspend fun fetch(format: String, url: String): Result<List<SourcePrice>> {
+    private suspend fun fetch(format: String, url: String): Result<ParsedSource> {
         val provider = RelayEngine.deployConfigClients ?: return Result.failure(IllegalStateException("HttpClientProvider 未绑定"))
         val client = provider.create { connectMillis = 5_000; requestMillis = 60_000; socketMillis = 60_000 }
         return try {
@@ -153,14 +169,16 @@ class PriceCalibrationLogic(
         }
     }
 
-    fun parse(format: String, body: String): List<SourcePrice> {
+    fun parse(format: String, body: String): ParsedSource {
         val root = json.parseToJsonElement(body)
         return when (format) {
-            "openrouter" -> parseOpenRouter(root)
-            "netonapi" -> importLogic.parseSheet(body).map {
+            "basellm" -> parseBasellm(root).let { (ok, bad) -> ParsedSource(ok, bad) }
+            "models_dev" -> ParsedSource(parseModelsDev(root))
+            "openrouter" -> ParsedSource(parseOpenRouter(root))
+            "netonapi" -> ParsedSource(importLogic.parseSheet(body).map {
                 SourcePrice(it.model, it.inputPrice, it.outputPrice, it.cacheReadPrice, it.cacheWritePrice, it.defaultMaxOutputTokens)
-            }
-            else -> parseLiteLlm(root)
+            })
+            else -> ParsedSource(parseLiteLlm(root))
         }
     }
 
@@ -170,11 +188,13 @@ class PriceCalibrationLogic(
         outputPrice = src.output ?: p.outputPrice,
         cacheReadPrice = src.cacheRead ?: p.cacheReadPrice,
         cacheWritePrice = src.cacheWrite ?: p.cacheWritePrice,
-    )
+        tiers = if (src.tiersKnown) src.tiers?.let { PricingTiers.render(it) } else p.tiers,
+    ).let { PricingTiers.withBaseFromTiers(it) }
 
     private fun same(a: ModelPrice, b: ModelPrice): Boolean =
         listOf(a.inputPrice to b.inputPrice, a.outputPrice to b.outputPrice, a.cacheReadPrice to b.cacheReadPrice, a.cacheWritePrice to b.cacheWritePrice)
-            .all { (x, y) -> PricingCalc.parseMicro(x) == PricingCalc.parseMicro(y) }
+            .all { (x, y) -> PricingCalc.parseMicro(x) == PricingCalc.parseMicro(y) } &&
+            PricingTiers.normalize(a.tiers) == PricingTiers.normalize(b.tiers)
 
     private fun maxChangeBp(a: ModelPrice, b: ModelPrice): Int =
         listOf(a.inputPrice to b.inputPrice, a.outputPrice to b.outputPrice, a.cacheReadPrice to b.cacheReadPrice, a.cacheWritePrice to b.cacheWritePrice)
@@ -242,6 +262,50 @@ class PriceCalibrationLogic(
             return PricingCalc.microToDecimal((v * 1e12).roundToLong())
         }
 
+        /**
+         * basellm/llm-metadata（new-api 官方倍率预设）：`{success, data:{billing_mode:{m:"tiered_expr"}, billing_expr:{m:"tier(...)"}}}`。
+         * 返回（能解析的条目，认不出写法的模型名）。
+         */
+        fun parseBasellm(root: JsonElement): Pair<List<SourcePrice>, List<String>> {
+            val data = (root.jsonObject["data"] as? JsonObject) ?: root.jsonObject
+            val exprs = data["billing_expr"] as? JsonObject ?: return emptyList<SourcePrice>() to emptyList()
+            val ok = mutableListOf<SourcePrice>(); val bad = mutableListOf<String>()
+            for ((model, v) in exprs) {
+                val expr = (v as? JsonPrimitive)?.contentOrNull
+                val p = expr?.let { BillingExprParser.parse(it).getOrNull() }
+                if (p == null) { bad += model; continue }
+                ok += SourcePrice(model, p.base.input, p.base.output, p.base.cacheRead, p.base.cacheWrite, tiers = p.tiers, tiersKnown = true)
+            }
+            return ok to bad
+        }
+
+        /** models.dev `/api.json`：`{provider:{models:{id:{cost:{input,output,cache_read,cache_write}}}}}`，USD / 1M。同名模型优先取厂商自营的那条。 */
+        fun parseModelsDev(root: JsonElement): List<SourcePrice> {
+            val byModel = mutableMapOf<String, Pair<String, SourcePrice>>()
+            for ((provider, pv) in root.jsonObject.entries.sortedBy { it.key }) {
+                val models = (pv as? JsonObject)?.get("models") as? JsonObject ?: continue
+                for ((id, mv) in models) {
+                    val cost = (mv as? JsonObject)?.get("cost") as? JsonObject ?: continue
+                    val input = perMillion(cost["input"]); val output = perMillion(cost["output"])
+                    if (input == null && output == null) continue
+                    val sp = SourcePrice(id, input, output, perMillion(cost["cache_read"]), perMillion(cost["cache_write"]))
+                    val cur = byModel[id]
+                    if (cur == null || (provider in FIRST_PARTY && cur.first !in FIRST_PARTY)) byModel[id] = provider to sp
+                }
+            }
+            return byModel.values.map { it.second }
+        }
+
+        private val FIRST_PARTY = setOf("openai", "anthropic", "google", "deepseek")
+
+        /** 每 1M 美元价（数字）→ 规范化价格串；负数、非数字为 null。 */
+        private fun perMillion(e: JsonElement?): String? {
+            val v = (e as? JsonPrimitive)?.doubleOrNull ?: return null
+            if (v < 0 || v.isNaN() || v.isInfinite()) return null
+            return PricingCalc.microToDecimal((v * 1e6).roundToLong())
+        }
+
+        const val UNPARSABLE = "UNPARSABLE"
         const val SAME = "SAME"
         const val CHANGED = "CHANGED"
         const val NOT_FOUND = "NOT_FOUND"

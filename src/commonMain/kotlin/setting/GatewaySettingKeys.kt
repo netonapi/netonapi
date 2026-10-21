@@ -56,22 +56,24 @@ object GatewaySettingKeys {
         description = "实收不得低于成本 × 该值。1 = 不亏本，1.1 = 至少 10% 毛利。取值 (0, 100]。",
     )
 
-    /** 校准官方价用的价源格式：litellm（默认）/ openrouter / netonapi（与批量导入同格式）。 */
+    /** 校准官方价用的价源格式：basellm（默认，与 new-api 同源）/ models_dev / litellm / openrouter / netonapi（与批量导入同格式）。 */
     val PRICING_SOURCE_FORMAT: SettingDefinition<String> = SettingDefinition.string(
         category = CATEGORY,
         key = "gateway.pricing.source_format",
-        default = "litellm",
+        default = "basellm",
         name = "官方价价源格式",
-        description = "litellm：LiteLLM 公开价目表（模型名基本就是官方名，推荐）；openrouter：OpenRouter /api/v1/models；netonapi：与批量导入相同的格式。",
+        description = "basellm：GitHub basellm/llm-metadata 维护的官方价（new-api 同源，含长上下文分档，推荐）；models_dev：models.dev；" +
+            "litellm：LiteLLM 公开价目表；openrouter：OpenRouter /api/v1/models；netonapi：与批量导入相同的格式。",
         maxLength = 16,
     )
 
     val PRICING_SOURCE_URL: SettingDefinition<String> = SettingDefinition.string(
         category = CATEGORY,
         key = "gateway.pricing.source_url",
-        default = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+        default = "https://basellm.github.io/llm-metadata/api/newapi/ratio_config-v1-base.json",
         name = "官方价价源地址",
-        description = "「模型定价 → 校准官方价」从这里拉取价目表。OpenRouter 填 https://openrouter.ai/api/v1/models。",
+        description = "「模型定价 → 校准官方价」与每天的价源检查从这里拉取价目表。models.dev 填 https://models.dev/api.json；" +
+            "LiteLLM 填 https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json；OpenRouter 填 https://openrouter.ai/api/v1/models。",
         maxLength = 512,
     )
 

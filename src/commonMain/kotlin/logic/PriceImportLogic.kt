@@ -58,6 +58,8 @@ class PriceImportLogic(private val log: Logger) {
         val held = mutableListOf<String>()
         // 价目表几百行，逐条查库是几百次往返；一次读全表建 model → 行的索引（定价表本身就是小表）
         val existing = ModelPriceTable.findAll().associateBy { it.model }
+        // 显式给了 tiers 的条目（含空串 = 清除分档）；没给的覆盖时保留原分档
+        val tiersGiven = items.filter { it.tiers != null }.map { it.model.trim() }.toSet()
         for (price in parsed.distinctBy { it.model }) {
             val current = existing[price.model]
             when {
@@ -74,7 +76,7 @@ class PriceImportLogic(private val log: Logger) {
                         perRequestPrice = price.perRequestPrice ?: current.perRequestPrice,
                         defaultMaxOutputTokens = price.defaultMaxOutputTokens ?: current.defaultMaxOutputTokens,
                         saleOverride = price.saleOverride ?: current.saleOverride,
-                        tiers = price.tiers ?: current.tiers,
+                        tiers = if (price.model in tiersGiven) price.tiers else current.tiers,
                         source = source,
                     ).let { PricingTiers.withBaseFromTiers(it) }
                     // 上面校验的是导入条目本身（它通常不带售价设置）；真正要写进去的是「新官方价 + 旧售价设置」，

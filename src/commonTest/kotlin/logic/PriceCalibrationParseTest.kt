@@ -38,4 +38,27 @@ class PriceCalibrationParseTest {
         assertEquals("15", list.single().output)
         assertEquals("0.3", list.single().cacheRead)
     }
+
+    @Test
+    fun basellmBillingExpressions() {
+        val root = Json.parseToJsonElement(
+            """{"success":true,"data":{"billing_mode":{"a":"tiered_expr","bad":"tiered_expr"},
+               "billing_expr":{"a":"tier(\"standard\", p * 2.5 + c * 10)","bad":"foo(p)"}}}""",
+        )
+        val (ok, bad) = PriceCalibrationLogic.parseBasellm(root)
+        assertEquals(listOf("a"), ok.map { it.key })
+        assertEquals("2.5", ok.single().input)
+        assertEquals(listOf("bad"), bad)
+    }
+
+    @Test
+    fun modelsDevPrefersFirstPartyProvider() {
+        val root = Json.parseToJsonElement(
+            """{"zz-reseller":{"models":{"claude-x":{"cost":{"input":1,"output":2}}}},
+               "anthropic":{"models":{"claude-x":{"cost":{"input":3,"output":15,"cache_read":0.3,"cache_write":3.75}}}}}""",
+        )
+        val p = PriceCalibrationLogic.parseModelsDev(root).single { it.key == "claude-x" }
+        assertEquals("3", p.input)
+        assertEquals("3.75", p.cacheWrite)
+    }
 }
