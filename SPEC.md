@@ -140,6 +140,10 @@
   地址 `gateway.pricing.source_url`；先精确匹配模型名，再按去掉厂商前缀的名字匹配；价源没给的字段保留现值；应用时重新拉价源，不信前端回传。
 - 概览新增按分组收入/成本、渠道收入，以及统计期内 `cost > charged` 的请求数与亏损额。令牌可经 `PUT /token/update-group` 设专属分组（须是存在的分组）。
 - harness：S88 体检与单模型加价率、S89 校准、S90 利润看板与令牌分组。
+- 2026-10-22：分档价格（`tiers`，`PricingTiers`，V019）按总输入 token 选档；默认价源 basellm（`BillingExprParser`）与 models.dev；
+  定时任务只检查不改价（`gateway_price_sync_runs`，`/metrics` 的 `netonapi_price_pending_changes`）；渠道实际成本（V020：`cost_source`、
+  `gateway_channel_model_costs`，`ChannelCostLogic` / `UpstreamPricingParser` / `ChannelCostSyncLogic`，任务 `gateway-channel-cost-sync`）；
+  对外模型展示名（V021）与体检的渠道视图和提示。harness S72、S89、S91、S92。
 
 ## M3-a：渠道容错（自动禁用 + 恢复，已落地）
 
