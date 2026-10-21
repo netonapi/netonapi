@@ -20,6 +20,8 @@ data class PublicModelVO(
     val defaultMaxOutputTokens: Int? = null,
     /** 可调用该模型的端点能力（chat / embeddings）：只给模型名，用户会把向量模型当 chat 调 */
     val capabilities: List<String> = emptyList(),
+    /** 对外展示名（如「Opus 5.5」）；空 = 显示模型 ID。 */
+    val displayName: String? = null,
 )
 
 /**
@@ -60,6 +62,7 @@ class ModelCatalogController(private val channelLogic: ChannelLogic) {
                     perRequestPrice = sale.perRequestPrice,
                     defaultMaxOutputTokens = it.defaultMaxOutputTokens,
                     capabilities = capsByModel[it.model]?.sorted() ?: emptyList(),
+                    displayName = it.displayName,
                 )
             }
     }

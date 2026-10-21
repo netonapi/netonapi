@@ -23,6 +23,8 @@ data class SavePriceRequest(
     val saleOverride: String? = null,
     /** 分档价格 JSON（见 PricingTiers）。update 时不带 = 保留原值，传空串 = 清除。 */
     val tiers: String? = null,
+    /** 对外展示名；update 时不带 = 保留原值，传空串 = 清除。 */
+    val displayName: String? = null,
 )
 
 @Serializable
@@ -95,6 +97,7 @@ class PriceController(
             cacheReadPrice = price.cacheReadPrice, cacheWritePrice = price.cacheWritePrice,
             perRequestPrice = price.perRequestPrice, defaultMaxOutputTokens = price.defaultMaxOutputTokens,
             saleOverride = price.saleOverride, tiers = price.tiers,
+            displayName = if (request.displayName == null) current.displayName else price.displayName,
         )
         ModelPriceTable.update(next)
         logic.PriceHistoryLogic.record("update", current, next, identity.id.toLongOrNull())
@@ -138,6 +141,7 @@ class PriceController(
         perRequestPrice = request.perRequestPrice, saleOverride = request.saleOverride?.trim()?.takeIf { it.isNotEmpty() },
         defaultMaxOutputTokens = request.defaultMaxOutputTokens?.takeIf { it > 0 },
         tiers = logic.PricingTiers.normalize(request.tiers),
+        displayName = request.displayName?.trim()?.take(64)?.takeIf { it.isNotEmpty() },
     ).let { logic.PricingTiers.withBaseFromTiers(it) }
 
     @Delete("/delete/{id}")

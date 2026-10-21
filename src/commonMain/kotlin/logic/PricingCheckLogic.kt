@@ -34,6 +34,26 @@ data class PricingCombo(
     val costSource: String = ChannelCostLogic.SOURCE_OFFICIAL,
 )
 
+/** 承载某个对外模型的一条渠道：路由信息 + 这条渠道上这个模型的实际成本（基础档，已乘折扣）。 */
+@Serializable
+data class ChannelRouteVO(
+    val channelId: Long,
+    val name: String,
+    val priority: Int,
+    val weight: Int,
+    val status: Int,
+    val cooldownUntil: Long,
+    val lastProbeOk: Int?,
+    val costInput: String,
+    val costOutput: String,
+    /** 这个模型的成本实际来自哪里：channel（渠道成本表）/ official（官方价 × 折扣）。 */
+    val costSource: String,
+    /** 渠道配置的成本来源：official / upstream / manual。 */
+    val configuredSource: String,
+    val discount: String,
+    val stale: Boolean,
+)
+
 @Serializable
 data class PricingCheckRow(
     val id: Long,
@@ -54,6 +74,11 @@ data class PricingCheckRow(
     /** 亏本或偏薄的组合，最多 [PricingCheckLogic.MAX_FLAGGED] 条。 */
     val flagged: List<PricingCombo> = emptyList(),
     val comboCount: Int = 0,
+    val displayName: String? = null,
+    /** 承载这个模型的渠道（按优先级从高到低）。 */
+    val channels: List<ChannelRouteVO> = emptyList(),
+    /** 体检提示：PRIORITY_COST_INVERSION / UPSTREAM_NOT_PRICED / COST_STALE / OFFICIAL_ONLY。 */
+    val hints: List<String> = emptyList(),
 )
 
 @Serializable
@@ -87,7 +112,9 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         val groups = GatewayGroupTable.findAll().associateBy { it.code }
         val channels = channelLogic.listEnabled()
         val costs = table.ChannelModelCostTable.findAll().associateBy { it.channelId to it.model }
-        val rows = prices.sortedBy { it.model }.map { row(it, byModel, groups, channels, policy, costs) }
+        @OptIn(kotlin.time.ExperimentalTime::class)
+        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        val rows = prices.sortedBy { it.model }.map { row(it, byModel, groups, channels, policy, costs, now) }
         return PricingCheckResult(
             markup = policy.markup,
             minMargin = policy.minMargin,
@@ -106,6 +133,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         channels: List<Channel>,
         policy: PricingPolicy.Policy,
         costs: Map<Pair<Long, String>, model.ChannelModelCost>,
+        now: Long,
     ): PricingCheckRow {
         val sale = runCatching { SalePricing.resolve(price, policy.markup) }.getOrNull()
             ?: return PricingCheckRow(
@@ -114,9 +142,18 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
                 saleInput = "", saleOutput = "", status = INVALID,
             )
         val combos = mutableListOf<PricingCombo>()
+        val routes = mutableListOf<ChannelRouteVO>()
         for (ch in channels) {
             val upstream = upstreamModel(ch, price.model) ?: continue
             val basis = ChannelCostLogic.costForLoaded(ch, price.model, upstream, price, costs, byModel) ?: continue
+            routes += ChannelRouteVO(
+                channelId = ch.id, name = ch.name, priority = ch.priority, weight = ch.weight, status = ch.status,
+                cooldownUntil = ch.cooldownUntil, lastProbeOk = ch.lastProbeOk,
+                costInput = PricingCalc.microToDecimal(SalePricing.scaleMicro(PricingCalc.parseMicro(basis.price.inputPrice), basis.discount)),
+                costOutput = PricingCalc.microToDecimal(SalePricing.scaleMicro(PricingCalc.parseMicro(basis.price.outputPrice), basis.discount)),
+                costSource = basis.source, configuredSource = ch.costSource, discount = basis.discount,
+                stale = costs[ch.id to price.model]?.stale == 1,
+            )
             for (code in ch.groups.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
                 val g = groups[code] ?: continue
                 combos += tiered(sale, basis.price, g, ch, basis.discount, policy.minMargin).copy(costSource = basis.source)
@@ -139,6 +176,9 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
             worst = worst,
             flagged = combos.filter { it.status != OK }.sortedBy { it.marginBp }.take(MAX_FLAGGED),
             comboCount = combos.size,
+            displayName = price.displayName,
+            channels = routes.sortedByDescending { it.priority },
+            hints = hintsFor(routes, now),
         )
     }
 
@@ -198,6 +238,34 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         price.saleOverride?.let { runCatching { json.parseToJsonElement(it).jsonObject["markup"]?.jsonPrimitive?.contentOrNull }.getOrNull() }
 
     companion object {
+        const val HINT_PRIORITY_COST_INVERSION = "PRIORITY_COST_INVERSION"
+        const val HINT_UPSTREAM_NOT_PRICED = "UPSTREAM_NOT_PRICED"
+        const val HINT_COST_STALE = "COST_STALE"
+        const val HINT_OFFICIAL_ONLY = "OFFICIAL_ONLY"
+
+        /**
+         * 体检提示（不改路由，只提醒）：
+         *  - 优先级更高的渠道比某个健康的、更低优先级渠道贵（按基础档输入 + 输出价比较）；
+         *  - 成本来源设为上游价目接口、但这个模型上游没报价（回到官方价 × 折扣估算）；
+         *  - 有成本行已标「上游已不报价」；
+         *  - 承载它的全是按官方原价计成本的渠道（没有便宜的中转）。
+         * 健康 = 启用、不在冷却、最近测速没失败。
+         */
+        fun hintsFor(routes: List<ChannelRouteVO>, now: Long): List<String> {
+            if (routes.isEmpty()) return emptyList()
+            val hints = mutableListOf<String>()
+            fun cost(r: ChannelRouteVO) = PricingCalc.parseMicro(r.costInput) + PricingCalc.parseMicro(r.costOutput)
+            fun healthy(r: ChannelRouteVO) = r.status == 1 && r.cooldownUntil <= now && r.lastProbeOk != 0
+            val inverted = routes.filter { healthy(it) }.let { hs ->
+                hs.any { hi -> hs.any { lo -> hi.priority > lo.priority && cost(hi) > cost(lo) } }
+            }
+            if (inverted) hints += HINT_PRIORITY_COST_INVERSION
+            if (routes.any { it.configuredSource == "upstream" && it.costSource == ChannelCostLogic.SOURCE_OFFICIAL }) hints += HINT_UPSTREAM_NOT_PRICED
+            if (routes.any { it.stale }) hints += HINT_COST_STALE
+            if (routes.all { it.costSource == ChannelCostLogic.SOURCE_OFFICIAL && PricingCalc.parseRatio(it.discount) == 10_000 }) hints += HINT_OFFICIAL_ONLY
+            return hints
+        }
+
         const val OK = "OK"
         const val THIN = "THIN"
         const val LOSS = "LOSS"

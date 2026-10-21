@@ -21,6 +21,8 @@ data class ModelPrice(
     val saleOverride: String? = null,
     /** 按上下文长度分档的官方价（JSON，见 [logic.PricingTiers]）；空 = 单档。 */
     val tiers: String? = null,
+    /** 对外展示名（V021），如「Opus 5.5」；空 = 直接显示模型 ID。 */
+    val displayName: String? = null,
     /** 价源：builtin/manual（litellm/openrouter M3 加入） */
     val source: String = "manual",
     @SoftDelete val deleted: Int = 0,
