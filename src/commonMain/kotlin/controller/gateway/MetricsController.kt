@@ -51,6 +51,9 @@ class MetricsController {
         sb.append("# TYPE netonapi_settlements_manual_review gauge\n"); line("netonapi_settlements_manual_review", manual)
         val pending = db.fetchAll("SELECT COUNT(*) AS n FROM gateway_settlements WHERE status IN ('FINALIZE_PENDING','RELEASE_PENDING')", emptyMap()).firstOrNull()?.longOrNull("n") ?: 0
         sb.append("# TYPE netonapi_settlements_pending gauge\n"); line("netonapi_settlements_pending", pending)
+        // 最近一次价源检查里待确认的官方价变动（有变化 + 可新增）；告警脚本据此提醒去「校准官方价」
+        val sync = db.fetchAll("SELECT changed + new_models AS n FROM gateway_price_sync_runs ORDER BY id DESC LIMIT 1", emptyMap()).firstOrNull()?.longOrNull("n") ?: 0
+        sb.append("# TYPE netonapi_price_pending_changes gauge\n"); line("netonapi_price_pending_changes", sync)
         response.contentType = "text/plain; version=0.0.4; charset=utf-8"
         response.text(sb.toString())
     }

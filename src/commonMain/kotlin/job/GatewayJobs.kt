@@ -16,14 +16,15 @@ class ChannelProbeJob(private val log: Logger, private val ctx: NetonContext) : 
     }
 }
 
-/** 价源同步：每天 03:10 从 NETONAPI_PRICE_SYNC_URL 拉一次价目表；没配就什么都不做。 */
+/**
+ * 价源检查：每天 03:10 按后台配置的价源（gateway.pricing.source_*）比对官方价，只记录差异、不改价，
+ * 有差异时概览与 /metrics（netonapi_price_pending_changes）提示，运营在「校准官方价」里确认后写入。
+ */
 @Job(id = "gateway-price-sync", cron = "10 3 * * *", lockTtlMs = 300_000)
 class PriceSyncJob(private val log: Logger, private val ctx: NetonContext) : JobExecutor {
     override suspend fun run(context: JobContext) {
-        val importer = ctx.getOrNull(logic.PriceImportLogic::class) ?: return
-        val r = importer.syncFromEnv() ?: return
-        if (r.errors.isNotEmpty()) log.error("gateway.price.sync failed: ${r.errors.joinToString("; ").take(500)}")
-        else log.info("gateway.price.sync created=${r.created} updated=${r.updated} skipped=${r.skipped}")
+        val calibration = ctx.getOrNull(logic.PriceCalibrationLogic::class) ?: return
+        calibration.check()
     }
 }
 

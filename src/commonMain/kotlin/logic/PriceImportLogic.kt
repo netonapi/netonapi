@@ -96,25 +96,6 @@ class PriceImportLogic(private val log: Logger) {
         return PriceImportResult(created, updated, skipped, heldForLoss = held)
     }
 
-    /** 从 NETONAPI_PRICE_SYNC_URL 拉价目表并导入；未配置返回 null。 */
-    suspend fun syncFromEnv(): PriceImportResult? {
-        val url = neton.core.config.getEnv(ENV_SYNC_URL)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        val overwrite = neton.core.config.getEnv(ENV_SYNC_OVERWRITE)?.trim()?.lowercase() != "false"
-        // 本模块不带 HTTP 引擎，客户端能力来自应用绑定的 provider（与渠道转发同源）
-        val provider = RelayEngine.deployConfigClients ?: return PriceImportResult(0, 0, 0, listOf("HttpClientProvider 未绑定"))
-        val client = provider.create { connectMillis = 5_000; requestMillis = 30_000; socketMillis = 30_000 }
-        try {
-            val res = client.request(neton.http.client.HttpClientRequest(method = neton.http.client.HttpClientMethod.Get, url = url))
-            if (res.statusCode !in 200..299) return PriceImportResult(0, 0, 0, listOf("价源 HTTP ${res.statusCode}: ${res.body.take(200)}"))
-            val items: List<PriceImportItem> = try { parseSheet(res.body) } catch (e: Throwable) {
-                return PriceImportResult(0, 0, 0, listOf("价源不是合法 JSON：${e.message}"))
-            }
-            return importItems(items, overwrite, source = "sync")
-        } finally {
-            runCatching { client.close() }
-        }
-    }
-
     fun parseSheet(text: String): List<PriceImportItem> {
         val root = Json.parseToJsonElement(text)
         fun pick(o: JsonObject, vararg keys: String): String? = keys.firstNotNullOfOrNull { k -> o[k]?.takeIf { it !is JsonNull }?.jsonPrimitive?.contentOrNull }
@@ -146,7 +127,7 @@ class PriceImportLogic(private val log: Logger) {
     ).let { PricingTiers.withBaseFromTiers(it) }
 
     companion object {
-        const val ENV_SYNC_URL = "NETONAPI_PRICE_SYNC_URL"
-        const val ENV_SYNC_OVERWRITE = "NETONAPI_PRICE_SYNC_OVERWRITE"
+        /** 已删除的旧变量：价源改在后台配置 gateway.pricing.source_*，设着就拒绝启动（见 GatewayRuntimeBootstrap）。 */
+        val REMOVED_ENV = listOf("NETONAPI_PRICE_SYNC_URL", "NETONAPI_PRICE_SYNC_OVERWRITE")
     }
 }

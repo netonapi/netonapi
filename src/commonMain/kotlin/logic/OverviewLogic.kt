@@ -1,5 +1,6 @@
 package logic
 
+import neton.database.dsl.*
 import kotlinx.serialization.Serializable
 import neton.logging.Logger
 
@@ -49,6 +50,8 @@ data class OverviewVO(
     /** 统计期内实收低于成本的请求笔数与亏掉的金额（μUSD）。不为 0 就该去「模型定价」看体检结果。 */
     val lossRequests: Long = 0,
     val lossAmount: Long = 0,
+    /** 最近一次价源检查（定时任务 gateway-price-sync）：官方价有变化或可新增的模型要运营确认。 */
+    val priceSync: model.PriceSyncRun? = null,
     val manualReviewSettlements: Long,
     val suspendedChannels: Long,
     val generatedAt: Long,
@@ -150,6 +153,7 @@ class OverviewLogic(private val log: Logger) {
             today = period(todayStart), period = period(periodStart), days = d, daily = daily,
             topModels = topModels, topUsers = topUsers, channels = channels, groups = groups,
             lossRequests = loss?.longOrNull("n") ?: 0, lossAmount = loss?.longOrNull("amt") ?: 0,
+            priceSync = table.PriceSyncRunTable.query { orderBy(model.PriceSyncRun::id.desc()); limitOffset(1, 0) }.list().firstOrNull(),
             manualReviewSettlements = manual, suspendedChannels = suspended, generatedAt = now,
         )
     }

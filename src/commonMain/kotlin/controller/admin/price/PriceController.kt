@@ -107,11 +107,15 @@ class PriceController(
     suspend fun import(@Body request: PriceImportRequest, identity: neton.core.interfaces.Identity): logic.PriceImportResult =
         importLogic.importItems(request.items.map { toItem(it) }, request.overwrite, operatorId = identity.id.toLongOrNull())
 
-    /** 立即从 NETONAPI_PRICE_SYNC_URL 拉一次价目表（定时任务 gateway-price-sync 每天也会做）。 */
+    /** 立即检查一次价源（定时任务 gateway-price-sync 每天也会做）：返回差异、记录检查结果，不改价。 */
     @Post("/sync")
-    @Permission("gateway:price:create")
-    suspend fun sync(): logic.PriceImportResult = importLogic.syncFromEnv()
-        ?: throw HttpException(NetonErrorCode.OPERATION_NOT_ALLOWED, GatewayErrorCodes.PRICE_SYNC_NOT_CONFIGURED)
+    @Permission("gateway:price:query")
+    suspend fun sync(): logic.CalibrationPreview = calibrationLogic.check()
+
+    /** 最近一次价源检查结果。 */
+    @Get("/sync/last")
+    @Permission("gateway:price:query")
+    suspend fun lastSync(): model.PriceSyncRun? = calibrationLogic.lastRun()
 
     private suspend fun requireMargin(price: ModelPrice) {
         val policy = logic.PricingPolicy.current()

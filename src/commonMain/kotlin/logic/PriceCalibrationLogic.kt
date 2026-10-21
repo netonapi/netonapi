@@ -1,5 +1,6 @@
 package logic
 
+import neton.database.dsl.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -123,6 +124,29 @@ class PriceCalibrationLogic(
         }
         return CalibrationPreview(format, url, entries.size, rows + suggestions)
     }
+
+    /**
+     * 定时检查（任务 gateway-price-sync，以及管理台「检查价源」）：等同预览，并记一行检查结果。
+     * 不写价格表 —— 官方价决定售价，变动必须经运营在「校准官方价」里确认。
+     */
+    @OptIn(kotlin.time.ExperimentalTime::class)
+    suspend fun check(): CalibrationPreview {
+        val p = preview()
+        runCatching {
+            table.PriceSyncRunTable.insert(model.PriceSyncRun(
+                checkedAt = kotlin.time.Clock.System.now().toEpochMilliseconds(), source = p.url.take(512),
+                changed = p.rows.count { it.status == CHANGED }, newModels = p.rows.count { it.status == NEW },
+                unparsable = p.rows.count { it.status == UNPARSABLE }, error = p.error,
+            ))
+        }.onFailure { log.warn("price sync run not recorded: ${it.message}") }
+        if (p.error != null) log.error("gateway.price.check failed source=${p.url}: ${p.error}")
+        else log.info("gateway.price.check changed=${p.rows.count { it.status == CHANGED }} new=${p.rows.count { it.status == NEW }}")
+        return p
+    }
+
+    /** 最近一次检查结果；从没检查过为 null。 */
+    suspend fun lastRun(): model.PriceSyncRun? =
+        table.PriceSyncRunTable.query { orderBy(model.PriceSyncRun::id.desc()); limitOffset(1, 0) }.list().firstOrNull()
 
     suspend fun apply(models: List<String>, operatorId: Long?): PriceImportResult {
         val wanted = models.map { it.trim() }.filter { it.isNotEmpty() }.toSet()

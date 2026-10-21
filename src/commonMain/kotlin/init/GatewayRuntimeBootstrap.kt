@@ -29,6 +29,10 @@ object GatewayRuntimeBootstrap {
         ctx.getOrNull(setting.SettingDefinitionRegistry::class)?.register(setting.GatewaySettingKeys.definitions)
         // 加价率、最低毛利改在后台配置；定价策略从这里读（带短缓存，见 PricingPolicy）
         logic.PricingPolicy.settings = ctx.getOrNull(logic.SystemSettingLogic::class)
+        // 旧的价源环境变量已删除：价源改在后台配置，并且定时任务只提示不改价。设着说明部署还按旧方式自动覆盖价格
+        logic.PriceImportLogic.REMOVED_ENV.filter { !neton.core.config.getEnv(it).isNullOrBlank() }.takeIf { it.isNotEmpty() }?.let {
+            error("${it.joinToString(", ")} removed; configure the price source in Settings (gateway.pricing.source_format / source_url) and unset them")
+        }
         // 渠道客户端按需创建（各自的代理与超时），一律是受控客户端：地址来自后台运行期数据。
         val guarded = ctx.getOrNull(neton.http.client.GuardedHttpClientProvider::class) ?: error(
             "module-gateway needs a GuardedHttpClientProvider bound in NetonContext (module-system binds it from " +
