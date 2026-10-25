@@ -29,6 +29,8 @@ data class CreateChannelRequest(
     val lossPolicy: String = "allow",
     val reasoningSuffix: Int = 0,
     val remark: String? = null,
+    /** 1 启用 / 0 禁用（先建好、配完再启用）；2 挂起只由系统设置，新建时传什么都按启用 / 禁用两态处理 */
+    val status: Int = 1,
     /** 初始 Key 列表（可批量粘贴） */
     val keys: List<String> = emptyList(),
 )

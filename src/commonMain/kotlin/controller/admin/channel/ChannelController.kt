@@ -44,6 +44,7 @@ class ChannelController(
                 costSource = request.costSource, upstreamPricingFormat = request.upstreamPricingFormat,
                 upstreamPricingUrl = request.upstreamPricingUrl, upstreamGroupRatio = request.upstreamGroupRatio,
                 upstreamCreditRate = request.upstreamCreditRate,
+                status = if (request.status == 0) 0 else 1,
             ).let { logic.ChannelCostLogic.requireCostConfig(it) }
         )
         request.keys.forEach { channelLogic.addKey(id, it) }
