@@ -127,6 +127,6 @@ class ChannelClientCache(
 
         /** 影响连接行为的渠道字段：任何一个变了都得换客户端。 */
         fun fingerprintOf(channel: Channel): String =
-            "${channel.baseUrl}|${channel.proxyUrl ?: ""}|${channel.ttfbTimeoutMs}|${channel.idleTimeoutMs}"
+            "${channel.baseUrl}|${channel.effectiveProxyUrl() ?: ""}|${channel.ttfbTimeoutMs}|${channel.idleTimeoutMs}"
     }
 }

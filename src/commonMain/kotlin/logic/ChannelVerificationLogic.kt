@@ -89,7 +89,7 @@ class ChannelVerificationLogic(private val log: Logger, private val channelLogic
             val key = channelLogic.pickKey(channel.id) ?: error("channel has no available key")
             val body = upstream.upstreamBody(probeBody(), upstreamModel, false)
             val path = RelayEngine.upstreamPathFor(upstream, channel, "/v1/chat/completions", upstreamModel, stream = false)
-            val url = channel.baseUrl.trimEnd('/') + path
+            val url = channel.apiBase() + path
             val headers = upstream.requestHeaders(key.apiKey, "POST", url, body, channel)
             val res = RelayEngine.withChannelClient(channel) {
                 it.request(HttpClientRequest(

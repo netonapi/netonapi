@@ -482,7 +482,7 @@ class RelayEngine(
         val betaHeaders = if (transform.inbound.id == upstream.id) {
             listOf("anthropic-beta", "OpenAI-Beta").mapNotNull { h -> ctx.request.header(h)?.let { h to it } }.toMap()
         } else emptyMap()
-        val upstreamUrl = channel.baseUrl.trimEnd('/') + transform.upstreamPath
+        val upstreamUrl = channel.apiBase() + transform.upstreamPath
         val upstreamBody = upstream.upstreamBody(rewritten.body, rewritten.upstreamModel, rewritten.stream)
         // 托管上游（Bedrock / Vertex）的鉴权头依赖 url 与 body（签名 / 换 token），所以在 body 定型之后才算
         val authHeaders = try { upstream.requestHeaders(apiKey, "POST", upstreamUrl, upstreamBody, channel) } catch (e: IllegalArgumentException) {
@@ -1028,7 +1028,7 @@ class RelayEngine(
                 connectMillis = 5_000
                 requestMillis = 600_000               // 长流总上限 10 分钟
                 socketMillis = channel.idleTimeoutMs  // 块间空闲超时
-                proxyUrl = channel.proxyUrl
+                proxyUrl = channel.effectiveProxyUrl()  // 空白 = 不走代理（老数据里有 ""）
             }
         })
 

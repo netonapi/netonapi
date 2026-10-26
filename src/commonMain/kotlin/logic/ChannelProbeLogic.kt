@@ -91,7 +91,7 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
         val mapped = RequestRewriter.rewrite(hub, channel, injectStreamOptions = false)
         val body = if (upstream.id == "openai") mapped.body else ProtocolCodecs.requestFromHub(upstream.id)(mapped.body)
         val path = RelayEngine.upstreamPathFor(upstream, channel, "/v1/chat/completions", mapped.upstreamModel, stream = false)
-        val url = channel.baseUrl.trimEnd('/') + path
+        val url = channel.apiBase() + path
         val finalBody = upstream.upstreamBody(body, mapped.upstreamModel, false)
         val headers = try { upstream.requestHeaders(key.apiKey, "POST", url, finalBody, channel) } catch (e: HttpClientException) {
             // Vertex 换 token 时 token_uri 被出站策略拒绝
@@ -143,7 +143,7 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
         if (channel.type in setOf("bedrock", "bedrock_converse", "vertex_anthropic", "vertex_gemini")) {
             return ChannelModelsResult(ok = false, error = "该类型没有可用的模型列表接口，请手动填写模型清单（模型映射的目标名即厂商模型 id）")
         }
-        val base = channel.baseUrl.trimEnd('/')
+        val base = channel.apiBase()
         val (url, extract) = when (channel.type) {
             "azure_openai" -> {
                 val v = channel.apiVersion?.trim().takeUnless { it.isNullOrEmpty() } ?: "2023-03-15-preview"
