@@ -294,6 +294,7 @@ class RelayEngine(
                     // 上游认证错（401/403）归咎于 Key；其它 4xx 是客户端问题，不计 Key 失败
                     if (err.statusCode == 401 || err.statusCode == 403) channelLogic.recordKeyFailure(key.id, "upstream_${err.statusCode}")
                     recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
+                    releaseObserved()
                     respondRaw(ctx, err.statusCode, err.body?.let { transform.errorBodyFor(it, err.statusCode) } ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
                     return
                 }
@@ -536,6 +537,7 @@ class RelayEngine(
                 // 401/403 = 凭证级失败，计 Key 失败（与流式/外层分类统一）；其它 4xx 是客户端问题
                 if (res.statusCode == 401 || res.statusCode == 403) channelLogic.recordKeyFailure(keyId, "upstream_${res.statusCode}")
                 recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, "error", "upstream_${res.statusCode}", null)
+                releaseObserved()
                 respondRaw(ctx, res.statusCode, transform.errorBodyFor(res.body, res.statusCode))  // 同协议原样、跨协议改写（擦除 headers）
                 return RelayOutcome.PARTIAL  // 上游语义错误：终态，不当 Key 成功
             }
@@ -712,6 +714,16 @@ class RelayEngine(
     interface StreamTransformer {
         fun feed(chunk: String): String
         fun finish(): String
+    }
+
+    /**
+     * 上游明确拒绝了请求（我们收到了它的 4xx 响应）：没有产生用量，预留当场释放。
+     * 不释放的话结算单停在 UPSTREAM_STARTED，等 worker TTL 转人工，期间一直锁着用户的余额。
+     */
+    private suspend fun releaseObserved() {
+        val s = settlement ?: return
+        settlementLogic.requestRelease(s.settlementId, bySettlementStatus(s.settlementId))
+        settlementLogic.release(s.settlementId)
     }
 
     private suspend fun bill(
