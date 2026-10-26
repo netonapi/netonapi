@@ -85,6 +85,17 @@ class ReserveCalcTest {
         assertEquals(ReserveCalc.Result.NoOutputCap,
             ReserveCalc.compute("""{"max_tokens":0}""", price(output = "3"), "1"))
     }
+    @Test fun embeddingsNeedNoOutputCap() {
+        val r = ReserveCalc.compute("""{"model":"e","input":["a","b"]}""", price(input = "0.02"), "1", noOutput = true)
+        assertTrue(r is ReserveCalc.Result.Ok)
+    }
+
+    @Test fun noOutputPathsCoverEmbeddingsAndRerank() {
+        assertTrue(RelayEngine.isNoOutputPath("/v1/embeddings"))
+        assertTrue(RelayEngine.isNoOutputPath("/v1/rerank"))
+        assertTrue(RelayEngine.isNoOutputPath("/v1/audio/speech"))
+        assertTrue(!RelayEngine.isNoOutputPath("/v1/chat/completions"))
+    }
 }
 
 class Utf8LengthTest {

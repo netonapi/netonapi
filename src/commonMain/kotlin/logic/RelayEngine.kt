@@ -197,14 +197,20 @@ class RelayEngine(
                 )
             }
         }
-        val audio = path.startsWith("/v1/audio/")
-        val reserveAmount = when (val rc = ReserveCalc.compute(rawBody, salePrice?.let { PricingTiers.mostExpensive(it) }, ratio, inputUpperBytes = extras.bodyBytes?.size, noOutput = audio)) {
+        val noOutput = isNoOutputPath(path)
+        val reservePrice = salePrice?.let { PricingTiers.mostExpensive(it) }
+        val reserveAmount = when (val rc = ReserveCalc.compute(rawBody, reservePrice, ratio, inputUpperBytes = extras.bodyBytes?.size, noOutput = noOutput)) {
             is ReserveCalc.Result.NoPrice ->
                 return respondError(ctx, inbound, 400, "model_not_priced", "model '$requestModel' has no pricing configured")
             is ReserveCalc.Result.NoOutputCap ->
                 return respondError(ctx, inbound, 400, "output_cap_required", "max_tokens is required for model '$requestModel'")
             is ReserveCalc.Result.Ok -> rc
         }
+        // 预扣用了模型的默认输出上限（请求没带）→ 把它写进转发的请求，预扣才是真上界（见 OutputCap）
+        val defaultCap = reservePrice?.takeIf { !noOutput && it.perRequestPrice == null }?.defaultMaxOutputTokens
+        val forwardBody = if (defaultCap != null && extras.bodyBytes == null) {
+            OutputCap.inject(rawBody, if (path == RESPONSES_PATH) "responses" else inbound.id, defaultCap)
+        } else rawBody
         // 客户端幂等键：先校验原始字节长度（不截断、不哈希超长值），再存定长 SHA-256
         val idemRaw = ctx.request.header("Idempotency-Key")
         if (idemRaw != null && idemRaw.encodeToByteArray().size !in 1..255) {
@@ -254,7 +260,7 @@ class RelayEngine(
                 }
             }
             val transform = try {
-                buildTransform(inbound, upstream, rawBody, channel, path, userId, tokenId)
+                buildTransform(inbound, upstream, forwardBody, channel, path, userId, tokenId)
             } catch (e: neton.ai.protocol.diag.ConversionRejectedException) {
                 lastError = "channel ${channel.id} (${channel.type}) loss policy ${channel.lossPolicy} rejected: " +
                     e.violations.joinToString(",") { it.code }
@@ -957,6 +963,9 @@ class RelayEngine(
         const val IMAGES_PATH = "/v1/images/generations"
         const val RERANK_PATH = "/v1/rerank"
         val AUDIO_PATHS = setOf("/v1/audio/speech", "/v1/audio/transcriptions", "/v1/audio/translations")
+        /** 不产生输出 token 的端点：预扣只按输入上界算，不要求输出上限（否则没配默认上限的向量模型一律 400）。 */
+        fun isNoOutputPath(path: String): Boolean =
+            path == "/v1/embeddings" || path == RERANK_PATH || path.startsWith("/v1/audio/")
         val OPENAI_ONLY_PATHS = setOf(RESPONSES_PATH, IMAGES_PATH, RERANK_PATH) + AUDIO_PATHS
         /** 渠道类型 → 上游协议适配器；null = 未知类型（渠道配置错了，不当路由候选）。 */
         fun adapterForChannel(type: String): ProtocolAdapter? = when (type) {

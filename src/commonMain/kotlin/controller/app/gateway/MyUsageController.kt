@@ -27,6 +27,39 @@ data class MyBalanceVO(
  * 所有查询都以 identity 的 userId 强制过滤——不接受请求参数指定用户，
  * 否则任何人都能翻别人的账单。
  */
+/**
+ * 用户看到的一条用量：模型、tokens、扣费、耗时与结果。不含内部信息——成本价（cost）、渠道、上游实际模型、
+ * 计费组的解析来源只给运营看（管理端日志）。
+ */
+@Serializable
+data class MyUsageLogVO(
+    val id: Long,
+    val tokenId: Long,
+    val requestModel: String,
+    val promptTokens: Int,
+    val completionTokens: Int,
+    val cacheReadTokens: Int,
+    val cacheWriteTokens: Int,
+    val charged: Long,
+    val groupCode: String?,
+    val ttfbMs: Long?,
+    val latencyMs: Long?,
+    val stream: Int,
+    val status: String,
+    val errorCode: String?,
+    val createdAt: Long?,
+) {
+    companion object {
+        fun of(l: UsageLog) = MyUsageLogVO(
+            id = l.id, tokenId = l.tokenId, requestModel = l.requestModel,
+            promptTokens = l.promptTokens, completionTokens = l.completionTokens,
+            cacheReadTokens = l.cacheReadTokens, cacheWriteTokens = l.cacheWriteTokens,
+            charged = l.charged, groupCode = l.groupCode, ttfbMs = l.ttfbMs, latencyMs = l.latencyMs,
+            stream = l.stream, status = l.status, errorCode = l.errorCode, createdAt = l.createdAt,
+        )
+    }
+}
+
 @Controller("/gateway/usage")
 class MyUsageController(private val quotaLogic: QuotaLogic, private val statsLogic: logic.UsageStatsLogic) {
 
@@ -52,7 +85,7 @@ class MyUsageController(private val quotaLogic: QuotaLogic, private val statsLog
         @Query pageNo: Int = 1,
         @Query pageSize: Int = 20,
         @Query requestModel: String? = null,
-    ): PageResponse<UsageLog> {
+    ): PageResponse<MyUsageLogVO> {
         val uid = identity.id.toLong()
         val size = pageSize.coerceIn(1, 100)
         val no = pageNo.coerceAtLeast(1)
@@ -65,7 +98,7 @@ class MyUsageController(private val quotaLogic: QuotaLogic, private val statsLog
             }
             orderBy(UsageLog::id.desc())
         }.page(no, size)
-        return PageResponse(r.items, r.total, no, size, r.totalPages)
+        return PageResponse(r.items.map(MyUsageLogVO::of), r.total, no, size, r.totalPages)
     }
 
     /** 我的额度流水（充值/消费）。 */
