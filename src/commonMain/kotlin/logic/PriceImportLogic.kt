@@ -64,7 +64,8 @@ class PriceImportLogic(private val log: Logger) {
             val current = existing[price.model]
             when {
                 current == null -> {
-                    val saved = ModelPriceTable.insert(price.copy(source = source))
+                    // 价源导入 / 校准来的是价格参考库：新建行一律下架，由运营挑出要卖的再上架
+                    val saved = ModelPriceTable.insert(price.copy(source = source, listed = 0))
                     PriceHistoryLogic.record(source, null, saved, operatorId)
                     created++
                 }

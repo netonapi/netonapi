@@ -95,13 +95,47 @@ class ChannelController(
         return probeLogic.probeAndRecord(channel, request.model)
     }
 
-    /** 拉取上游模型清单（不写库；由前端决定是否并入渠道的 models）。 */
+    /**
+     * 拉取上游模型清单，记进渠道的「支持的模型」（supported_models）。只是给模型挑上游时的候选：
+     * 不并进服务清单 models，上游支持什么不让任何模型对外（docs/model-catalog-design.md）。
+     */
     @Post("/models/{id}")
     @Permission("gateway:channel:update")
     suspend fun upstreamModels(@PathVariable id: Long): logic.ChannelModelsResult {
         val channel = channelLogic.get(id)
             ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.CHANNEL_NOT_FOUND)
-        return probeLogic.listModels(channel)
+        val result = probeLogic.listModels(channel)
+        if (result.ok) channelLogic.get(id)?.let { channelLogic.update(it.copy(supportedModels = result.models.joinToString(","))) }
+        return result
+    }
+
+    /** 某个模型的服务上游：每个渠道是否支持、是否正在服务、上游侧模型名。 */
+    @Get("/model-routes")
+    @Permission("gateway:channel:query")
+    suspend fun modelRoutes(@Query model: String): List<ModelRouteVO> {
+        val m = model.trim()
+        return channelLogic.list().map { ch ->
+            val r = logic.ModelRoutes.routeOf(ch, m)
+            ModelRouteVO(
+                channelId = ch.id, name = ch.name, type = ch.type, status = ch.status, priority = ch.priority,
+                supported = r.supported, serving = r.serving, upstreamModel = r.upstreamModel,
+            )
+        }.sortedWith(compareByDescending<ModelRouteVO> { it.serving }.thenByDescending { it.supported }.thenByDescending { it.priority })
+    }
+
+    /**
+     * 设定某个模型由哪些渠道服务（写回各渠道的服务清单与模型映射）。改的是渠道，要渠道的更新权限：
+     * 财务能改价、不能改线路（与渠道本身同一道权限）。
+     */
+    @Put("/model-routes")
+    @Permission("gateway:channel:update")
+    suspend fun saveModelRoutes(@Body request: SaveModelRoutesRequest) {
+        val m = request.model.trim()
+        if (m.isEmpty()) rejectField("model", GatewayErrorCodes.MODEL_REQUIRED)
+        val all = channelLogic.list()
+        val known = all.map { it.id }.toSet()
+        val selected = request.routes.filter { it.channelId in known }.associate { it.channelId to it.upstreamModel }
+        logic.ModelRoutes.apply(all, m, selected).forEach { channelLogic.update(it) }
     }
 
     @Delete("/delete/{id}")

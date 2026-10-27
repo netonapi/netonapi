@@ -6,6 +6,7 @@ import logic.GroupResolution
 import logic.RelayRouter
 import logic.TokenLogic
 import model.GatewayToken
+import model.ModelPrice
 import neton.core.annotations.Controller
 import neton.core.annotations.Get
 import neton.core.http.HttpResponse
@@ -13,6 +14,8 @@ import neton.core.http.HttpStatus
 import neton.core.interfaces.Identity
 import neton.logging.Logger
 import security.GatewayTokenIdentity
+import neton.database.dsl.*
+import table.ModelPriceTable
 
 /**
  * OpenAI 兼容 `/v1/models`。gateway 组裸响应（不走 envelope）。
@@ -65,10 +68,13 @@ class ModelsController(
 
         val enabled = channelLogic.listEnabled()
         val now = nowMillis()
+        // 只有上架的模型对外（模型目录决定）；没定价或在价格库里下架的，渠道服务它也不列
+        val listed = ModelPriceTable.query { where { ModelPrice::listed eq 1 } }.list().map { it.model }.toSet()
         return enabled
             .asSequence()
             .flatMap { ch -> ch.models.split(',').map { it.trim() }.filter { it.isNotEmpty() }.asSequence() }
             .distinct()
+            .filter { it in listed }
             // 逐个复核可路由性：分组交集、冷却、状态、能力一律交给 RelayRouter 判定，避免与实际路由漂移。
             // 默认 chat 能力：客户端拿这张表去发对话请求，只声明 embeddings 的模型列进来会被当成 chat 调。
             .filter { model -> RelayRouter.candidates(enabled, model, group, now).isNotEmpty() }

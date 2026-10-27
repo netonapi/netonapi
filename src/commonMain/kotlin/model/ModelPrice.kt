@@ -25,6 +25,11 @@ data class ModelPrice(
     val displayName: String? = null,
     /** 价源：builtin/manual（litellm/openrouter M3 加入） */
     val source: String = "manual",
+    /**
+     * 上架（V023）：1 = 对外提供（用户可见、可调用）；0 = 只在价格库里，用户看不到、调不了。
+     * 对外提供哪些模型只由这里决定，上游支持什么不影响（docs/model-catalog-design.md）。
+     */
+    val listed: Int = 1,
     @SoftDelete val deleted: Int = 0,
     @CreatedAt val createdAt: Long? = null,
     @UpdatedAt val updatedAt: Long? = null,

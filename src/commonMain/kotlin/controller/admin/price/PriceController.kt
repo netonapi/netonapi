@@ -25,6 +25,8 @@ data class SavePriceRequest(
     val tiers: String? = null,
     /** 对外展示名；update 时不带 = 保留原值，传空串 = 清除。 */
     val displayName: String? = null,
+    /** 上架（对外提供）：新建缺省 1；更新时不带 = 保留原状态（见 docs/model-catalog-design.md）。 */
+    val listed: Int? = null,
 )
 
 @Serializable
@@ -72,7 +74,7 @@ class PriceController(
     @Post("/create")
     @Permission("gateway:price:create")
     suspend fun create(@Body request: SavePriceRequest, identity: neton.core.interfaces.Identity): Long {
-        val price = toModelPrice(request)
+        val price = toModelPrice(request).copy(listed = if (request.listed == 0) 0 else 1)
         requireMargin(price)
         val saved = ModelPriceTable.insert(price)
         logic.PriceHistoryLogic.record("create", null, saved, identity.id.toLongOrNull())
@@ -98,9 +100,24 @@ class PriceController(
             perRequestPrice = price.perRequestPrice, defaultMaxOutputTokens = price.defaultMaxOutputTokens,
             saleOverride = price.saleOverride, tiers = price.tiers,
             displayName = if (request.displayName == null) current.displayName else price.displayName,
+            listed = request.listed?.let { if (it == 0) 0 else 1 } ?: current.listed,
         )
         ModelPriceTable.update(next)
         logic.PriceHistoryLogic.record("update", current, next, identity.id.toLongOrNull())
+    }
+
+    /**
+     * 上架 / 下架：只有上架的模型对用户可见、可调用。下架不删价格（留在价格库里，随时可以再上架）。
+     */
+    @Put("/listed")
+    @Permission("gateway:price:update")
+    suspend fun setListed(@Query id: Long, @Query listed: Int, identity: neton.core.interfaces.Identity) {
+        val current = ModelPriceTable.get(id)
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.PRICE_NOT_FOUND)
+        val next = current.copy(listed = if (listed == 0) 0 else 1)
+        if (next.listed == current.listed) return
+        ModelPriceTable.update(next)
+        logic.PriceHistoryLogic.record(if (next.listed == 1) "list" else "unlist", current, next, identity.id.toLongOrNull())
     }
 
     /** 官方价（成本轨）+ 售价覆盖；售价低于毛利底线由 [logic.SalePricing.requireMargin] 拒绝。 */

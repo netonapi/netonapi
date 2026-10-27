@@ -38,7 +38,7 @@ class ModelCatalogController(private val channelLogic: ChannelLogic) {
 
     @Get("/list")
     suspend fun list(): List<PublicModelVO> {
-        // 只列「有启用渠道承载」且「已配定价」的模型——未定价模型会被网关拒绝，列出来是误导。
+        // 只列「已上架」且「有启用渠道承载」的模型：对外提供哪些模型由模型目录决定，上游支持什么不算数。
         // 能力取承载渠道的并集：能力路由生效后，模型能被哪个端点调也是用户要知道的事实。
         val capsByModel = mutableMapOf<String, MutableSet<String>>()
         channelLogic.listEnabled().forEach { ch ->
@@ -51,7 +51,7 @@ class ModelCatalogController(private val channelLogic: ChannelLogic) {
         if (servable.isEmpty()) return emptyList()
         val markup = logic.PricingPolicy.current().markup
         return ModelPriceTable.query { orderBy(ModelPrice::model.asc()) }.list()
-            .filter { it.model in servable }
+            .filter { it.listed == 1 && it.model in servable }
             .map {
                 // 展示售价轨（saleOverride 或官方价 × 全局加价率）——用户看到的就是会被扣的价，
                 // 官方成本价属运营内部信息，不外露。坏价模型降级展示官方价，不整个列表 500。

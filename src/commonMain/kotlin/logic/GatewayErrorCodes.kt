@@ -49,6 +49,8 @@ object GatewayErrorCodes {
 
     // ── 价格 ──
     const val PRICE_NOT_FOUND = "PRICE_NOT_FOUND"
+    /** 设定服务上游时没给模型名。字段 model。 */
+    const val MODEL_REQUIRED = "MODEL_REQUIRED"
     /** 价格不是非负十进制数。字段为价格字段名。 */
     const val PRICE_INVALID = "PRICE_INVALID"
     /** 分档价格不合法：不是数组、少于两档、门槛不严格递增、中间档没有门槛或价格非法。 */

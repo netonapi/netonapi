@@ -13,8 +13,13 @@ data class Channel(
     val baseUrl: String,
     /** 渠道分组（与用户分组求交集决定可用性），逗号分隔如 "default,vip" */
     val groups: String = "default",
-    /** 支持的模型清单，逗号分隔 */
+    /**
+     * 正在为我们服务的模型（逗号分隔）：路由按它选渠道。由模型目录的「服务上游」写入（见 [logic.ModelRoutes]），
+     * 不再由「拉取模型」整批并入。
+     */
     val models: String = "",
+    /** 上游支持的模型（V023，「拉取模型」写入，逗号分隔）：只是给模型挑上游时的候选，不让任何模型对外。 */
+    val supportedModels: String = "",
     /**
      * 该渠道真正能服务的端点能力（逗号分隔，如 "chat,embeddings"）。
      * 只声明模型不够：embeddings 打到只会 chat 的上游必然 404，而钱已预留、日志已脏、重试还撞同一堵墙。

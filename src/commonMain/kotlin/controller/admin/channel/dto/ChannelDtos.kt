@@ -80,5 +80,24 @@ data class ChannelKeyVO(
 @Serializable
 data class AddKeyRequest(val apiKey: String)
 
+/** 某个渠道相对一个模型的服务状态（GET /admin/gateway/channel/model-routes）。 */
+@Serializable
+data class ModelRouteVO(
+    val channelId: Long, val name: String, val type: String, val status: Int, val priority: Int,
+    /** 上游支持（「拉取模型」拉到过它或它的上游名） */
+    val supported: Boolean,
+    /** 正在为这个模型服务 */
+    val serving: Boolean,
+    /** 上游侧模型名；null = 与对外模型同名 */
+    val upstreamModel: String? = null,
+)
+
+@Serializable
+data class ModelRouteItem(val channelId: Long, val upstreamModel: String? = null)
+
+/** 设定一个模型的服务上游：列表里的渠道服务它，其余渠道不再服务它。 */
+@Serializable
+data class SaveModelRoutesRequest(val model: String, val routes: List<ModelRouteItem> = emptyList())
+
 @Serializable
 data class ProbeChannelRequest(val model: String? = null)

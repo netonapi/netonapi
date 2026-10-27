@@ -184,6 +184,10 @@ class RelayEngine(
         // 双轨计价：官方价 = 成本轨，售价（saleOverride 或官方价 × 全局加价率）= 收入轨。
         // 定价数据非法在入口 fail-fast 拒绝——坏价一旦进了 reserve，结算时就只能猜价或转人工。
         val officialPrice = ModelPriceTable.oneWhere { ModelPrice::model eq requestModel }
+        // 下架的模型不对外：与「没有这个模型」同一个回答（404），不暴露价格库里有什么
+        if (officialPrice != null && officialPrice.listed != 1) {
+            return respondError(ctx, inbound, 404, "model_not_found", "model '$requestModel' is not available on this endpoint")
+        }
         // 倍率取自上面那一次解析（同一行数据），不再按名字重查、也不再回落 1.0。
         val ratio = billingGroup.ratio
         val markup = PricingPolicy.current().markup

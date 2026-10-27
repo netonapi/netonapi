@@ -83,6 +83,8 @@ data class PricingCheckRow(
     val channels: List<ChannelRouteVO> = emptyList(),
     /** 体检提示：PRIORITY_COST_INVERSION / UPSTREAM_NOT_PRICED / COST_STALE / OFFICIAL_ONLY。 */
     val hints: List<String> = emptyList(),
+    /** 1 = 上架（对外提供）；0 = 只在价格库里。 */
+    val listed: Int = 1,
 )
 
 @Serializable
@@ -119,13 +121,15 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         @OptIn(kotlin.time.ExperimentalTime::class)
         val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
         val rows = prices.sortedBy { it.model }.map { row(it, byModel, groups, channels, policy, costs, now) }
+        // 统计只看上架的模型：价格库里的行不对外，亏不亏本无所谓
+        val offered = rows.filter { it.listed == 1 }
         return PricingCheckResult(
             markup = policy.markup,
             minMargin = policy.minMargin,
-            loss = rows.count { it.status == LOSS || it.status == INVALID },
-            thin = rows.count { it.status == THIN },
-            ok = rows.count { it.status == OK },
-            unserved = rows.count { it.status == UNSERVED },
+            loss = offered.count { it.status == LOSS || it.status == INVALID },
+            thin = offered.count { it.status == THIN },
+            ok = offered.count { it.status == OK },
+            unserved = offered.count { it.status == UNSERVED },
             rows = rows,
         )
     }
@@ -143,7 +147,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
             ?: return PricingCheckRow(
                 id = price.id, model = price.model, mode = "INVALID",
                 officialInput = price.inputPrice, officialOutput = price.outputPrice,
-                saleInput = "", saleOutput = "", status = INVALID,
+                saleInput = "", saleOutput = "", status = INVALID, listed = price.listed,
             )
         val combos = mutableListOf<PricingCombo>()
         val routes = mutableListOf<ChannelRouteVO>()
@@ -186,6 +190,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
             saleTiers = PricingTiers.parse(sale.tiers),
             channels = routes.sortedByDescending { it.priority },
             hints = hintsFor(routes, now),
+            listed = price.listed,
         )
     }
 
