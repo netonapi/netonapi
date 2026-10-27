@@ -192,19 +192,10 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
         )
     }
 
-    /** μUSD / 法币最小单位。没配 = 充值不可用，不是「那就按 1:1 发」。 */
-    private fun quotaPerPriceUnit(): Long {
-        val raw = neton.core.config.getEnv(ENV_QUOTA_PER_PRICE_UNIT)?.trim()
-        if (raw.isNullOrEmpty()) {
-            error(
-                "quota recharge is not configured: set $ENV_QUOTA_PER_PRICE_UNIT " +
-                    "(μUSD granted per unit of pay_orders.price)",
-            )
-        }
-        val value = raw.toLongOrNull() ?: error("$ENV_QUOTA_PER_PRICE_UNIT must be an integer, got '$raw'")
-        if (value <= 0) error("$ENV_QUOTA_PER_PRICE_UNIT must be positive, got $value")
-        return value
-    }
+    /** μUSD / 法币最小单位。没配 = 充值不可用，不是「那就按 1:1 发」（下单入口已先挡掉，见 RechargeController）。 */
+    private fun quotaPerPriceUnit(): Long = configuredRate() ?: error(
+        "quota recharge is not configured: set $ENV_QUOTA_PER_PRICE_UNIT (μUSD granted per unit of pay_orders.price)",
+    )
 
     /** Long 乘法在 Kotlin 里溢出是静默回绕的 —— 钱上不允许。 */
     private fun checkedMul(a: Long, b: Long): Long {
@@ -241,6 +232,21 @@ class QuotaRechargeLogic(private val log: Logger, private val quotaLogic: QuotaL
 
         /** μUSD / 法币最小单位（与 payment 的 pay_orders.price 同单位）。 */
         const val ENV_QUOTA_PER_PRICE_UNIT = "NETONAPI_QUOTA_PER_PRICE_UNIT"
+
+        /**
+         * 充值汇率（μUSD / 法币最小单位）：没配（缺失或空白）→ null，在线充值未开通；
+         * 写错（不是正整数）→ 抛错：运维错误必须响，静默猜汇率比拒绝更糟。
+         */
+        fun rateOf(raw: String?): Long? {
+            val t = raw?.trim()
+            if (t.isNullOrEmpty()) return null
+            val value = t.toLongOrNull() ?: error("$ENV_QUOTA_PER_PRICE_UNIT must be an integer, got '$t'")
+            if (value <= 0) error("$ENV_QUOTA_PER_PRICE_UNIT must be positive, got $value")
+            return value
+        }
+
+        /** 当前部署配置的汇率；null = 在线充值未开通。 */
+        fun configuredRate(): Long? = rateOf(neton.core.config.getEnv(ENV_QUOTA_PER_PRICE_UNIT))
 
         /**
          * 本业务的商户订单号前缀。监听者只认它 —— 钱包充值用 `wallet:recharge:`，

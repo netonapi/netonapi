@@ -23,6 +23,19 @@ data class MockRechargeRequest(
 @Serializable
 data class RechargeResultVO(val balance: Long, val ref: String)
 
+/** 充值页的开通状态（GET /app/gateway/recharge/options）。price 单位与 pay_orders.price 相同（法币最小单位，分）。 */
+@Serializable
+data class RechargeOptionsVO(
+    /** 在线充值是否开通（部署配了充值汇率）；还要有可用支付渠道，控制台才显示表单。 */
+    val online: Boolean,
+    /** 每 1 分到账多少 μUSD；没开通为 null。 */
+    val quotaPerPriceUnit: Long?,
+    val minPrice: Long,
+    val maxPrice: Long,
+    /** 测试环境的模拟充值（NETONAPI_ENABLE_MOCK_RECHARGE）。 */
+    val mock: Boolean,
+)
+
 @Serializable
 data class RechargeRequest(
     /** 要支付的法币金额，单位与 payment 的 pay_orders.price 一致。额度由服务端按汇率算出。 */
@@ -102,11 +115,29 @@ class RechargeController(
      * 只收 price、不收 amount —— 额度按服务端汇率算（NETONAPI_QUOTA_PER_PRICE_UNIT）。
      * 两个都收等于让客户端自己定价。
      */
+    /**
+     * 控制台充值页据此决定画什么：在线充值是否开通（没开通就提示联系客户经理）、汇率（输入金额时预览到账额度）、
+     * 单笔上下限，以及测试环境的模拟充值是否开着（正式环境不显示那张卡片）。
+     */
+    @Get("/options")
+    suspend fun options(): RechargeOptionsVO {
+        val rate = runCatching { logic.QuotaRechargeLogic.configuredRate() }
+            .onFailure { log.error("recharge rate misconfigured: ${it.message}") }
+            .getOrNull()
+        val min = settings.get(setting.GatewaySettingKeys.RECHARGE_MIN_PRICE)
+        return RechargeOptionsVO(
+            online = rate != null, quotaPerPriceUnit = rate,
+            minPrice = min, maxPrice = maxOf(min, settings.get(setting.GatewaySettingKeys.RECHARGE_MAX_PRICE)),
+            mock = mockEnabled(),
+        )
+    }
+
     @Post("")
     suspend fun create(identity: Identity, @Body request: RechargeRequest, httpRequest: neton.core.http.HttpRequest): RechargeOrderVO {
         // 两个参数都在**建意图单之前**验完：payment 没有"默认渠道"这回事
         // （PayOrderLogic.resolveRoute 收到 null 直接判不可用），留空只会在下单那步才 400，
         // 白白在钱据表里留下一张开完就关的单 —— 对账时那是纯噪声。
+        // 在线充值没开通（没配汇率）：明确告诉控制台，别让用户看到一个 500，也别先建一张开完就关的单
         val errors = mutableListOf<ValidationError>()
         if (request.price <= 0) {
             errors += ValidationError("price", GatewayErrorCodes.RECHARGE_PRICE_INVALID, GatewayErrorCodes.RECHARGE_PRICE_INVALID)
@@ -125,6 +156,14 @@ class RechargeController(
             errors += ValidationError("channelCode", GatewayErrorCodes.RECHARGE_CHANNEL_REQUIRED, GatewayErrorCodes.RECHARGE_CHANNEL_REQUIRED)
         }
         if (errors.isNotEmpty()) throw ValidationException(errors, GatewayErrorCodes.RECHARGE_INVALID)
+        // 参数先验（填错了照常 400），再看开通没有。503 而不是 500：这是部署没开通，不是程序出错；原因写进日志，运维 grep 环境变量名就能找到
+        val rate = runCatching { logic.QuotaRechargeLogic.configuredRate() }
+            .onFailure { log.error("recharge rejected: ${it.message}") }
+            .getOrNull()
+        if (rate == null) {
+            log.warn("recharge rejected: online top-up is not configured (set ${logic.QuotaRechargeLogic.ENV_QUOTA_PER_PRICE_UNIT})")
+            throw HttpException(NetonErrorCode.SERVICE_UNAVAILABLE, GatewayErrorCodes.RECHARGE_UNAVAILABLE)
+        }
 
         val userId = identity.id.toLong()
         // 框架的 clientAddress 只认可信代理给的转发头（routing.conf 的 ratelimit.trusted_proxies），

@@ -110,6 +110,8 @@ object GatewayErrorCodes {
     // ── 充值 ──
     /** 充值请求校验失败（字段错误见 errors）。 */
     const val RECHARGE_INVALID = "RECHARGE_INVALID"
+    /** 在线充值未开通（部署没配充值汇率 NETONAPI_QUOTA_PER_PRICE_UNIT）：控制台提示联系客户经理。 */
+    const val RECHARGE_UNAVAILABLE = "RECHARGE_UNAVAILABLE"
     const val RECHARGE_PRICE_INVALID = "RECHARGE_PRICE_INVALID"
     /** 低于后台设置的单笔下限（gateway.recharge.min_price）。 */
     const val RECHARGE_PRICE_TOO_LOW = "RECHARGE_PRICE_TOO_LOW"
