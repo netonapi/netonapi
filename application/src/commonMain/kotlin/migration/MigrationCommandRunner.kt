@@ -1,3 +1,7 @@
+// 迁移命令在不启动整个应用的情况下直接初始化数据库连接（SqlxDatabase），属于贴着框架的集成代码：
+// 框架把这些入口标为内部 API（InternalNetonApi），这里显式声明使用。
+@file:OptIn(neton.core.annotations.InternalNetonApi::class)
+
 package migration
 
 import kotlinx.coroutines.runBlocking
