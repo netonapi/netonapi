@@ -5,6 +5,9 @@ import logic.TokenLogic
 import model.GatewayToken
 import neton.core.annotations.*
 
+@Serializable
+data class UpdateTokenLimitsRequest(val id: Long, val rpmLimit: Int? = null, val tpmLimit: Int? = null, val concurrencyLimit: Int? = null)
+
 /** 对外视图：不含 keyHash。 */
 @Serializable
 data class TokenVO(
@@ -54,6 +57,15 @@ class TokenController(private val tokenLogic: TokenLogic) {
     @Permission("gateway:token:update")
     suspend fun updateStatus(@Query id: Long, @Query status: Int) =
         tokenLogic.updateStatus(id, status)
+
+    /** 运营设定这把 Key 的限速（用户不能自行放宽）；不传 / 空 = 不限。值必须为正。 */
+    @Put("/update-limits")
+    @Permission("gateway:token:update")
+    suspend fun updateLimits(@Body request: UpdateTokenLimitsRequest) {
+        listOf("rpmLimit" to request.rpmLimit, "tpmLimit" to request.tpmLimit, "concurrencyLimit" to request.concurrencyLimit)
+            .forEach { (field, v) -> if (v != null && v <= 0) logic.rejectField(field, logic.GatewayErrorCodes.TOKEN_LIMIT_INVALID) }
+        tokenLogic.updateLimits(request.id, request.rpmLimit, request.tpmLimit, request.concurrencyLimit)
+    }
 
     /** 运营指定这把 Key 的分组（特价 / 专线，用户改不了）；groupCode 留空 = 取消指定，Key 回到 default。 */
     @Put("/update-group")

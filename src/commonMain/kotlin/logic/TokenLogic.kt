@@ -82,6 +82,12 @@ class TokenLogic(private val log: Logger) {
         return code
     }
 
+    suspend fun updateLimits(id: Long, rpmLimit: Int?, tpmLimit: Int?, concurrencyLimit: Int?) {
+        val current = GatewayTokenTable.get(id)
+            ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.TOKEN_NOT_FOUND)
+        GatewayTokenTable.update(current.copy(rpmLimit = rpmLimit, tpmLimit = tpmLimit, concurrencyLimit = concurrencyLimit))
+    }
+
     suspend fun updateStatus(id: Long, status: Int) {
         val current = GatewayTokenTable.get(id) ?: return
         GatewayTokenTable.update(current.copy(status = status))
