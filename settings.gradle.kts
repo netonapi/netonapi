@@ -10,6 +10,8 @@ rootProject.name = "netonapi-backend"
 
 // 框架依赖（composite build）—— canonical 仓位于 ../../Neton/，所有下游 fork 共用这个布局约定
 includeBuild("../../Neton/neton")
+// neton-ai 已从框架拆成独立仓库（netonframework/neton-ai）：网关的协议互转依赖它
+includeBuild("../../Neton/neton-ai")
 includeBuild("../../Neton/geolite4k")
 // 套件基础契约（infra / account 等模块依赖 com.netonstream.app:application-contract）
 includeBuild("../../Neton/neton-application-contract")

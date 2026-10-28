@@ -132,6 +132,7 @@ NETONAPI_TARGET=linuxX64 bash harness/run.sh  # Linux
 - [`docs/recharge-spec.md`](./docs/recharge-spec.md) —— 充值与额度：手动充值、在线充值流程、沙箱支付、同步支付状态，没有模拟充值
 - [`docs/console-and-site-spec.md`](./docs/console-and-site-spec.md) —— 门户首页 / 价格页与用户控制台
 - [`docs/live-drill-spec.md`](./docs/live-drill-spec.md) —— 线上演练与模拟上游
+- [`docs/relay-errors-spec.md`](./docs/relay-errors-spec.md) —— 转发错误处理：上游账号错误换渠道、不透传内部信息、跨协议路径
 - [`docs/rbac-spec.md`](./docs/rbac-spec.md) —— User/Role/Menu、权限串、通配
 - [`docs/module-template-spec.md`](./docs/module-template-spec.md) —— 怎么加一个模块
 - [`docs/SPEC.md`](./docs/SPEC.md) —— ⚠️ 继承自上游脚手架，**部分已过时**：仍写着 Kotlin 2.3、

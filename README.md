@@ -147,6 +147,7 @@ NETONAPI_TARGET=linuxX64 bash harness/run.sh  # Linux
 - [`docs/recharge-spec.md`](./docs/recharge-spec.md) — credit and top-ups: manual top-up, online checkout, sandbox, payment sync; no mock top-up
 - [`docs/console-and-site-spec.md`](./docs/console-and-site-spec.md) — public site and user console
 - [`docs/live-drill-spec.md`](./docs/live-drill-spec.md) — live drill and mock upstreams
+- [`docs/relay-errors-spec.md`](./docs/relay-errors-spec.md) — relay error handling: fail over on upstream account errors, no leaking internals, cross-protocol paths
 - [`docs/rbac-spec.md`](./docs/rbac-spec.md) — User/Role/Menu, permission strings, wildcards
 - [`docs/module-template-spec.md`](./docs/module-template-spec.md) — how to add a module
 - [`docs/SPEC.md`](./docs/SPEC.md) — ⚠️ inherited scaffold, **partly stale**: it still says
