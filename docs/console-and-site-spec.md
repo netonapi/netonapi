@@ -30,5 +30,5 @@
 
 ## 4. 未纳入本期
 
-- 控制台「模型与价格」按分组分别显示单价（目前显示基础售价）。用户模型价目表（[gateway-pricing-spec.md §4.3](gateway-pricing-spec.md)）
+- 控制台「模型与价格」按分组分别显示单价（目前显示基础售价）。定价规则与用户价目表（[gateway-pricing-spec.md §4.3](gateway-pricing-spec.md)）
   上线后，控制台「模型与价格」改读自己的价目表：官方价、你的价格、相当于官方价几折，协议价单独标注。
