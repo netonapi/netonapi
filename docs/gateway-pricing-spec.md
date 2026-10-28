@@ -3,7 +3,7 @@
 > 标识：NETONAPI-GATEWAY-PRICING
 > 日期：2026-10-20
 > 状态：已在 `neton-application-module-gateway` 与 `neton-application-front-gateway` 实现；harness S20–S22、S72、S88–S92 覆盖。
-> **§4.3 定价规则与用户价目表为 2026-10-28 定稿（经架构评审简化）、待实现**；§4.1 计费组按 Key 决定已于同日实现。
+> §4.3 定价规则与用户价目表、§4.1 计费组按 Key 决定均已于 2026-10-28 实现（harness S93）。
 > 归属：NetonAPI。实现在 `neton-application-module-gateway`（计价、结算、定价管理接口）与 `neton-application-front-gateway`（模型定价、概览、计价分组、令牌页面）。
 
 ## 1. 目标与原则
@@ -52,7 +52,8 @@
 - 各项：新输入 = prompt − min(缓存读, prompt)；缓存读；缓存写；输出。按次计价的模型直接取按次价。
 - **成本按实际打给上游的模型算**：渠道 `model_mapping` 把请求模型映射成别的模型时，取映射目标的官方价；映射目标没有价格行（如 Azure 部署名）则用请求模型的官方价。
 - 充值赠送、返利只进钱包台账，**不参与请求计价**。
-- **最终单价**（已含倍率或折扣）及其来源（USER / GROUP / PLATFORM）、成本基准在预留时冻结进定价快照，结算只按快照算（tokens × 单价）；
+- 价格以「售价轨 × 倍率」冻结进定价快照（平台价 = 平台价 × 分组倍率；官方价折扣 = 官方价 × 折扣；固定价 = 固定价 × 1），
+  连同来源（`priceSource` = USER / GROUP / PLATFORM）、成本基准，结算只按快照算；
   重试换渠道时刷新渠道折扣与成本基准。在途请求不受改价影响。
 - 价目表按**请求模型**（用户调用的模型名）匹配，不按渠道映射后的上游模型名。
 - 实收 < 成本的请求照常服务，记 `margin inversion` 告警，并计入概览的亏损统计（§6）。
@@ -114,7 +115,7 @@
 - **定价方式**三选一：
   - `PLATFORM`：按平台价（× 分组倍率）计，不改价——只用来**开放**限定模型（§4.3.2）；
   - `OFFICIAL_DISCOUNT`：实付 = 官方价 × `discount`，逐项、逐档；官方价变了跟着变，「官方价 N 折」的承诺一直成立；
-  - `FIXED`：`prices` 逐项固定价（输入、输出、缓存读、缓存写；按次计价的模型为按次价），与 §3.2 固定售价同结构。
+  - `FIXED`：`prices` 逐项固定价（输入、输出必填，按次计价的模型填按次价；缓存读 / 写可不填，不填按平台价），与 §3.2 固定售价同结构。
     **只用于没有长上下文分档的模型**；有分档的模型用官方价折扣（天然逐档生效），保存 FIXED 直接拒绝。
 - 命中 `OFFICIAL_DISCOUNT` / `FIXED` 时价格就是约定的数，**不再乘分组倍率**（否则「官方 7 折」再乘 0.9 就不是 7 折）。
 - `default` 组同样可以设规则（相当于「所有人的这个模型按官方价 N 折」），与本模型加价率并存时以规则为准。
@@ -133,7 +134,7 @@
 两层，后一层覆盖前一层：
 
 1. **分组价格表**（每个计费分组一张）：这个分组能用的每个模型 → 价格。
-   - 模型范围：已上架、且该分组有渠道承载（渠道启用、列了该组、服务清单有该模型）；
+   - 模型范围：已上架、且该分组有渠道承载（渠道未被手动停用——自动挂起的仍算，避免熔断时模型忽隐忽现——、列了该组、服务清单或映射键有该模型）；
      `access = RULES_ONLY` 的模型只有这个分组有规则时才在表里。
    - 价格：平台价 × 分组倍率；这个分组有分组规则的模型，用规则价覆盖（命中折扣 / 固定价时不再乘分组倍率）。
 2. **用户覆盖**（只有设过用户规则的用户才有，可能为空，可能几条）：模型 → 规则价。
@@ -157,9 +158,11 @@
   （只有设过规则的用户才有内容，没有规则的用户缓存一个空表）。
 - 两者都在**建缓存时**读库，请求时只查内存，热路径不访问数据库。
 - 失效：
-  - 影响分组价格表的写入（价格行、上架、`access`、分组倍率、分组规则、渠道的启用 / 分组 / 服务清单、全站加价率）→ 整份重建全站分组价格表；
-  - 用户规则的写入 → 只清这个用户的覆盖。
-  - 本进程写入立即清；同时把库里的定价版本号 +1，进程最多 5 秒比对一次，变了就清（兜底多实例部署）。
+  - 影响分组价格表的写入（价格行、上架、`access`、分组倍率、分组规则、渠道的启用 / 分组 / 服务清单）→ 整份重建全站分组价格表；
+    全站加价率变化在下一次取缓存时发现并重建；
+  - 用户规则的写入 → 只清这个用户的覆盖；
+  - 本进程写入立即生效；多实例部署与直接改库由缓存有效期 `NETONAPI_PRICEBOOK_TTL_MILLIS`（缺省 5000 毫秒）兜底。
+    harness 设 0（每次读库），S93 用长有效期验证管理端写入立即生效。
 - 在途请求按冻结快照结算，不受改价影响。
 
 #### 4.3.5 保护与留痕
@@ -167,7 +170,8 @@
 - **保存校验**（按真实会发生的组合）：分组规则对该分组内承载这个模型的每条渠道、用户规则对该用户 Key 当前所在分组内承载这个模型的
   每条渠道，逐个算毛利（实收 = 最终单价，成本 = 该渠道成本）。任一组合亏本 → 拒绝（`MODEL_PRICE_BELOW_COST`，返回亏本的渠道与金额）；
   低于「成本 × 最低毛利」→ 保存并提示偏薄；暂无渠道承载 → 保存并提示。
-- **体检与校准**：定价体检（§5.2）把每条规则纳入核算；官方价校准（§7）后，固定价高于新官方价、或因成本上涨亏本的规则被标出提醒。
+- **体检**：定价体检（§5.2）按分组规则核算每个「分组 × 渠道」组合；用户规则的最差毛利在「用户定价」页逐条显示。
+  官方价校准（§7）后主动标出「固定价高于新官方价 / 因成本上涨亏本」的规则**尚未实现**（见 §11）；在此之前靠「用户定价」页与体检查看。
 - **调价记录**：规则的新增、修改、删除与 `access` 变更写入 `gateway_price_history`（action = `rule_set` / `rule_delete` / `access_set`），
   记主体、模型、前后值、操作人。
 - 用户自助接口没有任何写规则与 `access` 的路由。
@@ -269,9 +273,9 @@
 | `PUT /admin/gateway/price/update`、`POST /admin/gateway/price/calibrate/apply` | `gateway:price:update` |
 | `DELETE /admin/gateway/price/delete/{id}` | `gateway:price:delete` |
 | `PUT /admin/gateway/token/update-group?id=&groupCode=` | `gateway:token:update` |
-| `GET /admin/gateway/pricebook?userId=`（某用户各分组的价目表）、`GET /admin/gateway/price-rule/list?subjectType=&subjectId=`（§4.3，待实现） | `gateway:price:query` |
-| `PUT /admin/gateway/price-rule`、`DELETE /admin/gateway/price-rule?subjectType=&subjectId=&model=`、`PUT /admin/gateway/price/access?id=&access=`（§4.3，待实现） | `gateway:price:update` |
-| `GET /app/gateway/model/mine`（自己的价目表，§4.3，待实现） | 登录用户 |
+| `GET /admin/gateway/price-rule/list?subjectType=&subjectId=`、`POST /admin/gateway/price-rule/preview`（只算不存：最终价、相当于官方几折、最差毛利）、`GET /admin/gateway/price-rule/pricebook?userId=`（某用户各分组的价目表） | `gateway:price:query` |
+| `PUT /admin/gateway/price-rule/save`、`DELETE /admin/gateway/price-rule/delete?subjectType=&subjectId=&model=`、`PUT /admin/gateway/price/access?id=&access=` | `gateway:price:update` |
+| `GET /app/gateway/pricebook/mine`（自己的价目表） | 登录用户 |
 | `GET /admin/gateway/channel-cost/list?channelId=` | `gateway:channel:query` |
 | `POST /admin/gateway/channel-cost/sync?channelId=`、`PUT /channel-cost/manual`、`DELETE /channel-cost/delete?channelId=&model=`、`POST /channel-cost/pending/{id}/accept`、`/ignore` | `gateway:channel:update` |
 | `GET /app/gateway/model/list`（公开价格，匿名） | 无；只列有启用渠道承载且已定价的模型，价格为售价（未乘分组倍率） |
@@ -286,10 +290,12 @@
 | S89 | basellm 价源识别 `CHANGED` / `SAME` / `UNPARSABLE` / `NEW`；应用只写勾选的模型并记 `calibrate` 记录；models.dev 同名取厂商自营；OpenRouter 厂商前缀匹配 |
 | S90 | 渠道折扣 > 1 的请求计入概览亏损；分组与渠道收入可见；令牌专属分组拒绝不存在的组、可设置、可取消 |
 | S91 | 总输入跨过门槛按高档收费与计成本；预留按最贵档 |
-| 待实现（§4.3） | 查价（用户覆盖 ?: 分组价格表）：不可用的模型 404，`/v1/models` 与控制台列表与之一致；用户规则 > 分组规则 > 平台价 × 分组倍率，命中折扣 / 固定价时不乘分组倍率；官方价折扣逐项逐档跟随官方价、固定价不跟随且有分档的模型拒绝 FIXED；`RULES_ONLY` 模型只对有规则的用户 / 分组可用、`PLATFORM` 规则只开放不改价；本进程改价立即生效、版本号变更最长 5 秒生效；在途请求按冻结单价结算；保存时亏本拒绝、偏薄提示；校准后固定价超官方价或亏本被标出；调价记录留痕；用户自助接口无写路由；热路径不查价格表 |
+| S93（§4.3） | 查价（用户覆盖 ?: 分组价格表）：不可用的模型 404，`/v1/models` 与控制台列表与之一致；用户规则 > 分组规则 > 平台价 × 分组倍率，命中折扣 / 固定价时不乘分组倍率；官方价折扣逐项逐档跟随官方价、固定价不跟随且有分档的模型拒绝 FIXED；`RULES_ONLY` 模型只对有规则的用户 / 分组可用、`PLATFORM` 规则只开放不改价；本进程改价立即生效、直接改库在缓存有效期内不生效；在途请求按冻结单价结算；保存时亏本拒绝、偏薄提示；调价记录留痕；用户自助接口无写路由；热路径不查价格表 |
 | S92 | 渠道成本行优先且不乘折扣；上游价目格式必填；new-api `/api/pricing` 换算 × 上游分组倍率 × 额度单价；涨幅 > 50% 挂起、不重复挂起、接受后生效；上游下架标过期；上游报错保留旧值；对外模型视图（展示名、渠道按优先级、高优先级更贵提示） |
 
 ## 11. 未做与后续
+
+- 官方价校准、渠道成本同步之后，主动提醒「固定价高于新官方价、或已亏本」的定价规则（§4.3.5）。
 
 - 上游账单自动对账（拿上游账单或余额变化与我们记录的成本比对）。
 - 包月套餐、按用量阶梯折扣等用户侧计价形态。
