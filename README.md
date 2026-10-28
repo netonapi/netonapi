@@ -141,6 +141,12 @@ NETONAPI_TARGET=linuxX64 bash harness/run.sh  # Linux
   boundaries, what to grep before changing a public symbol, migration policy)
 - [`docs/gateway-pricing-spec.md`](./docs/gateway-pricing-spec.md) — pricing rules: sale price modes, billing groups,
   margin protection, pricing check, official price calibration and price history
+- [`docs/model-catalog-design.md`](./docs/model-catalog-design.md) — the offered model catalog: listed vs. price library, serving upstreams
+- [`docs/key-billing-group-design.md`](./docs/key-billing-group-design.md) — billing groups come from the API key
+- [`docs/api-key-spec.md`](./docs/api-key-spec.md) — API keys: user-created only, shown once, ops supervision and limits
+- [`docs/recharge-spec.md`](./docs/recharge-spec.md) — credit and top-ups: manual top-up, online checkout, sandbox, payment sync; no mock top-up
+- [`docs/console-and-site-spec.md`](./docs/console-and-site-spec.md) — public site and user console
+- [`docs/live-drill-spec.md`](./docs/live-drill-spec.md) — live drill and mock upstreams
 - [`docs/rbac-spec.md`](./docs/rbac-spec.md) — User/Role/Menu, permission strings, wildcards
 - [`docs/module-template-spec.md`](./docs/module-template-spec.md) — how to add a module
 - [`docs/SPEC.md`](./docs/SPEC.md) — ⚠️ inherited scaffold, **partly stale**: it still says

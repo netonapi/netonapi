@@ -15,7 +15,7 @@
   + 运营单独开给这个用户的（`gateway_group_overrides`，管理台叫「用户专属分组」）
   + 他的会员组映射的（开了 `NETONAPI_MEMBER_GROUP_BILLING` 时）。
 - **运营指定**：管理台「API 令牌」给某把 Key 指定分组（特价 / 专线），`group_assigned = 1`，用户改不了。
-- 后台不能代用户建 Key（V024 已撤掉）。
+- 后台不能代用户建 Key（V024 已撤掉）；Key 的限速（RPM / TPM / 并发）只有运营能设。Key 的完整规则见 [api-key-spec.md](api-key-spec.md)。
 
 ## 调用时的校验
 

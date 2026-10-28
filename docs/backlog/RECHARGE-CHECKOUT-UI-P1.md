@@ -2,7 +2,11 @@
 
 ## Status
 
-OPEN. P1, and now **frontend-only**. The backend contract for self-service checkout is complete and
+**CLOSED 2026-10-28.** The console checkout is built: pick an amount, then choose a payment method in a dialog,
+pay, and the dialog polls until credited. Mock recharge was removed entirely; operators credit users through manual
+top-up. The rules now live in [`../recharge-spec.md`](../recharge-spec.md). The text below is the original record.
+
+Original status: OPEN. P1, and now **frontend-only**. The backend contract for self-service checkout is complete and
 held by harness — including the order read-back that this item originally listed as the one missing
 backend piece (see Gap 3, closed). A production NetonAPI deployment therefore still has **no way for
 a user to pay**: quota reaches an account only through an operator's manual `gateway:quota:grant`, an

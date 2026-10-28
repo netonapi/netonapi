@@ -126,6 +126,12 @@ NETONAPI_TARGET=linuxX64 bash harness/run.sh  # Linux
 - [`docs/ENGINEERING_RULES.md`](./docs/ENGINEERING_RULES.md) —— 硬规范（模块边界、改 public
   symbol 前要 grep 哪些仓、迁移策略）
 - [`docs/gateway-pricing-spec.md`](./docs/gateway-pricing-spec.md) —— 计价规则：售价方式、计费分组、毛利保护、定价体检、官方价校准与调价记录
+- [`docs/model-catalog-design.md`](./docs/model-catalog-design.md) —— 对外模型目录：上架 / 价格库、模型的服务上游
+- [`docs/key-billing-group-design.md`](./docs/key-billing-group-design.md) —— 计费分组由 API Key 决定：可选范围、运营指定、收回即 403
+- [`docs/api-key-spec.md`](./docs/api-key-spec.md) —— API Key：只能用户自建、明文只显示一次、运营监管与限速
+- [`docs/recharge-spec.md`](./docs/recharge-spec.md) —— 充值与额度：手动充值、在线充值流程、沙箱支付、同步支付状态，没有模拟充值
+- [`docs/console-and-site-spec.md`](./docs/console-and-site-spec.md) —— 门户首页 / 价格页与用户控制台
+- [`docs/live-drill-spec.md`](./docs/live-drill-spec.md) —— 线上演练与模拟上游
 - [`docs/rbac-spec.md`](./docs/rbac-spec.md) —— User/Role/Menu、权限串、通配
 - [`docs/module-template-spec.md`](./docs/module-template-spec.md) —— 怎么加一个模块
 - [`docs/SPEC.md`](./docs/SPEC.md) —— ⚠️ 继承自上游脚手架，**部分已过时**：仍写着 Kotlin 2.3、
