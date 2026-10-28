@@ -3,6 +3,7 @@
 > 标识：NETONAPI-GATEWAY-PRICING
 > 日期：2026-10-20
 > 状态：已在 `neton-application-module-gateway` 与 `neton-application-front-gateway` 实现；harness S20–S22、S72、S88–S92 覆盖。
+> **§4.3 分组模型倍率（定制倍率覆盖）为 2026-10-28 定稿、待实现**；§4.1 计费组按 Key 决定已于同日实现。
 > 归属：NetonAPI。实现在 `neton-application-module-gateway`（计价、结算、定价管理接口）与 `neton-application-front-gateway`（模型定价、概览、计价分组、令牌页面）。
 
 ## 1. 目标与原则
@@ -24,7 +25,9 @@
 | 售价设置 | 单个模型的售价例外 | `sale_override`，JSON 文本，见 §3.2 |
 | 全站加价率 | 售价 = 官方价 × 它 | 配置 `gateway.pricing.markup`，取值 (0, 100] |
 | 最低毛利 | 实收不得低于成本 × 它 | 配置 `gateway.pricing.min_margin`，取值 (0, 100] |
-| 分组倍率 | 不同等级用户的价格系数（VIP 0.9 即九折） | `gateway_groups.ratio`，(0, 100] |
+| 分组倍率 | 分组对所有模型的默认价格系数（VIP 0.9 即九折） | `gateway_groups.ratio`，(0, 100] |
+| 分组模型倍率 | 某个分组对某个模型单独设的系数，覆盖分组倍率（定制倍率覆盖，§4.3） | `gateway_group_model_ratios.ratio`，(0, 100] |
+| 有效倍率 | 一次请求实际使用的系数 = 分组模型倍率 ?: 分组倍率 | 万分位整数，冻结进定价快照 |
 | 渠道折扣 | 我们从这条渠道拿货的价格系数 | `gateway_channels.cost_discount`，(0, 100] |
 | 实收 / 成本 | 一笔请求的收入 / 支出 | `charged` / `cost`，μUSD，整数 |
 
@@ -36,7 +39,8 @@
 
 ```
 售价(模型)  = 售价设置里的固定价  ?: 官方价 × (本模型加价率 ?: 全站加价率)      // 逐项
-实收(请求)  = Σ 各项 tokens × 售价 / 10⁶（逐项向上取整）× 分组倍率
+实收(请求)  = Σ 各项 tokens × 售价 / 10⁶（逐项向上取整）× 有效倍率
+有效倍率    = 分组模型倍率(本次的计费分组, 请求模型) ?: 分组倍率(本次的计费分组)
 成本(请求)  = Σ 各项 tokens × 渠道成本价 / 10⁶（逐项向上取整）              // 渠道成本表有这个模型时（§12）
            = Σ 各项 tokens × 上游模型官方价 / 10⁶（逐项向上取整）× 渠道折扣  // 否则
 ```
@@ -46,7 +50,9 @@
 - 各项：新输入 = prompt − min(缓存读, prompt)；缓存读；缓存写；输出。按次计价的模型直接取按次价。
 - **成本按实际打给上游的模型算**：渠道 `model_mapping` 把请求模型映射成别的模型时，取映射目标的官方价；映射目标没有价格行（如 Azure 部署名）则用请求模型的官方价。
 - 充值赠送、返利只进钱包台账，**不参与请求计价**。
-- 售价、分组倍率、成本基准在预留时冻结进定价快照，结算只按快照算；重试换渠道时刷新渠道折扣与成本基准。
+- 售价、有效倍率（及其来源：分组倍率 / 分组模型倍率）、成本基准在预留时冻结进定价快照，结算只按快照算；重试换渠道时刷新渠道折扣与成本基准。
+  在途请求不受改价影响。
+- 分组模型倍率按**请求模型**（用户调用的模型名）匹配，不按渠道映射后的上游模型名。
 - 实收 < 成本的请求照常服务，记 `margin inversion` 告警，并计入概览的亏损统计（§6）。
 
 ### 3.2 售价设置（`sale_override`）
@@ -74,25 +80,63 @@
 | 模型没有价格行 | `400 model_not_priced` |
 | 按 token 计价、请求没带 `max_tokens`、模型也没配默认输出上限 | `400 output_cap_required` |
 | 定价数据非法 | `500 model_pricing_invalid`（运营事故，ERROR 告警） |
-| 计费组悬空（令牌 / 用户例外指向已删的组、default 组缺失） | `500 billing_group_config_broken` |
-| 会员有所属分组但没映射计费组 | `403 billing_group_not_allowed` |
+| 计费组悬空（Key 绑定的分组已删、default 组缺失） | `500 billing_group_config_broken` |
+| Key 上用户自选的分组已不再对该用户开放 | `403 billing_group_not_allowed` |
 
 ## 4. 用户等级与计费组
 
-### 4.1 解析顺序
+### 4.1 计费组由 API Key 决定
 
-计费组同时决定**路由**（渠道 `groups` 里列了该组才可用）与**倍率**，两者必须解析到同一个组。前一层给出结果即停：
-
-1. 令牌专属分组（`gateway_tokens.group_override`）
-2. 用户例外（`gateway_group_overrides`，大客户谈判价）
-3. 会员组映射（`gateway_groups.member_group_id`，需 `NETONAPI_MEMBER_GROUP_BILLING=true`）
-4. `default` 组
+计费组同时决定**路由**（渠道 `groups` 里列了该组才可用）与**倍率**，两者必须是同一个组。
+一次调用的计费组只取这把 Key 绑定的分组（`gateway_tokens.group_override`），没绑就是 `default`；不再从用户身上推导。
+谁能把 Key 绑到哪个分组、调用时如何复核，见 [key-billing-group-design.md](key-billing-group-design.md)。
 
 ### 4.2 写入约束
 
-- 计费组 `code` 是稳定身份，创建后不可改；被渠道引用时不可删。
-- 令牌专属分组、用户例外只能由管理端写，必须指向**存在的**组，否则拒绝（`GROUP_CODE_UNKNOWN`）；空值表示取消。用户自助接口不得改计费组。
+- 计费组 `code` 是稳定身份，创建后不可改；被渠道、Key、用户专属分组引用时不可删。
+- 运营指定 Key 的分组、开通用户专属分组都只能由管理端写，必须指向**存在的**组，否则拒绝（`GROUP_CODE_UNKNOWN`）；空值表示取消。
+  用户自助只能在对他开放的范围里选（`TOKEN_GROUP_NOT_ALLOWED`），改不了运营指定的分组（`TOKEN_GROUP_LOCKED`）。
 - 一个会员组最多映射一个计费组；管理台以下拉框选择会员组，拉不到会员组列表时退回数字输入。
+
+### 4.3 分组模型倍率（定制倍率覆盖）
+
+**问题**：分组倍率对所有模型一刀切。各模型的利润空间不同（例如 Gemini 线路成本只有官方价 6 折，其他模型只有 9 折），
+VIP 想给 Gemini 让到六折、其他只让到九折，一刀切做不到；给某个大客户谈的「按模型」协议价也无处可设。
+
+**规则**：
+
+- 在某个分组里，可以给**任意已定价模型**单独设一个倍率，覆盖这个分组的默认倍率；没设的模型仍用分组倍率。
+  倍率乘在售价上：< 1 是折扣（0.6 = 六折），1 是原价，> 1 是加价。取值 (0, 100]，与分组倍率同一套校验。
+- 只设倍率，不在分组里设固定售价：售价方式仍只在模型上设（§3.2），分组只决定打几折，口径单一。
+- **`default` 组不允许设分组模型倍率**：对所有人改某个模型的价，用模型自己的「本模型加价率」（§3.2），不要在两处表达同一件事。
+- **给单个客户定价不另加「用户 × 模型」一层**：给客户建一个专属分组（不对所有人开放），在里面按模型设倍率，再通过
+  「用户专属分组」开给他，或把他的 Key 指定到这个分组。所有特价都落在「分组 × 模型」一处，对账时一行价格只有一个来源；
+  同等级的第二个客户直接复用这个分组。
+- 模型被删除（价格行删除）时，它在各分组的倍率一并删除；分组被删除时同理（分组本就被引用时不可删）。
+
+**存储**：`gateway_group_model_ratios(id, group_code, model, ratio, remark, created_at, updated_at)`，`(group_code, model)` 唯一。
+`group_code` 指向活着的分组、`model` 指向已有价格行，写入时校验，悬空即拒绝。
+
+**保存校验**（与 §5 一致的口径，按真实会发生的组合）：
+- 对该分组里**实际会承载这个模型的每条渠道**算毛利（实收 = 售价 × 新倍率，成本 = 该渠道成本）：
+  任一组合实收 < 成本 → 拒绝保存（`GROUP_MODEL_RATIO_BELOW_COST`，返回亏本的渠道与金额）；
+  低于「成本 × 最低毛利」→ 允许保存但在响应里带出偏薄的组合，管理台提示。
+- 这个分组当前没有渠道承载该模型 → 允许保存并提示「暂无渠道承载，体检为 UNSERVED」。
+- 调价留痕：每次新增、修改、删除写入调价记录（`gateway_price_history`，action = `group_ratio_set` / `group_ratio_delete`，
+  记分组、模型、前后倍率、操作人）。
+
+**接口**（管理端，权限沿用计价分组 `gateway:group:query` / `gateway:group:update`）：
+- `GET /admin/gateway/group/model-ratios?groupCode=` → 该分组的覆盖列表（模型、基础售价、分组倍率、覆盖倍率、最终价、最差毛利）。
+- `PUT /admin/gateway/group/model-ratio` `{groupCode, model, ratio, remark?}` → 新增或修改。
+- `DELETE /admin/gateway/group/model-ratio?groupCode=&model=` → 删除（回到分组倍率）。
+
+**管理台**：
+- 「计价分组」编辑抽屉增加「按模型调整」：列出已上架模型，每行显示基础售价、分组默认倍率、本模型倍率（可填 / 可清空）、
+  最终价与最差毛利；只显示有覆盖的模型 / 显示全部可切换。
+- 「模型与定价」的模型详情增加「各分组价格」：这个模型在每个分组的有效倍率、来源（分组倍率 / 分组模型倍率）与最终价。
+
+**用户侧**：控制台建 Key 选分组时，分组卡片仍显示分组默认倍率；若这个分组有按模型的覆盖，显示「部分模型另有优惠」并可展开查看。
+公开价格页显示基础售价，不显示任何分组价。
 
 ## 5. 毛利保护
 
@@ -103,13 +147,14 @@
 导入、同步、校准对已存在的模型，**按「新官方价 + 已有售价设置」合并后的结果**再过一次闸门；不过的行不写入，结果的 `heldForLoss` 列出模型名。典型场景：固定售价的模型官方涨价，直接覆盖会变成亏本价，必须等运营调完售价。
 
 闸门只看售价与官方价，看不到分组倍率 < 1、渠道折扣 > 1 和模型映射，这些由 §5.2 的体检负责。
+分组模型倍率在保存时按真实组合单独校验（§4.3）。
 
 ### 5.2 定价体检（`GET /admin/gateway/price/check`）
 
 对每个已定价模型，枚举所有**实际会发生**的组合：启用中且承载该模型的渠道（`models` 列出或 `model_mapping` 键命中）× 该渠道 `groups` 里存在的计费组。每个组合逐项计算：
 
 ```
-实收 = 售价 × 分组倍率       成本 = 上游模型官方价 × 渠道折扣
+实收 = 售价 × 有效倍率（该组合的分组对该模型的倍率）       成本 = 上游模型官方价 × 渠道折扣（或渠道成本价，§12）
 毛利率 = (实收 − 成本) / 实收（万分位）
 ```
 
@@ -118,14 +163,14 @@
 - 模型状态取最差组合；没有任何组合 → `UNSERVED`；定价数据非法 → `INVALID`。
 - 返回最差组合（分组、倍率、渠道、折扣、成本模型、最差的项）与最多 20 条问题组合，以及全站 LOSS / THIN / OK / UNSERVED 计数。
 
-管理台「模型定价」以体检结果为主表：每行显示官方价、售价方式、售价、最坏毛利与所在组合、状态；可只看有问题的模型，问题组合给出修复方向（提高售价、调高分组倍率、换折扣更低的渠道）。
+管理台「模型定价」以体检结果为主表：每行显示官方价、售价方式、售价、最坏毛利与所在组合、状态；可只看有问题的模型，问题组合给出修复方向（提高售价、调高分组倍率或该分组对这个模型的倍率、换折扣更低的渠道）。
 
 ## 6. 利润看板
 
 概览（`GET /admin/gateway/info/overview`）全部从用量日志现算：
 
 - 按日、按模型、按用户的收入、成本、毛利；
-- 按计费分组的收入、成本、毛利（看分组折扣让出了多少）；
+- 按计费分组的收入、成本、毛利（看分组折扣让出了多少）；分组模型倍率生效的请求可按「分组 × 模型」细分；
 - 按渠道的收入、成本、毛利与测速；
 - 统计期内 `cost > charged` 的请求笔数与亏损总额，不为 0 时页面顶部标红并链接到模型定价。
 
@@ -180,6 +225,8 @@
 | `PUT /admin/gateway/price/update`、`POST /admin/gateway/price/calibrate/apply` | `gateway:price:update` |
 | `DELETE /admin/gateway/price/delete/{id}` | `gateway:price:delete` |
 | `PUT /admin/gateway/token/update-group?id=&groupCode=` | `gateway:token:update` |
+| `GET /admin/gateway/group/model-ratios?groupCode=`（§4.3，待实现） | `gateway:group:query` |
+| `PUT /admin/gateway/group/model-ratio`、`DELETE /admin/gateway/group/model-ratio?groupCode=&model=`（§4.3，待实现） | `gateway:group:update` |
 | `GET /admin/gateway/channel-cost/list?channelId=` | `gateway:channel:query` |
 | `POST /admin/gateway/channel-cost/sync?channelId=`、`PUT /channel-cost/manual`、`DELETE /channel-cost/delete?channelId=&model=`、`POST /channel-cost/pending/{id}/accept`、`/ignore` | `gateway:channel:update` |
 | `GET /app/gateway/model/list`（公开价格，匿名） | 无；只列有启用渠道承载且已定价的模型，价格为售价（未乘分组倍率） |
@@ -194,6 +241,7 @@
 | S89 | basellm 价源识别 `CHANGED` / `SAME` / `UNPARSABLE` / `NEW`；应用只写勾选的模型并记 `calibrate` 记录；models.dev 同名取厂商自营；OpenRouter 厂商前缀匹配 |
 | S90 | 渠道折扣 > 1 的请求计入概览亏损；分组与渠道收入可见；令牌专属分组拒绝不存在的组、可设置、可取消 |
 | S91 | 总输入跨过门槛按高档收费与计成本；预留按最贵档 |
+| 待实现（§4.3） | 分组对某模型设 0.6 后，该分组调这个模型按 0.6 计、其他模型仍按分组倍率；结算按预留时冻结的有效倍率（在途改倍率不影响）；按请求模型名匹配而非映射后的上游名；`default` 组设覆盖被拒；倍率使任一承载渠道亏本时拒绝保存、偏薄时保存并提示；体检与概览按有效倍率核算；调价记录留痕；删除模型 / 分组时覆盖一并清理；用户自助接口没有写覆盖的路由 |
 | S92 | 渠道成本行优先且不乘折扣；上游价目格式必填；new-api `/api/pricing` 换算 × 上游分组倍率 × 额度单价；涨幅 > 50% 挂起、不重复挂起、接受后生效；上游下架标过期；上游报错保留旧值；对外模型视图（展示名、渠道按优先级、高优先级更贵提示） |
 
 ## 11. 未做与后续
