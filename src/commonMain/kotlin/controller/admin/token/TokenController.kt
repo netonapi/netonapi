@@ -1,28 +1,9 @@
 package controller.admin.token
 
 import kotlinx.serialization.Serializable
-import logic.IssuedToken
 import logic.TokenLogic
 import model.GatewayToken
 import neton.core.annotations.*
-
-@Serializable
-data class CreateTokenRequest(
-    val userId: Long,
-    val name: String,
-    val quotaBudget: Long? = null,
-    val expiresAt: Long? = null,
-    val allowedModels: String = "",
-    val allowedIps: String = "",
-    val groupOverride: String? = null,
-    /** 速率上限；null = 不限（不限意味着单令牌可打爆上游配额） */
-    val rpmLimit: Int? = null,
-    val tpmLimit: Int? = null,
-    val concurrencyLimit: Int? = null,
-)
-
-@Serializable
-data class IssuedTokenVO(val id: Long, val key: String, val display: String)
 
 /** 对外视图：不含 keyHash。 */
 @Serializable
@@ -55,23 +36,12 @@ data class TokenVO(
     }
 }
 
+/**
+ * 令牌监管。刻意没有「创建」：Key 只能由用户本人在控制台建（MyTokenController），
+ * 调用扣的是他自己的余额，明文也只给他本人看一次；后台代建等于运营替用户造凭据。
+ */
 @Controller("/gateway/token")
 class TokenController(private val tokenLogic: TokenLogic) {
-
-    @Post("/create")
-    @Permission("gateway:token:create")
-    suspend fun create(@Body request: CreateTokenRequest): IssuedTokenVO {
-        val issued: IssuedToken = tokenLogic.issue(
-            userId = request.userId, name = request.name,
-            quotaBudget = request.quotaBudget, expiresAt = request.expiresAt,
-            allowedModels = request.allowedModels, allowedIps = request.allowedIps,
-            groupOverride = request.groupOverride,
-            rpmLimit = request.rpmLimit, tpmLimit = request.tpmLimit,
-            concurrencyLimit = request.concurrencyLimit,
-        )
-        // 明文仅在创建响应中出现一次
-        return IssuedTokenVO(issued.record.id, issued.plaintext, issued.record.keyDisplay)
-    }
 
     @Get("/list-by-user/{userId}")
     @Permission("gateway:token:query")
