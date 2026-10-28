@@ -295,13 +295,21 @@ class RelayEngine(
             } catch (e: HttpClientException) {
                 val err = e.error
                 val retryable = when (err) {
-                    is HttpClientError.Http -> err.statusCode == 429 || err.statusCode >= 500
+                    is HttpClientError.Http -> err.statusCode == 429 || err.statusCode >= 500 || err.statusCode in UPSTREAM_ACCOUNT_ERRORS
                     is HttpClientError.Network, is HttpClientError.Timeout -> true
                     else -> false
                 }
+                if (err is HttpClientError.Http && err.statusCode in UPSTREAM_ACCOUNT_ERRORS) {
+                    // 401 / 402 / 403 = 我们在上游的账号有问题（Key 失效、上游分组没有这个模型、上游余额不足），与用户的请求无关：
+                    // 计 Key 失败、记日志、换下一条渠道；全部失败回通用的 503，**不把上游的报错原文**（上游分组名、请求号）透给用户
+                    channelLogic.recordKeyFailure(key.id, "upstream_${err.statusCode}")
+                    recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
+                    lastError = "channel ${channel.id} upstream ${err.statusCode}"
+                    log.warn("relay upstream account error channel=${channel.id} key=${key.id} status=${err.statusCode} body=${(err.body ?: "").replace("\n", " ").take(300)}")
+                    return@repeat
+                }
                 if (!retryable && err is HttpClientError.Http) {
-                    // 上游认证错（401/403）归咎于 Key；其它 4xx 是客户端问题，不计 Key 失败
-                    if (err.statusCode == 401 || err.statusCode == 403) channelLogic.recordKeyFailure(key.id, "upstream_${err.statusCode}")
+                    // 其它 4xx 是请求本身的问题（参数不对等），原样回给用户，不计 Key 失败
                     recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, status = "error", errorCode = "upstream_${err.statusCode}", ttfbMs = null)
                     releaseObserved()
                     respondRaw(ctx, err.statusCode, err.body?.let { transform.errorBodyFor(it, err.statusCode) } ?: inbound.errorBody("upstream_error", "upstream error ${err.statusCode}"))
@@ -337,7 +345,9 @@ class RelayEngine(
             settlementLogic.requestRelease(s.settlementId, from)
             settlementLogic.release(s.settlementId)
         }
-        respondError(ctx, inbound, 503, "no_available_channel", lastError ?: "all channels failed")
+        // 失败细节（哪条渠道、上游回了什么）只进日志；对用户只说没有可用渠道
+        log.warn("relay all channels failed model=$requestModel user=$userId detail=${lastError ?: ""}")
+        respondError(ctx, inbound, 503, "no_available_channel", "no channel is available for this request right now, please retry later")
     }
 
     /** 单次转发结果：SUCCESS=完整成功；PARTIAL=已响应但非完整成功（中断/上游语义错误），不改 Key 状态。 */
@@ -399,7 +409,7 @@ class RelayEngine(
             rewritten = Rewritten(upstreamBody, mapped.requestModel, mapped.upstreamModel, mapped.stream),
             upstream = upstream,
             inbound = inbound,
-            upstreamPath = upstreamPathFor(upstream, channel, path, mapped.upstreamModel, mapped.stream),
+            upstreamPath = crossProtocolPathFor(upstream, channel, path, mapped.upstreamModel, mapped.stream),
             transformResponseBody = { upstreamNative ->
                 val hub = ProtocolCodecs.responseToHub(upstream.id)(upstreamNative)
                 val signed = vault?.issue(hub) ?: hub
@@ -1001,6 +1011,21 @@ class RelayEngine(
             "vertex_gemini" -> logic.protocol.vertex.VertexGeminiAdapter
             else -> null
         }
+
+    /**
+     * 跨协议转发的上游路径。请求体已经转成了上游的协议，路径也必须是上游协议的路径：OpenAI 系上游一律打
+     * `/v1/chat/completions`（hub 就是 Chat 格式）。以前这里沿用入站路径，Anthropic 格式（`/v1/messages`）调
+     * OpenAI 兼容上游时，Chat 格式的请求体被发到了上游的 `/v1/messages`——new-api 类上游按 Claude 渠道路由，
+     * 回「该分组下模型暂无可用渠道」。
+     */
+    fun crossProtocolPathFor(upstream: ProtocolAdapter, channel: Channel, inboundPath: String, upstreamModel: String, stream: Boolean): String =
+        if (upstream.id == "openai") upstreamPathFor(upstream, channel, CHAT_COMPLETIONS_PATH, upstreamModel, stream)
+        else upstreamPathFor(upstream, channel, inboundPath, upstreamModel, stream)
+
+    const val CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
+
+    /** 上游账号层面的错误（不是用户请求的问题）：换渠道重试，不透传原文。 */
+    val UPSTREAM_ACCOUNT_ERRORS = setOf(401, 402, 403)
 
     fun upstreamPathFor(upstream: ProtocolAdapter, channel: Channel, inboundPath: String, upstreamModel: String, stream: Boolean): String =
         when {

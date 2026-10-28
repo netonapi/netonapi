@@ -10,6 +10,8 @@ rootProject.name = "module-gateway"
 
 // 框架
 includeBuild("../neton")
+// neton-ai 已从框架拆成独立仓库（netonframework/neton-ai）：协议互转依赖它
+includeBuild("../neton-ai")
 
 // canonicalize：统一用 ../../Neton/ 前缀指向 Neton canonical 工作区（跨工作区一致）
 
