@@ -3,7 +3,6 @@ package controller.app.gateway
 import logic.GatewayErrorCodes
 import logic.rejectField
 import kotlinx.serialization.Serializable
-import logic.QuotaLogic
 import logic.QuotaRechargeLogic
 import neton.core.annotations.*
 import neton.core.http.HttpException
@@ -12,16 +11,6 @@ import neton.core.http.ValidationError
 import neton.core.http.ValidationException
 import neton.core.interfaces.Identity
 import neton.logging.Logger
-import neton.security.random.SecureRandom
-
-@Serializable
-data class MockRechargeRequest(
-    /** 充值额度 μUSD */
-    val amount: Long,
-)
-
-@Serializable
-data class RechargeResultVO(val balance: Long, val ref: String)
 
 /** 充值页的开通状态（GET /app/gateway/recharge/options）。price 单位与 pay_orders.price 相同（法币最小单位，分）。 */
 @Serializable
@@ -32,8 +21,6 @@ data class RechargeOptionsVO(
     val quotaPerPriceUnit: Long?,
     val minPrice: Long,
     val maxPrice: Long,
-    /** 测试环境的模拟充值（NETONAPI_ENABLE_MOCK_RECHARGE）。 */
-    val mock: Boolean,
 )
 
 @Serializable
@@ -94,14 +81,12 @@ data class RechargeStatusVO(
  * 钱包是法币账本、网关额度是 μUSD 账本，两者通过订单号关联而非共用余额。
  * 用户送出站付款之后靠 [status] 回读结果 —— 到账不在这个请求里发生，所以必须有个地方能问。
  *
- * [mock] 是**模拟充值**，用于打通「付款 → 额度到账 → 能用」这条链路的联调；
- * 它凭空发放额度，因此默认关闭，必须显式设置 `NETONAPI_ENABLE_MOCK_RECHARGE=true` 才可用，
- * 否则一律拒绝——绝不能在生产环境被误开成免费领额度的接口。
+ * 没有「模拟充值」：凭空发额度的入口一律不对用户开放。要给用户加额度，由运营在管理台手动充值
+ * （/admin/gateway/quota/grant，带工单凭据、进台账）。
  */
 @Controller("/gateway/recharge")
 class RechargeController(
     private val log: Logger,
-    private val quotaLogic: QuotaLogic,
     private val rechargeLogic: QuotaRechargeLogic,
     private val settings: logic.SystemSettingLogic,
 ) {
@@ -117,7 +102,7 @@ class RechargeController(
      */
     /**
      * 控制台充值页据此决定画什么：在线充值是否开通（没开通就提示联系客户经理）、汇率（输入金额时预览到账额度）、
-     * 单笔上下限，以及测试环境的模拟充值是否开着（正式环境不显示那张卡片）。
+     * 单笔上下限。
      */
     @Get("/options")
     suspend fun options(): RechargeOptionsVO {
@@ -128,7 +113,6 @@ class RechargeController(
         return RechargeOptionsVO(
             online = rate != null, quotaPerPriceUnit = rate,
             minPrice = min, maxPrice = maxOf(min, settings.get(setting.GatewaySettingKeys.RECHARGE_MAX_PRICE)),
-            mock = mockEnabled(),
         )
     }
 
@@ -209,24 +193,4 @@ class RechargeController(
             createdAt = r.createdAt,
         )
     }
-
-    @Post("/mock")
-    suspend fun mock(identity: Identity, @Body request: MockRechargeRequest): RechargeResultVO {
-        if (!mockEnabled()) {
-            // 测试环境设 NETONAPI_ENABLE_MOCK_RECHARGE=true 才开
-            throw HttpException(NetonErrorCode.OPERATION_NOT_ALLOWED, GatewayErrorCodes.MOCK_RECHARGE_DISABLED)
-        }
-        if (request.amount <= 0) {
-            rejectField("amount", GatewayErrorCodes.RECHARGE_AMOUNT_INVALID)
-        }
-        val userId = identity.id.toLong()
-        // ref 唯一 → 重复提交不会重复入账（台账 ref 上有唯一约束）
-        val ref = "mock:" + SecureRandom.hex(12)
-        val balance = quotaLogic.grant(userId, request.amount, type = "grant", ref = ref)
-        log.warn("MOCK recharge granted userId=$userId amount=${request.amount} ref=$ref（仅测试环境）")
-        return RechargeResultVO(balance, ref)
-    }
-
-    private fun mockEnabled(): Boolean =
-        neton.core.config.getEnv("NETONAPI_ENABLE_MOCK_RECHARGE")?.lowercase() == "true"
 }

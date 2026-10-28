@@ -8,7 +8,7 @@ import neton.database.annotations.*
  *
  * ## type 取值（下面七种是穷举核实过的全部产出点，别照旧注释猜）
  * 入账（amount 为正）：
- * - `grant`    运营手工发放与模拟充值 —— [logic.QuotaLogic.grant] 的默认值
+ * - `grant`    运营在管理台手动充值 —— [logic.QuotaLogic.grant] 的默认值
  * - `recharge` 真实支付回调入账 —— [logic.QuotaRechargeLogic]
  * - `redeem`   兑换码核销 —— [logic.RedemptionCodeLogic]
  * - `invite`   邀请奖励 —— 产出点**不在本模块**，在装配层的 GatewayInviteRewardBridge
@@ -44,7 +44,7 @@ data class QuotaTransaction(
      * 关联凭据，兼作幂等键：同一个 ref 只入账一次（唯一索引见 [logic.QuotaLogic.debitInTx]）。
      * ref 空间由多个业务共用一个索引，所以每种来源都带前缀防碰撞：
      * `gateway:quota:{rechargeId}`（recharge）、`settlement:{id}`（consume）、`redeem:{code}`、
-     * `invite:{recordId}:{inviter|invitee}`、`mock:{hex}`（模拟充值）、`revoke:{工单号}`（约定，非强制）、
+     * `invite:{recordId}:{inviter|invitee}`、`mock:{hex}`（已删除的模拟充值留下的历史行）、`revoke:{工单号}`（约定，非强制）、
      * `refund:gateway:quota:{rechargeId}`（充值退款扣回）。
      *
      * ⚠️ `redeem:` 行的 ref 里是**完整兑换码明文**（RedemptionCodeLogic 传 REF_PREFIX + code）。

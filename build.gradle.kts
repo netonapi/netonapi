@@ -47,6 +47,10 @@ kotlin {
         }
     }
 
+    // 协议互转（OpenAI / Anthropic / Gemini / Responses / Bedrock）建立在 neton-ai 的统一消息模型上：
+    // 框架把 AI 接口标为实验性、要求使用方显式 opt-in 并锁定框架版本。网关整体依赖它，所以模块级统一声明。
+    sourceSets.all { languageSettings.optIn("neton.ai.ExperimentalNetonAiApi") }
+
     sourceSets {
         commonMain {
             dependencies {
