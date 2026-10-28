@@ -49,6 +49,20 @@ object GatewayErrorCodes {
 
     // ── 价格 ──
     const val PRICE_NOT_FOUND = "PRICE_NOT_FOUND"
+    /** 开放范围只能是 ALL / RULES_ONLY。 */
+    const val PRICE_ACCESS_INVALID = "PRICE_ACCESS_INVALID"
+    /** 定价规则的主体类型只能是 GROUP / USER。 */
+    const val PRICE_RULE_SUBJECT_INVALID = "PRICE_RULE_SUBJECT_INVALID"
+    /** 定价方式只能是 PLATFORM / OFFICIAL_DISCOUNT / FIXED。 */
+    const val PRICE_RULE_MODE_INVALID = "PRICE_RULE_MODE_INVALID"
+    /** 官方价折扣必须是 (0, 100] 的倍率。 */
+    const val PRICE_RULE_DISCOUNT_INVALID = "PRICE_RULE_DISCOUNT_INVALID"
+    /** 固定价要填输入与输出价（按次计价的模型填按次价），且价格合法。 */
+    const val PRICE_RULE_PRICES_INVALID = "PRICE_RULE_PRICES_INVALID"
+    /** 有长上下文分档的模型不能用固定价，用官方价折扣。 */
+    const val PRICE_RULE_FIXED_TIERED = "PRICE_RULE_FIXED_TIERED"
+    /** 规则价在某条实际会走的渠道上低于成本。 */
+    const val MODEL_PRICE_BELOW_COST = "MODEL_PRICE_BELOW_COST"
     /** 设定服务上游时没给模型名。字段 model。 */
     const val MODEL_REQUIRED = "MODEL_REQUIRED"
     /** 价格不是非负十进制数。字段为价格字段名。 */

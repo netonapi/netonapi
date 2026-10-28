@@ -22,6 +22,12 @@ object PriceHistoryLogic {
         runCatching { PriceHistoryTable.insert(PriceHistory(model = model, action = action, before = b, after = a, operatorId = operatorId)) }
     }
 
+    /** 非价格行的变更（定价规则、开放范围）：before / after 直接存给定的文本（JSON 或枚举值）。 */
+    suspend fun recordRaw(action: String, model: String, before: String?, after: String?, operatorId: Long? = null) {
+        if (before == after) return
+        runCatching { PriceHistoryTable.insert(PriceHistory(model = model, action = action, before = before, after = after, operatorId = operatorId)) }
+    }
+
     suspend fun list(model: String, max: Int = 50): List<PriceHistory> =
         PriceHistoryTable.query {
             where { PriceHistory::model eq model }

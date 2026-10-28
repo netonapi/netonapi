@@ -30,6 +30,8 @@ data class ModelPrice(
      * 对外提供哪些模型只由这里决定，上游支持什么不影响（docs/model-catalog-design.md）。
      */
     val listed: Int = 1,
+    /** 开放范围（V026）：ALL = 所有用户；RULES_ONLY = 只对有定价规则的用户 / 分组开放（spec §4.3.2）。 */
+    val access: String = "ALL",
     @SoftDelete val deleted: Int = 0,
     @CreatedAt val createdAt: Long? = null,
     @UpdatedAt val updatedAt: Long? = null,

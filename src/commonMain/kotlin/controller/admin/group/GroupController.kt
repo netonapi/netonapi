@@ -61,7 +61,7 @@ class GroupController {
                     memberGroupId = request.memberGroupId,
                     selectable = if (request.selectable == 1) 1 else 0,
                 )
-            ).id
+            ).id.also { logic.PriceBook.invalidate() }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e // 协程取消原样上抛，吞掉会让取消语义失效
         } catch (e: Throwable) {
@@ -97,6 +97,7 @@ class GroupController {
                 selectable = if (request.selectable == 1) 1 else 0,
             )
         )
+        logic.PriceBook.invalidate()
     }
 
     @Delete("/delete/{id}")
@@ -124,6 +125,9 @@ class GroupController {
             throw HttpException(NetonErrorCode.OPERATION_CONFLICT, GatewayErrorCodes.GROUP_IN_USE_BY_CHANNEL)
         }
         GatewayGroupTable.destroy(id)
+        // 分组没了，它的定价规则一并删除（spec §4.3.1）
+        logic.PriceRuleLogic.deleteBySubject(logic.PriceBook.SUBJECT_GROUP, current.code)
+        logic.PriceBook.invalidate()
     }
 
     /** 一个会员组最多映射到一个计费组；DB 有唯一索引，这里给出明确的失败原因。 */

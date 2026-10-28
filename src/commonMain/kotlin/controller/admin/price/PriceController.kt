@@ -59,8 +59,9 @@ class PriceController(
     /** 校准官方价·应用：只写勾选的模型；整批校验与毛利闸门同批量导入。 */
     @Post("/calibrate/apply")
     @Permission("gateway:price:update")
-    suspend fun calibrateApply(@Body request: logic.CalibrationApplyRequest, identity: neton.core.interfaces.Identity): logic.PriceImportResult =
+    suspend fun calibrateApply(@Body request: logic.CalibrationApplyRequest, identity: neton.core.interfaces.Identity): logic.PriceImportResult = invalidating {
         calibrationLogic.apply(request.models, identity.id.toLongOrNull())
+    }
 
     @Get("/get/{id}")
     @Permission("gateway:price:query")
@@ -78,6 +79,7 @@ class PriceController(
         requireMargin(price)
         val saved = ModelPriceTable.insert(price)
         logic.PriceHistoryLogic.record("create", null, saved, identity.id.toLongOrNull())
+        logic.PriceBook.invalidate()
         return saved.id
     }
 
@@ -104,6 +106,7 @@ class PriceController(
         )
         ModelPriceTable.update(next)
         logic.PriceHistoryLogic.record("update", current, next, identity.id.toLongOrNull())
+        logic.PriceBook.invalidate()
     }
 
     /**
@@ -118,14 +121,32 @@ class PriceController(
         if (next.listed == current.listed) return
         ModelPriceTable.update(next)
         logic.PriceHistoryLogic.record(if (next.listed == 1) "list" else "unlist", current, next, identity.id.toLongOrNull())
+        logic.PriceBook.invalidate()
+    }
+
+    /**
+     * 开放范围（spec §4.3.2）：ALL = 所有用户；RULES_ONLY = 只对有定价规则的用户 / 分组开放。
+     */
+    @Put("/access")
+    @Permission("gateway:price:update")
+    suspend fun setAccess(@Query id: Long, @Query access: String, identity: neton.core.interfaces.Identity) {
+        val current = ModelPriceTable.get(id)
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.PRICE_NOT_FOUND)
+        val wanted = access.trim().uppercase()
+        if (wanted !in logic.PriceBook.ACCESSES) logic.rejectField("access", GatewayErrorCodes.PRICE_ACCESS_INVALID)
+        if (wanted == current.access) return
+        ModelPriceTable.update(current.copy(access = wanted))
+        logic.PriceHistoryLogic.recordRaw("access_set", current.model, current.access, wanted, identity.id.toLongOrNull())
+        logic.PriceBook.invalidate()
     }
 
     /** 官方价（成本轨）+ 售价覆盖；售价低于毛利底线由 [logic.SalePricing.requireMargin] 拒绝。 */
     /** 批量导入：见 [logic.PriceImportLogic]。 */
     @Post("/import")
     @Permission("gateway:price:create")
-    suspend fun import(@Body request: PriceImportRequest, identity: neton.core.interfaces.Identity): logic.PriceImportResult =
+    suspend fun import(@Body request: PriceImportRequest, identity: neton.core.interfaces.Identity): logic.PriceImportResult = invalidating {
         importLogic.importItems(request.items.map { toItem(it) }, request.overwrite, operatorId = identity.id.toLongOrNull())
+    }
 
     /** 立即检查一次价源（定时任务 gateway-price-sync 每天也会做）：返回差异、记录检查结果，不改价。 */
     @Post("/sync")
@@ -167,10 +188,15 @@ class PriceController(
         val current = ModelPriceTable.get(id) ?: return
         ModelPriceTable.destroy(id)
         logic.PriceHistoryLogic.record("delete", current, null, identity.id.toLongOrNull())
+        // 模型没了，它在各分组 / 用户上的定价规则一并删除（spec §4.3.1）
+        logic.PriceRuleLogic.deleteByModel(current.model)
+        logic.PriceBook.invalidate()
     }
 
     /** 某个模型的调价记录（最近 50 条）。 */
     @Get("/history")
     @Permission("gateway:price:query")
     suspend fun history(@Query model: String): List<model.PriceHistory> = logic.PriceHistoryLogic.list(model)
+
+    private inline fun <T> invalidating(block: () -> T): T = block().also { logic.PriceBook.invalidate() }
 }

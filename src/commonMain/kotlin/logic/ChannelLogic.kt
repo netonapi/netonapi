@@ -10,7 +10,8 @@ import table.ChannelTable
 @neton.core.annotations.Logic(logger = "logic.gateway-channel")
 class ChannelLogic(private val log: Logger) {
 
-    suspend fun create(channel: Channel): Long = ChannelTable.insert(channel).id
+    // 渠道的启用 / 分组 / 服务清单决定各分组能用哪些模型：写入后清查价缓存（PriceBook）
+    suspend fun create(channel: Channel): Long = ChannelTable.insert(channel).id.also { PriceBook.invalidate() }
 
     suspend fun get(id: Long): Channel? = ChannelTable.get(id)
 
@@ -18,11 +19,13 @@ class ChannelLogic(private val log: Logger) {
     suspend fun update(channel: Channel) {
         ChannelTable.update(channel)
         RelayEngine.channelClients?.evict(channel.id)
+        PriceBook.invalidate()
     }
 
     suspend fun delete(id: Long) {
         ChannelTable.destroy(id)
         RelayEngine.channelClients?.evict(id)
+        PriceBook.invalidate()
         log.info("gateway channel deleted id=$id")
     }
 
@@ -36,6 +39,7 @@ class ChannelLogic(private val log: Logger) {
         val current = get(id) ?: return
         ChannelTable.update(current.copy(status = status))
         if (status != 1) RelayEngine.channelClients?.evict(id)
+        PriceBook.invalidate()
     }
 
     // ===== Key 管理 =====

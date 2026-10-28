@@ -85,6 +85,8 @@ data class PricingCheckRow(
     val hints: List<String> = emptyList(),
     /** 1 = 上架（对外提供）；0 = 只在价格库里。 */
     val listed: Int = 1,
+    /** 开放范围：ALL / RULES_ONLY（spec §4.3.2） */
+    val access: String = "ALL",
 )
 
 @Serializable
@@ -134,7 +136,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         )
     }
 
-    private fun row(
+    private suspend fun row(
         price: ModelPrice,
         byModel: Map<String, ModelPrice>,
         groups: Map<String, GatewayGroup>,
@@ -147,7 +149,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
             ?: return PricingCheckRow(
                 id = price.id, model = price.model, mode = "INVALID",
                 officialInput = price.inputPrice, officialOutput = price.outputPrice,
-                saleInput = "", saleOutput = "", status = INVALID, listed = price.listed,
+                saleInput = "", saleOutput = "", status = INVALID, listed = price.listed, access = price.access,
             )
         val combos = mutableListOf<PricingCombo>()
         val routes = mutableListOf<ChannelRouteVO>()
@@ -166,7 +168,9 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
             )
             for (code in ch.groups.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
                 val g = groups[code] ?: continue
-                combos += tiered(sale, basis.price, g, ch, basis.discount, policy.minMargin).copy(costSource = basis.source)
+                // 该分组对这个模型有分组规则时按规则价核算（spec §4.3），否则平台价 × 分组倍率
+                val gq = PriceBook.groupQuote(g, price)
+                combos += tiered(gq.sale, basis.price, g.copy(ratio = gq.ratio), ch, basis.discount, policy.minMargin).copy(costSource = basis.source)
             }
         }
         val worst = combos.minWithOrNull(compareBy<PricingCombo> { it.marginBp }.thenBy { it.revenue - it.cost })
@@ -191,6 +195,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
             channels = routes.sortedByDescending { it.priority },
             hints = hintsFor(routes, now),
             listed = price.listed,
+            access = price.access,
         )
     }
 
@@ -198,6 +203,28 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
      * 分档模型逐档核算：用售价每一档的门槛作为代表输入长度，同一长度下分别选出售价档与成本档，
      * 取最差的一档。成本的分档结构可能与售价不同（渠道成本），所以按「长度」对齐而不是按序号。
      */
+    /**
+     * 一个报价在若干计费分组里实际会走的每条渠道上的毛利（定价规则保存校验、管理台价目表用，spec §4.3.5）。
+     * 渠道：启用、列了该组、承载这个模型（服务清单或映射键）。按最差排序。
+     */
+    suspend fun combosFor(quote: PriceBook.Quote, groupCodes: Set<String>): List<PricingCombo> {
+        val policy = PricingPolicy.current()
+        val prices = ModelPriceTable.findAll()
+        val byModel = prices.associateBy { it.model }
+        val groups = GatewayGroupTable.findAll().associateBy { it.code }
+        val costs = table.ChannelModelCostTable.findAll().associateBy { it.channelId to it.model }
+        val out = mutableListOf<PricingCombo>()
+        for (ch in channelLogic.listEnabled()) {
+            val upstream = upstreamModel(ch, quote.model) ?: continue
+            val basis = ChannelCostLogic.costForLoaded(ch, quote.model, upstream, quote.official, costs, byModel) ?: continue
+            for (code in ch.groups.split(',').map { it.trim() }.filter { it in groupCodes }) {
+                val g = groups[code] ?: continue
+                out += tiered(quote.sale, basis.price, g.copy(ratio = quote.ratio), ch, basis.discount, policy.minMargin).copy(costSource = basis.source)
+            }
+        }
+        return out.sortedWith(compareBy<PricingCombo> { it.marginBp }.thenBy { it.revenue - it.cost })
+    }
+
     private fun tiered(sale: ModelPrice, cost: ModelPrice, g: GatewayGroup, ch: Channel, discount: String, minMargin: String): PricingCombo {
         val points = (PricingTiers.parse(sale.tiers).orEmpty() + PricingTiers.parse(cost.tiers).orEmpty())
             .map { it.maxPromptTokens ?: Long.MAX_VALUE }.distinct().sorted().ifEmpty { listOf(0L) }

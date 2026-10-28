@@ -37,7 +37,11 @@ data class UpdateMyTokenRequest(
 
 /** 用户建 Key 时可选的分组。 */
 @Serializable
-data class MyGroupOptionVO(val code: String, val name: String, val description: String? = null, val ratio: String)
+data class MyGroupOptionVO(
+    val code: String, val name: String, val description: String? = null, val ratio: String,
+    /** 这个分组对部分模型另有约定价（分组定价规则，spec §4.3）：选分组时提示「部分模型另有优惠」 */
+    val hasModelPrices: Boolean = false,
+)
 
 @Serializable
 data class MyTokenVO(
@@ -91,7 +95,12 @@ class MyTokenController(private val tokenLogic: TokenLogic) {
     /** 建 / 改 Key 时可选的分组：default + 「用户可选」的 + 运营单独开给他的。 */
     @Get("/groups")
     suspend fun groups(identity: Identity): List<MyGroupOptionVO> =
-        logic.BillingGroupResolver.options(identity.id.toLong()).map { MyGroupOptionVO(it.code, it.name, it.description, it.ratio) }
+        logic.BillingGroupResolver.options(identity.id.toLong()).let { groups ->
+            val priced = table.PriceRuleTable.findAll()
+                .filter { it.subjectType == logic.PriceBook.SUBJECT_GROUP && it.mode != logic.PriceBook.MODE_PLATFORM }
+                .map { it.subjectId }.toSet()
+            groups.map { MyGroupOptionVO(it.code, it.name, it.description, it.ratio, it.code in priced) }
+        }
 
     /** 创建后明文只在本次响应出现一次（后端仅存哈希）。 */
     @Post("/create")

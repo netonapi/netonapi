@@ -183,23 +183,28 @@ class RelayEngine(
         // ── 资金占位（V004）：预留成功才允许调上游；无价/无输出上限一律拒绝，不免费放行 ──
         // 双轨计价：官方价 = 成本轨，售价（saleOverride 或官方价 × 全局加价率）= 收入轨。
         // 定价数据非法在入口 fail-fast 拒绝——坏价一旦进了 reserve，结算时就只能猜价或转人工。
-        val officialPrice = ModelPriceTable.oneWhere { ModelPrice::model eq requestModel }
-        // 下架的模型不对外：与「没有这个模型」同一个回答（404），不暴露价格库里有什么
-        if (officialPrice != null && officialPrice.listed != 1) {
-            return respondError(ctx, inbound, 404, "model_not_found", "model '$requestModel' is not available on this endpoint")
-        }
-        // 倍率取自上面那一次解析（同一行数据），不再按名字重查、也不再回落 1.0。
-        val ratio = billingGroup.ratio
-        val markup = PricingPolicy.current().markup
-        val salePrice = officialPrice?.let { op ->
-            runCatching { SalePricing.resolve(op, markup) }.getOrElse { e ->
-                log.error("CRITICAL model pricing invalid model=$requestModel: ${e.message}")
+        // 查价（spec §4.3）：用户规则 ?: 分组规则 ?: 平台价 × 分组倍率，全站缓存、热路径不查库。
+        // 未上架 / 限定开放而无规则 → 与「没有这个模型」同一个回答（404），不暴露价格库里有什么。
+        val quote = when (val lk = PriceBook.lookup(userId, group, requestModel)) {
+            is PriceBook.Lookup.Ok -> lk.quote
+            PriceBook.Lookup.NotPriced -> null
+            PriceBook.Lookup.NotAvailable ->
+                return respondError(ctx, inbound, 404, "model_not_found", "model '$requestModel' is not available on this endpoint")
+            is PriceBook.Lookup.Invalid -> {
+                log.error("CRITICAL model pricing invalid model=$requestModel group=$group user=$userId: ${lk.message}")
                 // 500 而非 400：请求本身没问题，是我们的定价数据坏了——归成客户端错误会掩盖运营事故
                 return respondError(
                     ctx, inbound, 500, "model_pricing_invalid",
                     "pricing config for model '$requestModel' is invalid",
                 )
             }
+        }
+        val officialPrice = quote?.official
+        // 售价轨 × 倍率 = 实付：平台价时倍率是分组倍率；官方价折扣时售价轨是官方价、倍率是折扣；固定价时倍率是 1
+        val ratio = quote?.ratio ?: billingGroup.ratio
+        val salePrice = quote?.sale
+        if (quote != null && quote.source != PriceBook.SOURCE_PLATFORM) {
+            log.info("relay price rule applied model=$requestModel user=$userId group=$group source=${quote.source} mode=${quote.rule?.mode} ratio=$ratio")
         }
         val noOutput = isNoOutputPath(path)
         val reservePrice = salePrice?.let { PricingTiers.mostExpensive(it) }
@@ -224,7 +229,7 @@ class RelayEngine(
         val reserved = settlementLogic.reserve(
             userId = userId, tokenId = tokenId, requestModel = requestModel, endpoint = path,
             reserveAmount = reserveAmount.amount,
-            pricingSnapshot = pricingSnapshot(salePrice, officialPrice, ratio),
+            pricingSnapshot = pricingSnapshot(salePrice, officialPrice, ratio, priceSource = quote?.source),
             groupCode = group, groupSource = groupSource.name,
             estimated = reserveAmount.estimated,
             clientIdemKey = idem,
@@ -279,7 +284,7 @@ class RelayEngine(
             settlement?.let { st ->
                 // 成本：渠道成本表有这个模型就按它（实付价，折扣记 1），否则上游实际模型的官方价 × 渠道折扣
                 val basis = ChannelCostLogic.costFor(channel, transform.rewritten.requestModel, transform.rewritten.upstreamModel, officialPrice)
-                val snap = pricingSnapshot(salePrice, basis?.price, ratio, basis?.discount ?: channel.costDiscount)
+                val snap = pricingSnapshot(salePrice, basis?.price, ratio, basis?.discount ?: channel.costDiscount, quote?.source)
                 settlementLogic.markUpstreamStarted(st.settlementId, channel.id, snap)
                 settlement = st.copy(pricingSnapshot = snap)
             }
@@ -857,10 +862,11 @@ class RelayEngine(
      * finalize 严格按它计价，不重查任何定价表。
      */
     private fun pricingSnapshot(
-        sale: ModelPrice?, official: ModelPrice?, ratio: String, costDiscount: String? = null,
+        sale: ModelPrice?, official: ModelPrice?, ratio: String, costDiscount: String? = null, priceSource: String? = null,
     ): String {
         if (sale == null || official == null) return "{}"
-        val tail = if (costDiscount != null) ",\"costDiscount\":\"$costDiscount\"" else ""
+        val tail = (if (costDiscount != null) ",\"costDiscount\":\"$costDiscount\"" else "") +
+            (if (priceSource != null) ",\"priceSource\":\"$priceSource\"" else "")
         return """{"sale":${priceTrack(sale)},"ratio":"$ratio","cost":${priceTrack(official)}$tail}"""
     }
 

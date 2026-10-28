@@ -68,8 +68,8 @@ class ModelsController(
 
         val enabled = channelLogic.listEnabled()
         val now = nowMillis()
-        // 只有上架的模型对外（模型目录决定）；没定价或在价格库里下架的，渠道服务它也不列
-        val listed = ModelPriceTable.query { where { ModelPrice::listed eq 1 } }.list().map { it.model }.toSet()
+        // 与转发同一个查价口径（spec §4.3）：上架、开放给这个用户（限定开放的要有规则）、该分组有渠道承载
+        val listed = logic.PriceBook.list(token.userId, group).map { it.model }.toSet()
         return enabled
             .asSequence()
             .flatMap { ch -> ch.models.split(',').map { it.trim() }.filter { it.isNotEmpty() }.asSequence() }
