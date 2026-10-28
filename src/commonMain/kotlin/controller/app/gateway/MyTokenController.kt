@@ -18,9 +18,11 @@ data class CreateMyTokenRequest(
     val expiresAt: Long? = null,
     val allowedModels: String = "",
     val allowedIps: String = "",
+    /** 计费分组（决定线路与倍率）；必须在 /groups 返回的范围里，空 = default。 */
+    val group: String? = null,
 )
 
-/** 与 [CreateMyTokenRequest] 同一组字段 + id；刻意没有 groupOverride / status / 限流上限。 */
+/** 与 [CreateMyTokenRequest] 同一组字段 + id；刻意没有 status / 限流上限（运营设定）。 */
 @Serializable
 data class UpdateMyTokenRequest(
     val id: Long,
@@ -29,7 +31,13 @@ data class UpdateMyTokenRequest(
     val expiresAt: Long? = null,
     val allowedModels: String = "",
     val allowedIps: String = "",
+    /** 不带 = 分组不动；空 / default = 不绑。 */
+    val group: String? = null,
 )
+
+/** 用户建 Key 时可选的分组。 */
+@Serializable
+data class MyGroupOptionVO(val code: String, val name: String, val description: String? = null, val ratio: String)
 
 @Serializable
 data class MyTokenVO(
@@ -46,6 +54,10 @@ data class MyTokenVO(
     val concurrencyLimit: Int? = null,
     val status: Int = 1,
     val createdAt: Long? = null,
+    /** 计费分组 code（没绑 = default）。 */
+    val group: String = logic.BillingGroupResolver.DEFAULT_CODE,
+    /** 分组是运营指定的：用户改不了。 */
+    val groupAssigned: Boolean = false,
 ) {
     companion object {
         fun from(t: GatewayToken) = MyTokenVO(
@@ -54,6 +66,8 @@ data class MyTokenVO(
             allowedModels = t.allowedModels, allowedIps = t.allowedIps,
             rpmLimit = t.rpmLimit, tpmLimit = t.tpmLimit, concurrencyLimit = t.concurrencyLimit,
             status = t.status, createdAt = t.createdAt,
+            group = t.groupOverride?.takeIf { it.isNotBlank() } ?: logic.BillingGroupResolver.DEFAULT_CODE,
+            groupAssigned = t.groupAssigned == 1,
         )
     }
 }
@@ -74,6 +88,11 @@ class MyTokenController(private val tokenLogic: TokenLogic) {
     suspend fun list(identity: Identity): List<MyTokenVO> =
         tokenLogic.listByUser(identity.id.toLong()).map { MyTokenVO.from(it) }
 
+    /** 建 / 改 Key 时可选的分组：default + 「用户可选」的 + 运营单独开给他的。 */
+    @Get("/groups")
+    suspend fun groups(identity: Identity): List<MyGroupOptionVO> =
+        logic.BillingGroupResolver.options(identity.id.toLong()).map { MyGroupOptionVO(it.code, it.name, it.description, it.ratio) }
+
     /** 创建后明文只在本次响应出现一次（后端仅存哈希）。 */
     @Post("/create")
     suspend fun create(identity: Identity, @Body request: CreateMyTokenRequest): IssuedMyTokenVO {
@@ -85,6 +104,7 @@ class MyTokenController(private val tokenLogic: TokenLogic) {
             expiresAt = request.expiresAt,
             allowedModels = request.allowedModels.trim(),
             allowedIps = request.allowedIps.trim(),
+            group = request.group,
             // 限流上限由运营在管理台设定，用户不能自行放宽
         )
         return IssuedMyTokenVO(issued.record.id, issued.plaintext, issued.record.keyDisplay)
@@ -98,6 +118,7 @@ class MyTokenController(private val tokenLogic: TokenLogic) {
             id = request.id, name = request.name.trim().take(128),
             quotaBudget = request.quotaBudget, expiresAt = request.expiresAt,
             allowedModels = request.allowedModels.trim(), allowedIps = request.allowedIps.trim(),
+            group = request.group,
         )
     }
 

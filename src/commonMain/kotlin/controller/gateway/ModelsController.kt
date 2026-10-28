@@ -41,8 +41,8 @@ class ModelsController(
         }
         // 与 RelayEngine 走同一个解析器：广场列出来的模型必须就是此刻真能路由的模型。
         // 拒绝时**不回空表** —— 空表在客户端看来等于「这个 key 没有任何可用模型」，会把人引去查渠道，
-        // 而真实原因是计费组配置坏了或该会员组没开通，两者处置方完全不同。
-        val groupCode = when (val r = BillingGroupResolver.resolve(token.userId, token.groupOverride)) {
+        // 而真实原因是计费组配置坏了或 Key 的分组已不再对用户开放，两者处置方完全不同。
+        val groupCode = when (val r = BillingGroupResolver.resolve(token)) {
             is GroupResolution.Rejected -> {
                 val detail = "models list billing group rejected user=${token.userId} " +
                     "token=$tokenId reason=${r.reason} detail=${r.message}"

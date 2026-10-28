@@ -26,8 +26,10 @@ data class SaveGroupRequest(
     val name: String,
     val ratio: String = "1.0",
     val description: String? = null,
-    /** 映射到 module-member 的会员组；null = 不参与会员组映射 */
+    /** 映射到 module-member 的会员组：该会员组的用户可以选这个分组；null = 不映射 */
     val memberGroupId: Long? = null,
+    /** 1 = 所有用户建 Key 时都能选这个分组 */
+    val selectable: Int = 0,
 )
 
 @Controller("/gateway/group")
@@ -57,6 +59,7 @@ class GroupController {
                     ratio = logic.PricingCalc.requireRatio(request.ratio),
                     description = request.description,
                     memberGroupId = request.memberGroupId,
+                    selectable = if (request.selectable == 1) 1 else 0,
                 )
             ).id
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -91,6 +94,7 @@ class GroupController {
                 ratio = logic.PricingCalc.requireRatio(request.ratio),
                 description = request.description,
                 memberGroupId = request.memberGroupId,
+                selectable = if (request.selectable == 1) 1 else 0,
             )
         )
     }

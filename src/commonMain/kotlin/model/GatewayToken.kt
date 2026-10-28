@@ -28,8 +28,10 @@ data class GatewayToken(
     val tpmLimit: Int? = null,
     /** 并发进行中请求数上限；null = 不限 */
     val concurrencyLimit: Int? = null,
-    /** 覆盖用户分组；空 = 用用户自身分组 */
+    /** 这把 Key 的计费分组（决定走哪些渠道、按什么倍率计价）；空 = default。见 BillingGroupResolver。 */
     val groupOverride: String? = null,
+    /** 1 = 分组是运营在后台指定的（特价 / 专线），用户改不了；0 = 用户自己选的，每次调用复核仍对他开放。 */
+    val groupAssigned: Int = 0,
     val status: Int = 1,
     @SoftDelete val deleted: Int = 0,
     @CreatedAt val createdAt: Long? = null,

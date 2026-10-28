@@ -114,7 +114,7 @@ class RelayEngine(
         // 计费组：解析一次，路由与计价共用同一个结果（此前路由按名字匹配、计价再查一次，
         // 中间夹着 `?: "default"` 与 `?: "1.0"` 两级静默回落 —— 组被改名/删除时请求照常放行、
         // 倍率悄悄变 1.0，钱少收而日志里一行痕迹都没有）。
-        val resolution = when (val r = BillingGroupResolver.resolve(userId, token.groupOverride)) {
+        val resolution = when (val r = BillingGroupResolver.resolve(token)) {
             is GroupResolution.Rejected -> {
                 val detail = "relay billing group rejected user=$userId token=$tokenId " +
                     "reason=${r.reason} detail=${r.message}"

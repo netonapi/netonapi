@@ -28,8 +28,11 @@ data class GatewayGroup(
     val name: String,
     /** 倍率 DECIMAL 字符串，如 "1.0"/"0.8" */
     val ratio: String = "1.0",
+    /** 对外说明（用户建 Key 选分组时看到）。 */
     val description: String? = null,
     val memberGroupId: Long? = null,
+    /** 1 = 所有用户建 Key 时都能选；0 = 只有运营单独开给的用户（用户例外 / 会员组映射）能选。default 组永远可选。 */
+    val selectable: Int = 0,
     @SoftDelete val deleted: Int = 0,
     @CreatedAt val createdAt: Long? = null,
     @UpdatedAt val updatedAt: Long? = null,

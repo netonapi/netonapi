@@ -18,6 +18,8 @@ data class TokenVO(
     val allowedModels: String = "",
     val allowedIps: String = "",
     val groupOverride: String? = null,
+    /** 1 = 分组是运营指定的；0 = 用户自己选的 / 没绑。 */
+    val groupAssigned: Int = 0,
     val rpmLimit: Int? = null,
     val tpmLimit: Int? = null,
     val concurrencyLimit: Int? = null,
@@ -29,7 +31,7 @@ data class TokenVO(
             id = t.id, userId = t.userId, name = t.name, display = t.keyDisplay,
             quotaBudget = t.quotaBudget, quotaUsed = t.quotaUsed, expiresAt = t.expiresAt,
             allowedModels = t.allowedModels, allowedIps = t.allowedIps,
-            groupOverride = t.groupOverride,
+            groupOverride = t.groupOverride, groupAssigned = t.groupAssigned,
             rpmLimit = t.rpmLimit, tpmLimit = t.tpmLimit, concurrencyLimit = t.concurrencyLimit,
             status = t.status, createdAt = t.createdAt,
         )
@@ -53,7 +55,7 @@ class TokenController(private val tokenLogic: TokenLogic) {
     suspend fun updateStatus(@Query id: Long, @Query status: Int) =
         tokenLogic.updateStatus(id, status)
 
-    /** 设置令牌的专属计费组；groupCode 留空 = 取消。 */
+    /** 运营指定这把 Key 的分组（特价 / 专线，用户改不了）；groupCode 留空 = 取消指定，Key 回到 default。 */
     @Put("/update-group")
     @Permission("gateway:token:update")
     suspend fun updateGroup(@Query id: Long, @Query groupCode: String? = null) =

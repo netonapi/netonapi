@@ -129,6 +129,8 @@ object GatewayErrorCodes {
 
     // ── 我的令牌 ──
     const val TOKEN_NOT_FOUND = "TOKEN_NOT_FOUND"
+    const val TOKEN_GROUP_NOT_ALLOWED = "TOKEN_GROUP_NOT_ALLOWED"
+    const val TOKEN_GROUP_LOCKED = "TOKEN_GROUP_LOCKED"
     const val TOKEN_NAME_REQUIRED = "TOKEN_NAME_REQUIRED"
     const val TOKEN_QUOTA_BUDGET_INVALID = "TOKEN_QUOTA_BUDGET_INVALID"
     /** 过期时间必须晚于当前时刻。 */
