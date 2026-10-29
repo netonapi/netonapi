@@ -85,11 +85,16 @@ ksp {
     arg("neton.modules", "system,infra,account,member,payment,platform,gateway")
 }
 
+// KSP 只在一个「生成主机」目标上跑，产物给所有目标共用（生成的是平台无关代码）：
+// Mac 上用 macosArm64，其他主机用 linuxX64 —— Linux 上编不了 Apple 目标，CI / Docker 的 Linux 构建因此不能依赖它。
+val kspHost = if (org.gradle.internal.os.OperatingSystem.current().isMacOsX) "macosArm64" else "linuxX64"
+val kspHostTask = "kspKotlin" + kspHost.replaceFirstChar { it.uppercase() }
+
 // Ensure Kotlin compilation sees KSP-generated commonMain sources.
 // Required because application Main references generated GeneratedNetonConfigRegistry —
 // K2 metadata compilation needs it at the commonMain level.
 afterEvaluate {
-    val kspOut = file("build/generated/ksp/macosArm64/macosArm64Main/kotlin")
+    val kspOut = file("build/generated/ksp/$kspHost/${kspHost}Main/kotlin")
     kotlin.sourceSets.named("commonMain") {
         kotlin.srcDir(kspOut)
     }
@@ -102,13 +107,13 @@ afterEvaluate {
 }
 
 tasks.matching { it.name == "compileCommonMainKotlinMetadata" }.configureEach {
-    dependsOn("kspKotlinMacosArm64")
+    dependsOn(kspHostTask)
 }
 tasks.matching { it.name.matches(Regex("compileKotlin(MacosArm64|LinuxX64|LinuxArm64|MingwX64)")) }.configureEach {
-    dependsOn("kspKotlinMacosArm64")
+    dependsOn(kspHostTask)
 }
-tasks.matching { it.name.matches(Regex("kspKotlin(LinuxX64|LinuxArm64|MingwX64)")) }.configureEach {
-    dependsOn("kspKotlinMacosArm64")
+tasks.matching { it.name.matches(Regex("kspKotlin(MacosArm64|LinuxX64|LinuxArm64|MingwX64)")) && it.name != kspHostTask }.configureEach {
+    dependsOn(kspHostTask)
 }
 
 tasks.matching { it.name.startsWith("linkDebugExecutable") }.configureEach {
