@@ -87,12 +87,21 @@ len <= 200000 ? tier("0_200k", p * 1.25 + cr * 0.125 + c * 10) : tier("200k_plus
 
 | 列 | 含义 |
 | --- | --- |
-| `cost_source` | `official`（官方价 × 折扣，默认）/ `upstream`（上游价目接口）/ `manual`（按模型手填） |
+| `cost_source` | `official`（官方价 × 折扣）/ `upstream`（上游价目接口）/ `manual`（按模型手填）；新建渠道必填，不设默认 |
 | `upstream_pricing_format` | `newapi`（new-api / one-api 类）/ `openrouter`；`cost_source = upstream` 时必填。渠道类型（`openai_compatible` 等）区分不了中转站与官方，所以单设此字段 |
 | `upstream_pricing_url` | 上游价目接口地址；空 = 按格式推断（`newapi`：`{baseUrl}/api/pricing`；`openrouter`：`{baseUrl}/v1/models`） |
-| `upstream_group_ratio` | 我们在上游平台所属分组的倍率（new-api 类上游的分组倍率，默认 `1`） |
-| `upstream_credit_rate` | 上游额度单价：每 1 美元上游额度实际花我们多少美元（如 ¥1 买 $1 额度、汇率 7.2 时约 `0.139`），默认 `1` |
+| `upstream_group_ratio` | 我们这把 Key 在上游所属分组的倍率（new-api 类上游的分组倍率；上游没有分组填 `1`）；`cost_source = upstream` 时必填 |
+| `upstream_credit_rate` | 充值汇率：上游 1 美元额度实际花我们多少美元（如 ¥1 买 $1 额度、汇率 7.2 时约 `0.139`；¥7.2 买 $1 即 `1`）；`cost_source = upstream` 时必填 |
 | `cost_synced_at` / `cost_sync_error` | 最近一次拉取时间与失败原因 |
+
+`cost_discount`（成本折扣 = 实际成本 ÷ 官方价）在新建渠道时同样必填。
+
+**成本设置必须由管理员明确给出，后端不补默认值**：上游几乎不可能按官方价 1:1 计费，静默补 `1` 等于把成本记成官方价，毛利体检与亏本拦截全部失真。确实是 1:1 时可以填 `1`，但必须是管理员填的。
+
+- 新建：`cost_source`、`cost_discount` 必填；`cost_source = upstream` 时 `upstream_pricing_format`、`upstream_group_ratio`、`upstream_credit_rate` 也必填（`upstream_pricing_url` 可空，按格式推断）。
+- 修改：没带的项保持原值；带了空值视同没填，按必填拒绝。从别的来源改成 `upstream` 时，分组倍率与充值汇率必须重新给出（库里原来的 `1` 只是占位）。
+- 校验顺序固定为 来源 → 折扣 → 格式 → 分组倍率 → 充值汇率，一次报一个机器码：`CHANNEL_COST_SOURCE_REQUIRED`、`CHANNEL_COST_DISCOUNT_REQUIRED`、`CHANNEL_PRICING_FORMAT_REQUIRED`、`CHANNEL_UPSTREAM_GROUP_RATIO_REQUIRED`、`CHANNEL_UPSTREAM_CREDIT_RATE_REQUIRED`。
+- 已有渠道的库值不迁移（它们是当初的默认值，由运营在渠道页逐个核对改正）。
 
 新表 `gateway_channel_model_costs`（渠道 × 模型的实际成本价）：
 
@@ -130,6 +139,8 @@ len <= 200000 ? tier("0_200k", p * 1.25 + cr * 0.125 + c * 10) : tier("200k_plus
 ## 5. 管理界面
 
 - **渠道页**：成本来源选择、上游价目接口地址、上游分组倍率、最近同步状态与「立即同步」；「成本」抽屉列出本渠道每个对外模型的实际成本价（可手填）。
+  - 成本各项都标必填星号、不预填任何值；成本来源下拉默认是「请选择」。价目格式 / 地址 / 上游分组倍率 / 充值汇率只在成本来源选「上游价目接口」时出现。
+  - 每项在输入框下方写明用途与填法（以界面语言包为准）：成本来源决定每次调用记多少成本（算毛利、拦截亏本定价）；成本折扣 = 实际成本 ÷ 官方价（1 = 同官方价，0.6 = 6 折，1.1 = 贵 10%），选「官方价 × 折扣」时算全部模型，选另外两种时只给拉不到上游价、也没手填的模型兜底；上游分组倍率举 openlux Azure-Gpt-2 = 0.1 为例，没有分组填 1；充值汇率举 ¥1 买 $1（≈ 0.139）与 ¥7.2 买 $1（= 1）为例。
 - **对外模型页**（价格页的新视图）：每个对外模型一行，展开看承载它的渠道：优先级、权重、实际成本价、健康状态（启用 / 冷却 / 挂起 / 测速），以及按当前售价与分组的毛利。
 - **体检新增提示**：
   - 优先级更高的渠道比同模型某个健康的、更低优先级渠道贵 → 提示（不自动调整）；
