@@ -26,15 +26,18 @@ env:
 # 即「本仓必须在 workspace 下两层，canonical 仓必须在 workspace 的 Neton/ 下」，差一层就解析不到：
 #   dist/netonapi-backend    ← 本仓（compile job）
 #   NewGate/netonapi-backend ← 本仓（harness job；外层 NewGate = zoujiaqing/nanogate，harness 住在那儿）
-#   Neton/*         ← 框架 + 六个模块 + geolite4k
+#   Neton/*         ← 框架 + neton-ai + geolite4k + application-contract + 七个模块，
+#                     以及 netonstream 协议栈源码（io / http / tls / websocket / openssl-kotlin）：
+#                     框架 gradle.properties 提交的是 netonstream.local=true，按兄弟目录源码装配
 # 少 checkout 任何一个模块都会在 Gradle **配置期**直接失败（include 指向的目录不存在）。
-# 六个模块都是 include(...) 子项目而非 composite build，KSP 随正常任务图生成，
+# 七个模块都是 include(...) 子项目而非 composite build，KSP 随正常任务图生成，
 # 因此不需要（也不该有）额外的 KSP 预生成步骤。
 
 jobs:
   compile-and-test:
     name: Compile + unit tests (macOS arm64)
-    runs-on: macos-14
+    # macos-15 镜像默认 Xcode 16（macos-14 默认 Xcode 15）
+    runs-on: macos-15
     timeout-minutes: 90
 
     steps:
@@ -56,6 +59,55 @@ jobs:
           repository: netonframework/geolite4k
           token: ${{ env.NETON_CI_TOKEN }}
           path: Neton/geolite4k
+
+      - name: Checkout neton-ai
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/neton-ai
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-ai
+
+      - name: Checkout application-contract
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-contract
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-contract
+
+      - name: Checkout netonstream io
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/io
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/io
+
+      - name: Checkout netonstream http
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/http
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/http
+
+      - name: Checkout netonstream tls
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/tls
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/tls
+
+      - name: Checkout netonstream websocket
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/websocket
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/websocket
+
+      - name: Checkout openssl-kotlin
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/openssl-kotlin
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/openssl-kotlin
 
       - name: Checkout module-system
         uses: actions/checkout@v4
@@ -128,12 +180,12 @@ jobs:
 
       - name: Compile application
         working-directory: dist/netonapi-backend
-        run: ./gradlew :application:compileKotlinMacosArm64
+        run: ./gradlew :application:compileKotlinMacosArm64 -Pnetonstream.local.openssl=true
 
       # 只编译不跑测试等于没有回归保护：账务、流式、限流、IP 信任边界、SSRF 全靠这些断言守住。
       - name: Unit tests
         working-directory: dist/netonapi-backend
-        run: ./gradlew :module-gateway:macosArm64Test :module-system:macosArm64Test
+        run: ./gradlew :module-gateway:macosArm64Test :module-system:macosArm64Test -Pnetonstream.local.openssl=true
 
       - name: Upload test results on failure
         if: failure()
@@ -193,6 +245,55 @@ jobs:
           repository: netonframework/geolite4k
           token: ${{ env.NETON_CI_TOKEN }}
           path: Neton/geolite4k
+
+      - name: Checkout neton-ai
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/neton-ai
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-ai
+
+      - name: Checkout application-contract
+        uses: actions/checkout@v4
+        with:
+          repository: neton-application/neton-application-contract
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/neton-application-contract
+
+      - name: Checkout netonstream io
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/io
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/io
+
+      - name: Checkout netonstream http
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/http
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/http
+
+      - name: Checkout netonstream tls
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/tls
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/tls
+
+      - name: Checkout netonstream websocket
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/websocket
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/websocket
+
+      - name: Checkout openssl-kotlin
+        uses: actions/checkout@v4
+        with:
+          repository: netonframework/openssl-kotlin
+          token: ${{ env.NETON_CI_TOKEN }}
+          path: Neton/openssl-kotlin
 
       - name: Checkout module-system
         uses: actions/checkout@v4
@@ -282,7 +383,7 @@ jobs:
         working-directory: NewGate/netonapi-backend
         env:
           EVENT_DB_URI: postgresql://netonapi:netonapi@localhost:5432/postgres
-        run: ./gradlew :module-infra:postgresContractTest --no-daemon
+        run: ./gradlew :module-infra:postgresContractTest --no-daemon -Pnetonstream.local.openssl=true
 
       - name: Upload harness logs on failure
         if: failure()
