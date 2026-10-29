@@ -1,0 +1,39 @@
+package model
+
+import kotlinx.serialization.Serializable
+import neton.database.annotations.*
+
+/** 用户 API 令牌。明文不落库：key_hash = SHA-256(sk-...)，key_display = 前7+后4。 */
+@Serializable
+@Table("gateway_tokens")
+data class GatewayToken(
+    @Id val id: Long = 0,
+    val userId: Long,
+    val name: String,
+    val keyHash: String,
+    val keyDisplay: String,
+    /** μUSD 预算；null = 不限（仍受账户余额约束） */
+    val quotaBudget: Long? = null,
+    val quotaUsed: Long = 0,
+    /** 已预留（在途请求占位）μUSD；可用预算 = quotaBudget - quotaUsed - quotaReserved */
+    val quotaReserved: Long = 0,
+    val expiresAt: Long? = null,
+    /** 允许模型，逗号分隔；空 = 不限 */
+    val allowedModels: String = "",
+    /** 允许 IP（CIDR/精确），逗号分隔；空 = 不限 */
+    val allowedIps: String = "",
+    /** 每分钟请求数上限；null = 不限 */
+    val rpmLimit: Int? = null,
+    /** 每分钟 token 数上限；null = 不限 */
+    val tpmLimit: Int? = null,
+    /** 并发进行中请求数上限；null = 不限 */
+    val concurrencyLimit: Int? = null,
+    /** 这把 Key 的计费分组（决定走哪些渠道、按什么倍率计价）；空 = default。见 BillingGroupResolver。 */
+    val groupOverride: String? = null,
+    /** 1 = 分组是运营在后台指定的（特价 / 专线），用户改不了；0 = 用户自己选的，每次调用复核仍对他开放。 */
+    val groupAssigned: Int = 0,
+    val status: Int = 1,
+    @SoftDelete val deleted: Int = 0,
+    @CreatedAt val createdAt: Long? = null,
+    @UpdatedAt val updatedAt: Long? = null,
+)

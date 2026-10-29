@@ -1,0 +1,131 @@
+plugins {
+    alias(libs.plugins.kotlin.multiplatform)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
+}
+
+// Kotlin 版本下限 2.4.20：低于它（包括 2.4.20 的 Beta / RC）直接拒绝编译。
+// Neton 各仓走同一条 Kotlin 线 —— 混用时 K/N klib 与 KSP 产物会以很难看懂的方式失败。
+run {
+    val required = KotlinVersion(2, 4, 20)
+    val actual = org.jetbrains.kotlin.gradle.plugin.getKotlinPluginVersion(logger)
+    val parts = actual.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 } + listOf(0, 0, 0)
+    val parsed = KotlinVersion(parts[0], parts[1], parts[2])
+    require(parsed > required || (parsed == required && '-' !in actual)) {
+        "Kotlin $actual is below the required minimum $required. Upgrade the Kotlin Gradle plugin."
+    }
+}
+
+group = "com.netonstream.app"
+version = "1.0.0"
+
+repositories {
+    mavenCentral()
+}
+
+// AES-GCM（渠道 Key 加密）在 Apple 上由 CryptoKit 提供，其实现是 Swift，链接需要
+// macOS SDK 里的 Swift 运行时存根。Kotlin/Native 不会传这个目录给 ld，Xcode 15 上会
+// 报 "Could not find or use auto-linked library 'swift_*'"。非 macOS 主机为 null，跳过。
+val appleSwiftLibDir: String? by lazy {
+    if (!org.gradle.internal.os.OperatingSystem.current().isMacOsX) return@lazy null
+    runCatching {
+        providers.exec {
+            commandLine("xcrun", "--sdk", "macosx", "--show-sdk-path")
+        }.standardOutput.asText.get().trim()
+    }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { "$it/usr/lib/swift" }
+}
+
+kotlin {
+    listOf(macosArm64(), linuxX64(), linuxArm64(), mingwX64()).forEach { target ->
+        val coreInterop = file("$projectDir/../neton/neton-core/build/nativeInterop/${target.name}").absolutePath
+        target.binaries.forEach { binary ->
+            binary.linkerOpts.add("-L$coreInterop")
+            binary.linkerOpts.add("-lenv")
+            if (target.konanTarget.family.isAppleFamily) {
+                appleSwiftLibDir?.let { binary.linkerOpts.add("-L$it") }
+            }
+        }
+    }
+
+    // 协议互转（OpenAI / Anthropic / Gemini / Responses / Bedrock）建立在 neton-ai 的统一消息模型上：
+    // 框架把 AI 接口标为实验性、要求使用方显式 opt-in 并锁定框架版本。网关整体依赖它，所以模块级统一声明。
+    sourceSets.all { languageSettings.optIn("neton.ai.ExperimentalNetonAiApi") }
+
+    sourceSets {
+        commonMain {
+            dependencies {
+                implementation("com.netonstream.app:module-system")
+                implementation("com.netonstream:neton-core")
+                implementation("com.netonstream:neton-routing")
+                implementation("com.netonstream:neton-security")
+                implementation("com.netonstream:neton-http")
+                implementation("com.netonstream:neton-ai")
+                implementation("com.netonstream:neton-database")
+                implementation("com.netonstream:neton-logging")
+                implementation("com.netonstream:neton-jobs")
+                implementation("com.netonstream:neton-validation")
+                implementation("com.netonstream:neton-redis")
+                implementation("com.netonstream:neton-cache")
+                implementation(libs.kotlinx.serialization.json)
+                implementation(libs.kotlinx.coroutines.core)
+            }
+        }
+    }
+}
+
+// 业务错误 message 守卫（共享测试夹具，不进生产二进制）：见 ErrorMessageGuardTest。
+kotlin.sourceSets.named("macosArm64Test") { kotlin.srcDir("../neton-application-contract/src/testFixtures/kotlin") }
+tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
+    environment("NETON_MODULE_DIR", projectDir.absolutePath)
+}
+
+dependencies {
+    add("kspMacosArm64", "com.netonstream:neton-ksp")
+    add("kspLinuxX64", "com.netonstream:neton-ksp")
+    add("kspLinuxArm64", "com.netonstream:neton-ksp")
+    add("kspMingwX64", "com.netonstream:neton-ksp")
+}
+
+ksp {
+    arg("neton.moduleId", "gateway")
+}
+
+// Ensure Kotlin compilation sees KSP-generated commonMain sources.
+// Required because facade tables delegate to generated XxxTableImpl —
+// K2 metadata compilation needs them at the commonMain level.
+afterEvaluate {
+    val kspOut = file("build/generated/ksp/macosArm64/macosArm64Main/kotlin")
+    kotlin.sourceSets.named("commonMain") {
+        kotlin.srcDir(kspOut)
+    }
+    listOf("macosArm64Main", "linuxX64Main", "linuxArm64Main", "mingwX64Main").forEach { name ->
+        kotlin.sourceSets.findByName(name)?.let { ss ->
+            val filtered = ss.kotlin.srcDirs.filter { !it.path.contains("generated/ksp") }
+            if (filtered.size < ss.kotlin.srcDirs.size) ss.kotlin.setSrcDirs(filtered)
+        }
+    }
+}
+
+tasks.matching { it.name == "compileCommonMainKotlinMetadata" }.configureEach {
+    dependsOn("kspKotlinMacosArm64")
+}
+tasks.matching { it.name.matches(Regex("compileKotlin(MacosArm64|LinuxX64|LinuxArm64|MingwX64)")) }.configureEach {
+    dependsOn("kspKotlinMacosArm64")
+}
+tasks.matching { it.name.matches(Regex("kspKotlin(LinuxX64|LinuxArm64|MingwX64)")) }.configureEach {
+    dependsOn("kspKotlinMacosArm64")
+}
+
+// Embed SQL migration resources into binary (no runtime file IO).
+// 迁移方言跟随编译期 sqlx4k 驱动(neton.database.driver，与框架同名)：sqlx4k Native 驱动编译期单选、
+// 不能运行时切换，故 PostgreSQL / MySQL 各产出独立二进制/镜像。NewGate 仅支持 postgres|mysql(不含 sqlite)。默认 postgres。
+// 与框架一致：neton.database.driver 大小写不敏感（框架侧同样 lowercase() 归一），避免 =MYSQL 时框架接受、gateway 拒绝。
+val ngMigrationDialect = when (val d = ((project.findProperty("neton.database.driver") as? String) ?: "postgres").lowercase()) {
+    "postgres" -> "postgresql"
+    "mysql" -> "mysql"
+    else -> error("NewGate 仅支持 -Pneton.database.driver=postgres|mysql；收到 '$d'")
+}
+extra["neton.migration.moduleId"] = "gateway"
+extra["neton.migration.dialects"] = listOf(ngMigrationDialect)
+extra["neton.migration.sqlSourceDir"] = file("sql")
+apply(from = "../neton/scripts/embed-migration-resources.gradle.kts")
