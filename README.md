@@ -4,12 +4,10 @@
 
 NetonAPI is a self-hosted LLM API gateway. One set of issued keys serves three upstream
 protocol families — OpenAI, Anthropic, Gemini — relayed in any direction, with durable
-billing, quota enforcement and channel failover. It is positioned as an alternative to
-the Go-based [`new-api`](https://github.com/QuantumNous/new-api) — operators coming from
-new-api find the features where they expect them — but it is an independent implementation
-on the [Neton](https://github.com/netonframework/neton) framework, not a port of new-api's
-code. It compiles with Kotlin/Native to a single static executable: no JVM at runtime, no
-sidecar SQL files.
+billing, quota enforcement and channel failover. It is built with Kotlin/Native on the
+[Neton](https://github.com/netonframework/neton) framework and the [Neton Application](https://github.com/neton-application/neton-application) scaffold, and compiles to a single static executable: no
+JVM at runtime, no sidecar SQL files. See the [capability comparison](#capability-comparison)
+with [`new-api`](https://github.com/QuantumNous/new-api).
 
 This repository is the **backend distribution**. It assembles the framework and the seven
 canonical modules into one binary and owns the gateway-specific configuration. Product
@@ -24,10 +22,33 @@ logic lives in the module repositories, not here.
 | Default port | `8800` |
 | License | [Apache-2.0](./LICENSE) |
 
-Companion repositories: [**netonapi-frontend**](https://github.com/netonapi/netonapi-frontend) (operator console) and
-[**netonapi-client**](https://github.com/netonapi/netonapi-client) (self-service console). Deployment, secrets, reverse-proxy and SSRF notes:
+Source repositories: [**netonapi/netonapi**](https://github.com/netonapi/netonapi) (this server),
+[**netonapi/netonapi-admincp**](https://github.com/netonapi/netonapi-admincp) (operator console) and
+[**netonapi/netonapi-web**](https://github.com/netonapi/netonapi-web) (public site and self-service console). Deployment, secrets, reverse-proxy and SSRF notes:
 [`DEPLOY.md`](https://github.com/zoujiaqing/nanogate/blob/main/DEPLOY.md) in the `nanogate`
 repository, which also carries the end-to-end test harness.
+
+## Capability comparison
+
+| Capability | NetonAPI | [new-api](https://github.com/QuantumNous/new-api) |
+|---|---|---|
+| Implementation & deployment | Single static Kotlin/Native executable, no JVM at runtime | Go single binary / Docker |
+| Database | PostgreSQL (Redis optional) | SQLite / MySQL / PostgreSQL (Redis optional) |
+| Inbound protocols | Native OpenAI, Anthropic and Gemini formats, converted in any direction (tool calls, images, thinking and cache usage preserved across protocols) | OpenAI format first, with Claude and Gemini formats supported |
+| Upstream types | OpenAI-compatible, Azure OpenAI, Anthropic, Gemini, AWS Bedrock, Vertex AI | Dozens of channel types, including task-style upstreams such as Midjourney and Suno |
+| Channel scheduling | Priority + weight, failover, automatic key disabling and cool-down, latency and connectivity tests | Priority + weight, retries, automatic disabling |
+| Sale price | Anchored on the official price: platform price × group ratio; per-model agreed prices for groups or users (a discount off the official price, or a fixed price); tiered pricing | Model ratio × completion ratio × group ratio, or a fixed per-call price |
+| Channel cost & margin | Real cost per channel (official-price discount / pulled from the upstream price list / entered per model); prices below cost are rejected; pricing check and margin reports | No channel cost accounting |
+| Official prices | Synced from a price source on a schedule; abnormal changes held for review; price history kept | Ratios maintained by hand, upstream ratio sync available |
+| Ledger | Two-phase reserve → settle, recoverable after a crash, anomalies go to a manual review queue | Quota pre-deducted, adjusted after the request |
+| Billing group | Decided by the API key (chosen by the user from allowed groups; operators can assign or revoke) | User group, with per-token group selection |
+| API keys | Shown once at creation; no plaintext stored | Viewable and copyable from the list at any time |
+| Top-ups | Manual top-up by operators, redemption codes, online checkout (Alipay, aggregator gateways, pluggable); payment channel secrets are write-only | Redemption codes, EPay, Stripe |
+| User sign-in | Username and password, email password reset | Username and password, plus GitHub, OIDC, Telegram, WeChat and other third-party sign-in, and 2FA |
+| Task-style APIs | Not supported (Midjourney, Suno, video generation) | Supported |
+| Operator permissions | Menu- and button-level permissions; preset gateway operator / finance / support / read-only roles | Admin / root |
+
+The new-api column is compiled from its public documentation; check the latest new-api release for details.
 
 ## Repository layout
 

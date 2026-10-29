@@ -11,14 +11,14 @@
 
 ## 一、定位
 
-NetonAPI 是自托管的 LLM API 中转站，**对标 [new-api](https://github.com/QuantumNous/new-api)**：运营习惯与功能面向 new-api 用户看齐，
-代码基于 [Neton](https://github.com/netonframework/neton) 框架独立实现，不是 new-api 的移植或改写。
+NetonAPI 是自托管的 LLM API 中转站，使用 Kotlin/Native，基于 [Neton](https://github.com/netonframework/neton) 框架与 [Neton Application](https://github.com/neton-application/neton-application) 脚手架打造。
+与 new-api 的能力对照见 [README](../README.zh-Hans.md#能力对照)。
 
 | 维度 | 说明 |
 |------|------|
 | 运行形态 | 单进程、单个 Kotlin/Native 静态可执行文件，无 JVM |
 | 上游协议 | OpenAI、Anthropic、Gemini，任意方向互转 |
-| 前端 | 管理台 [netonapi-frontend](https://github.com/netonapi/netonapi-frontend)、用户控制台 [netonapi-client](https://github.com/netonapi/netonapi-client)（均为 React + Next.js） |
+| 源码 | 服务端 [netonapi/netonapi](https://github.com/netonapi/netonapi)、管理后台 [netonapi/netonapi-admincp](https://github.com/netonapi/netonapi-admincp)、网站前端 [netonapi/netonapi-web](https://github.com/netonapi/netonapi-web)（前端均为 React + Next.js） |
 
 ### 技术栈
 
@@ -38,7 +38,7 @@ NetonAPI 是自托管的 LLM API 中转站，**对标 [new-api](https://github.c
 
 ### 2.1 仓库
 
-本仓（`netonapi-backend`）是**后端发行版**：只做装配与产品配置，业务逻辑都在 canonical 模块仓里。
+本仓（GitHub `netonapi/netonapi`，本地目录 `netonapi-backend`）是**后端发行版**：只做装配与产品配置，业务逻辑都在 canonical 模块仓里。
 
 | 仓库 | 内容 | 引入方式 |
 |------|------|---------|
