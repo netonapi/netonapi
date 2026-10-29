@@ -38,14 +38,17 @@ class ChannelController(
                 modelMapping = request.modelMapping, paramOverride = request.paramOverride,
                 priority = request.priority, weight = request.weight,
                 capabilities = logic.RelayRouter.requireCapabilities(request.capabilities),
-                proxyUrl = logic.effectiveProxyUrl(request.proxyUrl), apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, providerConfig = request.providerConfig?.trim()?.takeIf { it.isNotEmpty() }, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
+                proxyUrl = logic.effectiveProxyUrl(request.proxyUrl), apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, providerConfig = request.providerConfig?.trim()?.takeIf { it.isNotEmpty() },
                 lossPolicy = logic.ConversionPolicy.requirePolicy(request.lossPolicy), reasoningSuffix = if (request.reasoningSuffix == 1) 1 else 0,
                 remark = request.remark,
-                costSource = request.costSource, upstreamPricingFormat = request.upstreamPricingFormat,
-                upstreamPricingUrl = request.upstreamPricingUrl, upstreamGroupRatio = request.upstreamGroupRatio,
-                upstreamCreditRate = request.upstreamCreditRate,
                 status = if (request.status == 0) 0 else 1,
-            ).let { logic.ChannelCostLogic.requireCostConfig(it) }
+            ).let {
+                logic.ChannelCostLogic.resolveCostConfig(
+                    logic.ChannelCostLogic.CostInput(request.costSource, request.costDiscount, request.upstreamPricingFormat,
+                        request.upstreamPricingUrl, request.upstreamGroupRatio, request.upstreamCreditRate),
+                    it, current = null,
+                )
+            }
         )
         request.keys.forEach { channelLogic.addKey(id, it) }
         return id
@@ -64,15 +67,16 @@ class ChannelController(
             modelMapping = request.modelMapping, paramOverride = request.paramOverride,
             priority = request.priority, weight = request.weight,
             capabilities = logic.RelayRouter.requireCapabilities(request.capabilities),
-            proxyUrl = logic.effectiveProxyUrl(request.proxyUrl), apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, providerConfig = request.providerConfig?.trim()?.takeIf { it.isNotEmpty() }, costDiscount = logic.PricingCalc.requireRatio(request.costDiscount, "costDiscount"),
+            proxyUrl = logic.effectiveProxyUrl(request.proxyUrl), apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, providerConfig = request.providerConfig?.trim()?.takeIf { it.isNotEmpty() },
             lossPolicy = logic.ConversionPolicy.requirePolicy(request.lossPolicy), reasoningSuffix = if (request.reasoningSuffix == 1) 1 else 0,
             remark = request.remark,
-            costSource = request.costSource ?: current.costSource,
-            upstreamPricingFormat = if (request.costSource != null) request.upstreamPricingFormat else current.upstreamPricingFormat,
-            upstreamPricingUrl = if (request.costSource != null) request.upstreamPricingUrl else current.upstreamPricingUrl,
-            upstreamGroupRatio = request.upstreamGroupRatio ?: current.upstreamGroupRatio,
-            upstreamCreditRate = request.upstreamCreditRate ?: current.upstreamCreditRate,
-        ).let { logic.ChannelCostLogic.requireCostConfig(it) })
+        ).let {
+            logic.ChannelCostLogic.resolveCostConfig(
+                logic.ChannelCostLogic.CostInput(request.costSource, request.costDiscount, request.upstreamPricingFormat,
+                    request.upstreamPricingUrl, request.upstreamGroupRatio, request.upstreamCreditRate),
+                it, current = current,
+            )
+        })
         request.status?.let { if (it != current.status) channelLogic.updateStatus(request.id, it) }
     }
 

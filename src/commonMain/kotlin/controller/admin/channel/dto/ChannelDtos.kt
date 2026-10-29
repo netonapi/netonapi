@@ -19,13 +19,16 @@ data class CreateChannelRequest(
     val apiVersion: String? = null,
     /** 托管上游的厂商参数 JSON：Vertex {"project","location"}，Bedrock 可选 {"region"} */
     val providerConfig: String? = null,
-    val costDiscount: String = "1.0",
-    /** official / upstream / manual；见 Channel.costSource。 */
-    val costSource: String = "official",
+    /** 成本折扣（相对官方价），必填，见 ChannelCostLogic.resolveCostConfig。 */
+    val costDiscount: String? = null,
+    /** official / upstream / manual；必填，见 Channel.costSource。 */
+    val costSource: String? = null,
     val upstreamPricingFormat: String? = null,
     val upstreamPricingUrl: String? = null,
-    val upstreamGroupRatio: String = "1",
-    val upstreamCreditRate: String = "1",
+    /** 成本来源为 upstream 时必填 */
+    val upstreamGroupRatio: String? = null,
+    /** 成本来源为 upstream 时必填 */
+    val upstreamCreditRate: String? = null,
     val lossPolicy: String = "allow",
     val reasoningSuffix: Int = 0,
     val remark: String? = null,
@@ -53,7 +56,8 @@ data class UpdateChannelRequest(
     val apiVersion: String? = null,
     /** 托管上游的厂商参数 JSON：Vertex {"project","location"}，Bedrock 可选 {"region"} */
     val providerConfig: String? = null,
-    val costDiscount: String = "1.0",
+    /** 不传（null）= 保留原值；传空串 = 没填，按必填拒绝。 */
+    val costDiscount: String? = null,
     /** 成本设置：不传（null）= 保留原值，老前端更新渠道时不会把上游成本设置冲回默认。 */
     val costSource: String? = null,
     val upstreamPricingFormat: String? = null,
