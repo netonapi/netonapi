@@ -16,9 +16,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # 跨仓 checkout 私有 canonical 仓需要 PAT —— GITHUB_TOKEN 只对「跑这个 workflow 的仓」有效。
-  # 在 repo secrets 里配 NETON_CI_TOKEN（fine-grained PAT，对 netonframework / neton-application
-  # 两个 org 只读即可）；若这些仓全部公开，不配也能跑（自动回落到 GITHUB_TOKEN）。
+  # 依赖的框架与通用模块仓目前全部公开，不配 NETON_CI_TOKEN 也能跑（回落到 GITHUB_TOKEN）。
+  # 以后若有依赖仓转为私有，在 repo secrets 里配 NETON_CI_TOKEN（fine-grained PAT，对 netonframework /
+  # neton-application 两个 org 只读即可）—— GITHUB_TOKEN 只对「跑这个 workflow 的仓」有效。
   NETON_CI_TOKEN: ${{ secrets.NETON_CI_TOKEN || secrets.GITHUB_TOKEN }}
 
 # ── checkout 布局是硬约束，不是风格问题 ──────────────────────────────────────────
