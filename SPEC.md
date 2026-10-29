@@ -1,6 +1,7 @@
 # module-gateway SPEC
 
-> NewGate LLM 中转站领域模块。设计依据：`NewGate/docs/superpowers/specs/2026-07-21-newgate-design.md`
+> NetonAPI 的 LLM 中转站领域模块。产品规范（计价、模型目录、API Key、充值、转发错误等）以服务端仓
+> [netonapi/netonapi](https://github.com/netonapi/netonapi) 的 `docs/` 为准；本文记录模块内部的实现要点。
 
 ## 资源清单（8 表）
 
@@ -235,91 +236,9 @@
   证明全量迁移成功，但未严格证明"提交后同一物理池连接已干净"。应补 pool-size=1 的真实 PostgreSQL 集成测试：
   脚本 A 污染会话 → 脚本 B 用未限定 DDL → 迁移后复用同一连接，`SHOW search_path` 等于连接默认值且未限定查询成功。
 
-## 商业上线：A/B/C 三阶段进度
+## 现状
 
-### A 安全与账务（已完成）
-
-- **V004 durable settlement**：见上（预留先行 / 稳定幂等键 / 硬预算 / worker 恢复）。
-- **渠道 Key 加密（V005 前）**：`SecretBox`（AES-256-GCM，框架 neton-security）+ `NETONAPI_CHANNEL_KEY_ENC_KEY`。
-  未配置则明文直通（可先部署后启用）；配置后新写入加密、存量明文仍可读，无需停机迁移。管理台掩码前先解密。
-- **IP 白名单（此前只有字段无校验）**：`NetGuard.ipAllowed` 支持精确 IP 与 CIDR；取不到客户端 IP 即拒绝
-  （白名单必须是「明确允许」）。
-- **客户端 IP 信任边界**：`X-Forwarded-For` / `X-Real-IP` 是客户端可控头，`HttpRequest.remoteAddress` 取 XFF 最左值，
-  不能做安全判定。白名单只用框架统一解析的 `HttpRequest.clientAddress`：从传输层对端出发，对端在
-  `routing.conf` `[ratelimit] trusted_proxies`（环境变量 `NETON_ROUTING__RATELIMIT__TRUSTED_PROXIES`，逗号分隔精确 IP）
-  内才采信 XFF，从右往左剥掉可信跳，第一个不可信地址即客户端；不采信 `X-Real-IP`。限流、审计、白名单共用这一个值。
-  S14 两阶段断言：未配可信代理时伪造 XFF 无效；配了之后真客户端能剥出，而把名单内 IP 塞在链首仍拒。
-- **SSRF / 出站策略**（neton-docs spec/egress.md）：渠道 baseUrl / proxyUrl、服务账号 Key 的 `token_uri` 是后台运行期数据，
-  渠道转发、探测、拉模型、能力校验、Vertex 换 token **全部**走 `GuardedHttpClientProvider` 建的受控客户端
-  （`RelayEngine.guardedClients`，module-system 按 application.conf `[egress]` 绑定）——**强制点在请求时**：每条连接解析一次、
-  全部地址校验（IANA 特殊用途段、非规范 IP 写法、端口放行列表），只连校验过的 IP，DNS rebinding 挪不走；经渠道代理时代理只收到
-  校验过的 IP（`CONNECT <ip>:443` / absolute-form），代理地址本身也校验。被拒的候选不计 Key 失败、换下一个渠道，全部被拒
-  503 `no_available_channel`（消息带机器码）；探测 / 拉模型结果带 `errorCode`。
-  写入时（create / update / addKey）用同一个策略与 `systemHostResolver()` 先判一遍，不过 400 不落库（快速反馈）。
-  `token_uri` 只许 https（写入时与换 token 时都拒）。内网上游只能由运维在 `[egress]` 精确放行（`allowed_networks` /
-  `allowed_hosts` / `allowed_ports`），`NETONAPI_ALLOW_PRIVATE_UPSTREAM` 已删除。价目表同步地址来自环境变量，走普通客户端。
-  S25 断言写入时（元数据、`[::1]`、非放行端口被拒，公网放行）；S25b 断言请求时（直接写库的 `localhost` 别名与元数据渠道 503、
-  Key 不计失败、探测 errorCode，放行的 127.0.0.1 照常可用）。
-- **速率限制（V005）**：令牌级 RPM/TPM/并发。Redis 优先（多实例共享），无 Redis 退化为**进程内**计数（单实例
-  仍有效）并 warn。固定分钟窗（边界最多约 2 倍突发）；并发额度在 finally 释放，失败请求不会泄漏额度。
-  **原子化**：此前是「读-改-写」（GET → 比较 → SET），并发下丢增量 = 限流被绕过；改为服务端 Lua 一次执行
-  `INCRBY` + 条件 `EXPIRE`，两种 TTL 语义（`TTL_IF_MISSING` 固定分钟窗永不续期 / `TTL_ALWAYS_REFRESH` 并发键
-  自愈），`DECRBY` 带下限（≤0 → DEL 并返回 0：既不因不配对释放把计数打成负数=白送额度，也不留下 TTL=-1 的
-  永不过期键）；EVALSHA 命中 sha 缓存、NOSCRIPT 回落 EVAL。
-  ⚠️ **`redis` 构造参数带默认值 → KSP 的 @Logic 装配会跳过它**（`LogicProcessor` 把带默认值的参数视为「自
-  provision」），必须由 `init.GatewayRuntimeBootstrap` 重绑一次 RateLimiter 才真拿到 RedisClient。少了这步
-  **不报错**，只是限流永远跑在进程内计数上（多实例部署下等于没限）。S24 断言：20 并发 RPM 精确 20、TPM ==
-  账本 token 总数、窗口键 TTL 在 1..120；12 并发下并发键用完即删（无泄漏、无负数）。
-- **配置卫生**：清除硬编码本地凭据与脚手架残留名，改由环境变量注入。
-
-### B 可运营（部分完成）
-
-- ✅ **管理台**：渠道/令牌/定价/日志四页已存在（`neton-application-front-gateway`），本轮补
-  **结算待处理页**（人工裁定仍持预留的记录 + 触发恢复）、令牌限流字段、定价默认输出上限。
-- ✅ **日志分页**：补 `/gateway/log/page`（此前前端调的端点不存在）。
-- ✅ **`/v1/models` 真数据**：按令牌可路由性 + 分组 + 白名单返回，路由判定复用 RelayRouter 防漂移。
-- ✅ **端点能力路由（V007）**：渠道 `capabilities`（chat/embeddings）显式声明，`/v1/embeddings` 与 Gemini
-  `:embedContent` 只落到声明了 embeddings 的渠道；无候选时区分「暂时不可用」(503) 与「配置不变永不
-  可用」(404 model_not_found)，并把卡在哪一环（无启用/冷却/模型/分组/能力）写进日志。
-  升级默认 `chat`——确实提供向量的渠道必须补声明，宁可明确报无渠道，也不把向量请求送进 chat 上游。
-- ✅ **原生认证载体**：Bearer / `x-api-key`(Anthropic) / `x-goog-api-key` 与 `?key=`(Gemini)。
-- ✅ **未定价模型拒绝**：无定价或无法确定输出上限一律拒绝，不再免费放行。
-- ❌ **用户控制台**（netonapi-client 的 gateway 业务）：未开始——用户仍无法自助建 Key / 查用量 / 充值。
-- ❌ **支付与兑换打通**：payment/member 的充值与 gateway 额度未接通，付款不会到账。
-
-### C 可交付（已完成）
-
-- **CI**：补 gateway 模块 checkout + 单元测试；新增 Linux job 用真实 PostgreSQL service 跑可靠性 harness，
-  失败上传日志（此前只编译，21 条断言从不在 CI 运行）。
-- **Docker**：`netonapi-backend/Dockerfile`（Kotlin/Native 静态二进制，运行阶段无 JVM，非 root，带健康检查）；
-  `docker-compose.yml` 内置 PostgreSQL + Redis，迁移作为一次性服务先跑通再起网关；
-  三个密钥无默认值，缺失即拒绝启动。`DEPLOY.md` 含上线检查清单与反代注意事项。
-
-### 可靠性 harness：37 断言 / 25 场景（以 `harness/run.sh` 末行输出为准）
-
-S1 并发四项不变量、S2 dead→live、S3 断连计费+producer 拆除、S4 401/403 禁用 & 429 不禁用、
-S5 revive 保留手动禁用、S6 token 中途删除、S7 首建账户并发、S8 结算幂等+终态预留归零、
-S9 midstream partial、S10 429 cooldown、S11 worker 重放+重复 tick 幂等、S12 TTL 释放/转人工、
-S13 RPM 限流、S14 IP 白名单 + XFF 信任边界、S15 /v1/models + 原生认证、S16 用户端 app API（广场匿名可读 / 未定价不展示）、
-S17 在途改价按快照计价、S18 快照损坏转人工+预留保留、S19 坏价入口 fail-fast、
-S20 双轨计价（售价/成本分离）、S21 毛利闸门（发布期）、S22 全局加价率 / 毛利下限、
-S23 端点能力路由（embeddings 只落声明渠道，无能力 404 且零预留）、
-S24 Redis 原子限流计数（RPM/TPM 精确、窗口键 TTL、并发键无泄漏无负数）、
-S25 渠道 SSRF 写入时校验（admin API：元数据/回环/非放行端口被拒，公网字面量与域名放行）、
-S25b 请求时出站校验（直接写库的内网渠道在连接前被拒，放行的内网上游可用）。
-
-## 待办（逐条核实仍未完成的真实差距）
-
-> 已落地项不再留在这里充数：原生认证载体（S15）、IP 白名单校验（S14）、RPM/TPM/并发（S13）、
-> ttfb/idle 超时接线、渠道 Key 加密、base/proxy URL SSRF 校验、未定价模型拒绝、`sale_override`
-> 参与计费（双轨，S20–S22）、`/v1/models` 真数据（S15）、日志分页端点、fork 配置卫生（privchat 残留已清）。
-
-- Azure OpenAI 未实现（api-key 头/deployment URL/api-version），当前 azure_openai 走 OpenAiAdapter
-- 反向模型映射未执行：响应体 `model` 仍是上游名，会把上游模型身份透给客户端
-- codec 有损：thinking/cache_control/多模态/多 candidate/结构化输出等未覆盖；跨协议上游 4xx 未按入站协议重序列化
-- 扩展端点（Responses/Images/Audio/Rerank）未实现；能力枚举也只有 chat/embeddings 两值
-- 管理台 UI 缺口：多 Key 管理 / 测速 / 健康视图缺；渠道能力目前只有一个逗号分隔文本框（无逐能力勾选）
-- 3×3 = 文本聊天核心子集 baseline E2E，非完整协议兼容
-- CI 未真跑：harness 与单测都不在任何远端流水线里（三个 fork 仍是 local-path origin）
-- KSP @Logic 跳过带默认值的构造参数（gateway 的 RateLimiter.redis 已用 RuntimeBootstrap 绕过）：
-  `module-system` 的 `MessageSendLogic.redis` 同样中招，影响面未核实
+进度与待办不在本文维护，分别见：
+- 产品规范与验收标准：服务端仓 `docs/`（见 README 的文档列表）；
+- 行为验证：nanogate 仓的 `harness/run.sh`（每个场景的注释就是行为规格）与线上演练 `harness/live-e2e.py`；
+- 框架级遗留问题：见上文「存量问题」。
