@@ -4,19 +4,21 @@
 
 NetonAPI is a self-hosted LLM API gateway. One set of issued keys serves three upstream
 protocol families — OpenAI, Anthropic, Gemini — relayed in any direction, with durable
-billing, quota enforcement and channel failover. It is a rewrite of the Go-based
-[`new-api`](https://github.com/QuantumNous/new-api) on the
-[Neton](https://github.com/netonframework/neton) framework, compiled with Kotlin/Native to
-a single static executable: no JVM at runtime, no sidecar SQL files.
+billing, quota enforcement and channel failover. It is positioned as an alternative to
+the Go-based [`new-api`](https://github.com/QuantumNous/new-api) — operators coming from
+new-api find the features where they expect them — but it is an independent implementation
+on the [Neton](https://github.com/netonframework/neton) framework, not a port of new-api's
+code. It compiles with Kotlin/Native to a single static executable: no JVM at runtime, no
+sidecar SQL files.
 
-This repository is the **backend distribution**. It assembles the framework and the six
+This repository is the **backend distribution**. It assembles the framework and the seven
 canonical modules into one binary and owns the gateway-specific configuration. Product
 logic lives in the module repositories, not here.
 
 | | |
 |---|---|
 | Language | Kotlin 2.4.20 (Multiplatform) |
-| Build | Gradle 8.14.4 + KSP 2.3.10 |
+| Build | Gradle 8.14.4 + KSP 2.3.12 |
 | Runtime | Kotlin/Native static executable (`application.kexe`), no JVM |
 | Datastores | PostgreSQL (billing, ledger, channels) · Redis (optional: shared rate limits) |
 | Default port | `8800` |
@@ -36,7 +38,9 @@ so it must sit exactly two levels below the directory that holds `Neton/`:
 projects/
 ├── Neton/
 │   ├── neton/                              # framework (includeBuild)
+│   ├── neton-ai/                           # LLM protocol codecs (includeBuild)
 │   ├── geolite4k/                          # GeoIP (includeBuild)
+│   ├── neton-application-contract/         # module contracts (includeBuild)
 │   ├── neton-application-module-system/
 │   ├── neton-application-module-infra/
 │   ├── neton-application-module-account/
@@ -50,14 +54,16 @@ projects/
 
 The framework and the modules are pulled in as **source subprojects** (`include(...)` +
 `projectDir`), not as `includeBuild` — each of them keeps its own `settings.gradle.kts` and
-stays independently buildable. Only `neton` and `geolite4k` are composite builds.
+stays independently buildable. Only `neton`, `neton-ai`, `geolite4k` and
+`neton-application-contract` are composite builds.
 
-> ⚠️ **You cannot build this repo from a clean clone yet.** `neton-application-module-infra`
-> and `neton-application-module-gateway` — the module that actually implements the gateway —
-> are private at the moment. Until they are public (or the modules ship as Maven artifacts),
-> publishing this repo means "the source is readable", not "anyone can build it".
-> The Docker build additionally pins the outer directory names (`Neton/`, `NewGate/`) because
-> its `COPY` sources are literal.
+### Build prerequisites
+
+Building needs read access to every module repository listed above.
+`neton-application-module-infra` and `neton-application-module-gateway` (the gateway itself)
+are currently private, so a build from public sources alone is not possible until they are
+published (as repositories or Maven artifacts). The Docker build also expects the outer
+directory names `Neton/` and `NewGate/`, because its `COPY` sources are literal paths.
 
 ## Build
 
@@ -108,7 +114,7 @@ Route groups (see `application/config/routing.conf`):
 | `/` | gateway `sk-` token | LLM relay: `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`, Gemini `:generateContent` / `:embedContent` |
 | `/admin` | operator JWT | operator console API |
 | `/app` | member JWT (HttpOnly cookie) | self-service console API |
-| `/platform` | open | open-platform endpoints |
+| `/platform` | per endpoint | open-platform endpoints |
 
 ## Assembled modules
 
@@ -117,17 +123,18 @@ The module list has exactly one source of truth — `ksp { arg("neton.modules", 
 `migrate` subcommand, the startup precheck and `serve` all consume, so adding or dropping a
 module is a two-line change (a dependency plus an id) and cannot drift out of sync.
 
-`system` · `infra` · `member` · `payment` · `platform` · `gateway`
+`system` · `infra` · `account` · `member` · `payment` · `platform` · `gateway`
 
 ## Tests
 
 The behavioural test suite is the harness in the
 [`nanogate` repository](https://github.com/zoujiaqing/nanogate) (`harness/run.sh`): it starts
-the real gateway on `:8800` against a throwaway PostgreSQL database and an isolated
-`redis-server`, drives 25 scenarios with Python fake upstreams, and asserts 37 properties —
-billing snapshots, dual-track pricing, margin gates, capability routing, channel failover and
-cool-down, atomic rate limits, and the XFF trust boundary. It never touches a Redis instance
-it did not start.
+the real gateway against a throwaway PostgreSQL database and an isolated `redis-server`, and
+drives it scenario by scenario with Python fake upstreams — billing and settlement, pricing
+rules and margin protection, protocol conversion, channel failover and cool-down, rate
+limits, payments and top-ups, permissions, and the SSRF and XFF trust boundaries. It never
+touches a Redis instance it did not start. `harness/live-e2e.py` runs the same kind of drill
+against a deployed instance (see `docs/live-drill-spec.md`).
 
 ```bash
 cd ..          # the workspace root that holds harness/
@@ -137,6 +144,8 @@ NETONAPI_TARGET=linuxX64 bash harness/run.sh  # Linux
 
 ## Documentation
 
+- [`docs/SPEC.md`](./docs/SPEC.md) — overall backend spec: repositories and assembly, layering,
+  route groups, health checks, configuration, response envelope, pagination, migrations
 - [`docs/ENGINEERING_RULES.md`](./docs/ENGINEERING_RULES.md) — the hard rules (module
   boundaries, what to grep before changing a public symbol, migration policy)
 - [`docs/gateway-pricing-spec.md`](./docs/gateway-pricing-spec.md) — pricing rules: sale price modes, billing groups,
@@ -150,9 +159,6 @@ NETONAPI_TARGET=linuxX64 bash harness/run.sh  # Linux
 - [`docs/relay-errors-spec.md`](./docs/relay-errors-spec.md) — relay error handling: fail over on upstream account errors, no leaking internals, cross-protocol paths
 - [`docs/rbac-spec.md`](./docs/rbac-spec.md) — User/Role/Menu, permission strings, wildcards
 - [`docs/module-template-spec.md`](./docs/module-template-spec.md) — how to add a module
-- [`docs/SPEC.md`](./docs/SPEC.md) — ⚠️ inherited scaffold, **partly stale**: it still says
-  Kotlin 2.3, describes the modules as `includeBuild`, links a file that is not in this repo,
-  and names a Vue admin console that NetonAPI does not use. Trust this README and `DEPLOY.md`.
 
 ## Known gaps
 
@@ -164,7 +170,9 @@ Deliberately listed rather than hidden:
   (production) or Next dev rewrites (local). Tightening the allowlist means editing code.
 - `security.unified_token.enabled` must stay `false`: no module in this distribution binds a
   `UnifiedTokenAuthenticator`. The startup error says so explicitly.
-- The Docker/compose build path has not been executed on a real Docker host yet.
+- The Docker/compose build path has not been executed on a real Docker host yet. Health
+  checks: `GET /health` (liveness + database, used by the image's `HEALTHCHECK`) and
+  `GET /admin/system/health/ready` (database and Redis).
 - SMTP with TLS relies on the system libcurl (present on macOS and in the Debian image);
   the Windows build only supports plaintext SMTP and should use a vendor HTTP mail API.
 

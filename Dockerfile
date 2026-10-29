@@ -11,10 +11,13 @@ WORKDIR /src
 
 # 镜像内必须复刻宿主布局：settings.gradle.kts 用 `../../Neton/<repo>` 引框架与 canonical
 # 模块，所以应用要落在两层深处（/src/NewGate/netonapi-backend），依赖落在同层的 /src/Neton/ 下。
-# 下面八个仓一个都不能少——少任何一个，Gradle 在 configuration 阶段就因找不到
-# included build / projectDir 而失败（module-system、module-infra、geolite4k 曾被漏掉）。
+# 下面十一个仓一个都不能少——少任何一个，Gradle 在 configuration 阶段就因找不到
+# included build / projectDir 而失败（module-system、module-infra、geolite4k、neton-ai、
+# neton-application-contract 都曾被漏掉）。以 settings.gradle.kts 为准。
 COPY Neton/neton                             /src/Neton/neton
+COPY Neton/neton-ai                          /src/Neton/neton-ai
 COPY Neton/geolite4k                         /src/Neton/geolite4k
+COPY Neton/neton-application-contract        /src/Neton/neton-application-contract
 COPY Neton/neton-application-module-system   /src/Neton/neton-application-module-system
 COPY Neton/neton-application-module-infra    /src/Neton/neton-application-module-infra
 COPY Neton/neton-application-module-account  /src/Neton/neton-application-module-account

@@ -20,7 +20,7 @@ class HomeController {
     suspend fun health(): HealthResponse {
         return HealthResponse(
             status = "ok",
-            service = "neton-application",
+            service = "netonapi",
             version = "1.0.0"
         )
     }
