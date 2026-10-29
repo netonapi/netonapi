@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main, master]
+  # 依赖仓（框架、通用模块）更新后可在 Actions 页面手动重跑
+  workflow_dispatch:
 
 permissions:
   contents: read
