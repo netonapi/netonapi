@@ -358,6 +358,14 @@ jobs:
       - name: Ensure redis-server is available
         run: command -v redis-server >/dev/null 2>&1 || sudo apt-get install -y redis-server
 
+      # openssl-kotlin 按源码编译 OpenSSL：Linux 目标用 Kotlin/Native 自带的 LLVM 与 sysroot（不用宿主的 libc），
+      # 全新机器上这些依赖要等第一次编译 Native 才下载，而 OpenSSL 的构建排在它前面 —— 先按 openssl-kotlin README 装好。
+      - name: Bootstrap Kotlin/Native toolchain for OpenSSL
+        working-directory: Neton/openssl-kotlin
+        run: |
+          ./gradlew :openssl:downloadKotlinNativeDistribution --no-daemon -q
+          "$HOME/.konan/kotlin-native-prebuilt-linux-x86_64-2.4.20/bin/konanc" scripts/bootstrap.kt -target linux_x64 -produce library -o build/bootstrap
+
       - name: Run reliability harness
         working-directory: NewGate
         env:
