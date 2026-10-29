@@ -370,6 +370,8 @@ jobs:
         working-directory: NewGate
         env:
           NETONAPI_TARGET: linuxX64
+          # 测上线用的 release 产物（Linux 上 debug 链接会把两份 OpenSSL 重复链入，见 harness/run.sh）
+          NETONAPI_BUILD_TYPE: release
           PGUSER: netonapi
           PGPASS: netonapi
           PGHOST: localhost
