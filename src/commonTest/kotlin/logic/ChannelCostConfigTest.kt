@@ -13,7 +13,7 @@ class ChannelCostConfigTest {
     private fun input(source: String? = null, discount: String? = null, format: String? = null, group: String? = null, credit: String? = null) =
         ChannelCostLogic.CostInput(source, discount, format, null, group, credit)
 
-    private fun rejected(block: () -> Unit): String = assertFailsWith<ValidationException> { block() }.message ?: ""
+    private fun rejected(block: () -> Unit): String = assertFailsWith<ValidationException> { block() }.message
 
     @Test fun createRequiresCostSourceAndDiscount() {
         assertEquals(GatewayErrorCodes.CHANNEL_COST_SOURCE_REQUIRED, rejected { ChannelCostLogic.resolveCostConfig(input(discount = "0.6"), base, null) })
