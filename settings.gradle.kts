@@ -32,7 +32,8 @@ project(":module-payment").projectDir = file("../../Neton/neton-application-modu
 include(":module-platform")
 project(":module-platform").projectDir = file("../../Neton/neton-application-module-platform")
 include(":module-gateway")
-project(":module-gateway").projectDir = file("../../Neton/neton-application-module-gateway")
+// NetonAPI 独有的网关模块就在本仓里（其余模块是 Neton 套件的通用模块）
+project(":module-gateway").projectDir = file("module-gateway")
 
 // 应用入口
 include(":application")

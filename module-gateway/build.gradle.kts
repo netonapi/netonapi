@@ -35,9 +35,13 @@ val appleSwiftLibDir: String? by lazy {
     }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { "$it/usr/lib/swift" }
 }
 
+// 本模块住在服务端仓（netonapi/netonapi）的 module-gateway/ 下，框架与通用模块在工作区的 Neton/ 下：
+// 与 settings.gradle.kts 的 ../../Neton/<repo> 同一约定（rootDir = 服务端仓根目录）。
+val netonDir = rootDir.resolve("../../Neton")
+
 kotlin {
     listOf(macosArm64(), linuxX64(), linuxArm64(), mingwX64()).forEach { target ->
-        val coreInterop = file("$projectDir/../neton/neton-core/build/nativeInterop/${target.name}").absolutePath
+        val coreInterop = netonDir.resolve("neton/neton-core/build/nativeInterop/${target.name}").absolutePath
         target.binaries.forEach { binary ->
             binary.linkerOpts.add("-L$coreInterop")
             binary.linkerOpts.add("-lenv")
@@ -74,7 +78,7 @@ kotlin {
 }
 
 // 业务错误 message 守卫（共享测试夹具，不进生产二进制）：见 ErrorMessageGuardTest。
-kotlin.sourceSets.named("macosArm64Test") { kotlin.srcDir("../neton-application-contract/src/testFixtures/kotlin") }
+kotlin.sourceSets.named("macosArm64Test") { kotlin.srcDir(netonDir.resolve("neton-application-contract/src/testFixtures/kotlin")) }
 tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
     environment("NETON_MODULE_DIR", projectDir.absolutePath)
 }
@@ -128,4 +132,4 @@ val ngMigrationDialect = when (val d = ((project.findProperty("neton.database.dr
 extra["neton.migration.moduleId"] = "gateway"
 extra["neton.migration.dialects"] = listOf(ngMigrationDialect)
 extra["neton.migration.sqlSourceDir"] = file("sql")
-apply(from = "../neton/scripts/embed-migration-resources.gradle.kts")
+apply(from = netonDir.resolve("neton/scripts/embed-migration-resources.gradle.kts"))

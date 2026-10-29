@@ -28,5 +28,6 @@ paths = [
 description = "gateway test keys"
 targetRules = ["private-key", "generic-api-key"]
 paths = [
-  '''^src/commonTest/kotlin/logic/(GuardedUpstreamTest|TokenLogicTest)\.kt$''',
+  # module-gateway 并入本仓前的历史提交里，路径没有 module-gateway/ 前缀
+  '''^(module-gateway/)?src/commonTest/kotlin/logic/(GuardedUpstreamTest|TokenLogicTest)\.kt$''',
 ]

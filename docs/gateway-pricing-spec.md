@@ -2,9 +2,9 @@
 
 > 标识：NETONAPI-GATEWAY-PRICING
 > 日期：2026-10-20
-> 状态：已在 `neton-application-module-gateway` 与 `neton-application-front-gateway` 实现；harness S20–S22、S72、S88–S92 覆盖。
+> 状态：已在服务端 `module-gateway` 与管理后台 `packages/front-gateway` 实现；harness S20–S22、S72、S88–S92 覆盖。
 > §4.3 定价规则与用户价目表、§4.1 计费组按 Key 决定均已于 2026-10-28 实现（harness S93）。
-> 归属：NetonAPI。实现在 `neton-application-module-gateway`（计价、结算、定价管理接口）与 `neton-application-front-gateway`（模型定价、概览、计价分组、令牌页面）。
+> 归属：NetonAPI。实现在服务端 `module-gateway`（计价、结算、定价管理接口）与管理后台 `packages/front-gateway`（模型定价、概览、计价分组、令牌页面）。
 
 ## 1. 目标与原则
 

@@ -67,10 +67,10 @@ projects/
 │   ├── neton-application-module-account/
 │   ├── neton-application-module-member/
 │   ├── neton-application-module-payment/
-│   ├── neton-application-module-platform/
-│   └── neton-application-module-gateway/   # the NetonAPI core
+│   └── neton-application-module-platform/
 └── <workspace>/                            # any name for Gradle…
     └── netonapi-backend/                   # ← this repository
+        └── module-gateway/                 # the NetonAPI gateway module (lives here, not in Neton/)
 ```
 
 The framework and the modules are pulled in as **source subprojects** (`include(...)` +
@@ -80,10 +80,9 @@ stays independently buildable. Only `neton`, `neton-ai`, `geolite4k` and
 
 ### Build prerequisites
 
-Building needs read access to every module repository listed above.
-`neton-application-module-infra` and `neton-application-module-gateway` (the gateway itself)
-are currently private, so a build from public sources alone is not possible until they are
-published (as repositories or Maven artifacts). The Docker build also expects the outer
+Building needs read access to every repository listed above. `neton-application-module-infra`
+is currently private, so a build from public sources alone is not possible until it is
+published. The Docker build also expects the outer
 directory names `Neton/` and `NewGate/`, because its `COPY` sources are literal paths.
 
 ## Build

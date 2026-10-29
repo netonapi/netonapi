@@ -22,15 +22,16 @@ env:
 # ── checkout 布局是硬约束，不是风格问题 ──────────────────────────────────────────
 # 本仓 settings.gradle.kts 用相对路径装配 canonical 源码：
 #   includeBuild("../../Neton/neton")
-#   project(":module-gateway").projectDir = file("../../Neton/neton-application-module-gateway")
+#   project(":module-system").projectDir = file("../../Neton/neton-application-module-system")
+# （module-gateway 是 NetonAPI 独有的模块，就在本仓 module-gateway/ 下，不需要另外 checkout）
 # 即「本仓必须在 workspace 下两层，canonical 仓必须在 workspace 的 Neton/ 下」，差一层就解析不到：
 #   dist/netonapi-backend    ← 本仓（compile job）
 #   NewGate/netonapi-backend ← 本仓（harness job；外层 NewGate = zoujiaqing/nanogate，harness 住在那儿）
-#   Neton/*         ← 框架 + neton-ai + geolite4k + application-contract + 七个模块，
+#   Neton/*         ← 框架 + neton-ai + geolite4k + application-contract + 六个通用模块，
 #                     以及 netonstream 协议栈源码（io / http / tls / websocket / openssl-kotlin）：
 #                     框架 gradle.properties 提交的是 netonstream.local=true，按兄弟目录源码装配
 # 少 checkout 任何一个模块都会在 Gradle **配置期**直接失败（include 指向的目录不存在）。
-# 七个模块都是 include(...) 子项目而非 composite build，KSP 随正常任务图生成，
+# 各模块都是 include(...) 子项目而非 composite build，KSP 随正常任务图生成，
 # 因此不需要（也不该有）额外的 KSP 预生成步骤。
 
 jobs:
@@ -151,13 +152,6 @@ jobs:
           token: ${{ env.NETON_CI_TOKEN }}
           path: Neton/neton-application-module-platform
 
-      - name: Checkout module-gateway
-        uses: actions/checkout@v4
-        with:
-          repository: neton-application/neton-application-module-gateway
-          token: ${{ env.NETON_CI_TOKEN }}
-          path: Neton/neton-application-module-gateway
-
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -192,7 +186,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-results
-          path: Neton/neton-application-module-*/build/test-results/**/*.xml
+          path: |
+            Neton/neton-application-module-*/build/test-results/**/*.xml
+            dist/netonapi-backend/module-gateway/build/test-results/**/*.xml
           retention-days: 7
           if-no-files-found: ignore
 
@@ -336,13 +332,6 @@ jobs:
           repository: neton-application/neton-application-module-platform
           token: ${{ env.NETON_CI_TOKEN }}
           path: Neton/neton-application-module-platform
-
-      - name: Checkout module-gateway
-        uses: actions/checkout@v4
-        with:
-          repository: neton-application/neton-application-module-gateway
-          token: ${{ env.NETON_CI_TOKEN }}
-          path: Neton/neton-application-module-gateway
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

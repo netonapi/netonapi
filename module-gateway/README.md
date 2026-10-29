@@ -1,4 +1,4 @@
-# neton-application-module-gateway
+# module-gateway
 
 NetonAPI 的网关核心模块：LLM API 中转、协议转换、路由与容错、账务与结算、定价、用量、运营工具。
 moduleId `gateway`；路由组 `gateway`（`/v1`、`/v1beta`、`/health`、`/metrics`）、`app`（用户自助）、`admin`（管理台）。
@@ -38,7 +38,7 @@ NetonAPI 是唯一装配 gateway 的发行版（canonical 脚手架装的是 `cs
 ## 测试
 
 ```bash
-./gradlew :module-gateway:macosArm64Test -Pneton.database.driver=postgres   # 从 NewGate/netonapi-backend 目录
+./gradlew :module-gateway:macosArm64Test -Pneton.database.driver=postgres -Pnetonstream.local.openssl=true   # 在服务端仓根目录执行
 ```
 
 单测覆盖编解码器（Anthropic / OpenAI / Gemini 三向）、SigV4、AWS event-stream 解帧、multipart、计价与预留、路由、限流。

@@ -64,10 +64,10 @@ projects/
 │   ├── neton-application-module-account/
 │   ├── neton-application-module-member/
 │   ├── neton-application-module-payment/
-│   ├── neton-application-module-platform/
-│   └── neton-application-module-gateway/   # NetonAPI 的核心模块
+│   └── neton-application-module-platform/
 └── <workspace>/                            # Gradle 不关心这层叫什么…
     └── netonapi-backend/                   # ← 本仓
+        └── module-gateway/                 # NetonAPI 的网关模块（就在本仓，不在 Neton/ 下）
 ```
 
 框架与模块是以**源码子项目**方式引入的（`include(...)` + `projectDir`），不是 `includeBuild`——
@@ -76,9 +76,7 @@ projects/
 
 ### 构建前提
 
-构建需要上面每个模块仓的读权限。`neton-application-module-infra` 与
-`neton-application-module-gateway`（网关本体）目前是私有仓，在它们公开（或以 Maven 制品发布）之前，
-只凭公开源码无法构建。Docker 构建还要求外层目录名是 `Neton/` 与 `NewGate/`，因为 `COPY` 源是字面路径。
+构建需要上面每个仓的读权限。`neton-application-module-infra` 目前是私有仓，在它公开之前，只凭公开源码无法构建。Docker 构建还要求外层目录名是 `Neton/` 与 `NewGate/`，因为 `COPY` 源是字面路径。
 
 ## 构建
 

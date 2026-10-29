@@ -52,7 +52,7 @@ NetonAPI 是自托管的 LLM API 中转站，使用 Kotlin/Native，基于 [Neto
 | `neton-application-module-member` | 会员：分组、等级等 | 源码子项目 |
 | `neton-application-module-payment` | 支付：通道、订单、钱包、充值 | 源码子项目 |
 | `neton-application-module-platform` | 开放平台 | 源码子项目 |
-| `neton-application-module-gateway` | **NetonAPI 核心**：渠道、模型目录、计价、转发、结算 | 源码子项目 |
+| 本仓 `module-gateway/` | **NetonAPI 核心**：渠道、模型目录、计价、转发、结算（NetonAPI 独有，随服务端仓维护） | 源码子项目 |
 
 源码子项目以 `include(...)` + `projectDir` 引入，各模块仓保留自己的 `settings.gradle.kts`，可独立构建与测试。
 `settings.gradle.kts` 写的是 `../../Neton/<repo>`，所以本仓必须落在持有 `Neton/` 的目录的两层深处（见 README）。
