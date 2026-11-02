@@ -48,6 +48,8 @@ data class PricebookGroupVO(
     val groupName: String,
     val groupRatio: String,
     val rows: List<PricebookRowVO>,
+    /** 这个用户有几把 Key 绑在这个分组（只有管理端给） */
+    val keys: Int = 0,
 )
 
 /** 用户价目表的视图（管理台「用户定价」、控制台「模型与价格」共用）。 */

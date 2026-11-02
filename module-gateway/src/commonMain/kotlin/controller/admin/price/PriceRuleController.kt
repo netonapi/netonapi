@@ -158,12 +158,18 @@ class PriceRuleController(private val pricingCheckLogic: PricingCheckLogic) {
             }
             .sortedByDescending { it.updatedAt ?: 0 }
 
-    /** 某个用户在他各计费分组下的价目表（含最差毛利）。 */
+    /**
+     * 某个用户的价目表（含最差毛利）：default 分组（他随时可以建一把不绑分组的 Key）加上他的 Key 所在的各分组，
+     * 每个分组带他绑在上面的 Key 数。
+     */
     @Get("/pricebook")
     @Permission("gateway:price:query")
     suspend fun pricebook(@Query userId: Long): List<PricebookGroupVO> {
         if (userId <= 0) rejectField("userId", GatewayErrorCodes.MEMBER_NOT_CHARGEABLE)
-        return PricebookView.build(userId, PricebookView.groupsOf(userId), pricingCheckLogic)
+        val keys = table.GatewayTokenTable.query { where { model.GatewayToken::userId eq userId } }.list()
+            .groupingBy { it.groupOverride?.takeIf { g -> g.isNotBlank() } ?: logic.BillingGroupResolver.DEFAULT_CODE }.eachCount()
+        val codes = (listOf(logic.BillingGroupResolver.DEFAULT_CODE) + keys.keys).distinct()
+        return PricebookView.build(userId, codes, pricingCheckLogic).map { it.copy(keys = keys[it.groupCode] ?: 0) }
     }
 
     private fun invalidate(subjectType: String, subjectId: String) {
