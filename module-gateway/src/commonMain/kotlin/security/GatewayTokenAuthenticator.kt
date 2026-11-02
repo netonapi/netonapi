@@ -1,7 +1,9 @@
 package security
 
+import kotlinx.serialization.json.JsonPrimitive
 import logic.TokenLogic
 import neton.core.component.NetonContext
+import neton.core.http.RawResponseException
 import neton.core.interfaces.Authenticator
 import neton.core.interfaces.Identity
 import neton.core.interfaces.RequestContext
@@ -12,6 +14,9 @@ import neton.core.interfaces.RequestContext
  * 支持 `Authorization: Bearer sk-`（OpenAI）、`x-api-key`（Anthropic）、
  * `x-goog-api-key` 与 `?key=`（Gemini）——官方 SDK 只会按各自协议发认证头，
  * 只认 Bearer 会逼用户改配置甚至根本接不进来。
+ *
+ * 认证失败按入站协议回各家官方格式的 401（见 [unauthenticatedResponse]），而不是框架信封：
+ * 官方 SDK 只认自家的错误结构，读不懂 `{code,message}`。
  *
  * TokenLogic 惰性解析：security 配置阶段早于 @Logic 装配，首次请求时再取。
  */
@@ -40,7 +45,7 @@ class GatewayTokenAuthenticator(private val ctx: NetonContext) : Authenticator {
         (context.headers[name] ?: context.headers[name.lowercase()])?.takeIf { it.isNotBlank() }
 
     private fun queryKey(context: RequestContext): String? {
-        val q = context.path.substringAfter('?', "")
+        val q = context.query
         if (q.isEmpty()) return null
         return q.split('&')
             .firstOrNull { it.startsWith("key=") }
@@ -48,8 +53,23 @@ class GatewayTokenAuthenticator(private val ctx: NetonContext) : Authenticator {
             ?.takeIf { it.isNotBlank() }
     }
 
+    override fun unauthenticatedResponse(context: RequestContext): RawResponseException {
+        val message = JsonPrimitive(if (extractKey(context) == null) MISSING_KEY else INVALID_KEY).toString()
+        val body = when {
+            context.path.startsWith("/v1beta/") ->
+                """{"error":{"code":401,"message":$message,"status":"UNAUTHENTICATED"}}"""
+            context.path.startsWith("/v1/messages") ->
+                """{"type":"error","error":{"type":"authentication_error","message":$message}}"""
+            else ->
+                """{"error":{"message":$message,"type":"invalid_request_error","param":null,"code":"invalid_api_key"}}"""
+        }
+        return RawResponseException(401, body)
+    }
+
     private companion object {
         const val KEY_PREFIX = "sk-"
+        const val MISSING_KEY = "missing API key"
+        const val INVALID_KEY = "invalid API key"
     }
 }
 
