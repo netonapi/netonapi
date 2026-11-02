@@ -130,9 +130,27 @@ object PricingCalc {
             tokenCost(usage.completionTokens, parseMicro(price.outputPrice))
     }
 
-    /** 收入：售价 × 分组倍率。 */
+    /**
+     * 实付单价：售价各项 × 倍率（分组倍率 / 官方价折扣），截断到 μUSD/1M 精度。
+     * 与价目表展示（[PriceBook.effective]）是同一个数——「看到的单价就是扣费用的单价」。
+     */
+    fun scaledPrice(price: ModelPrice, ratio: String): ModelPrice {
+        val r = parseRatio(requireRatio(ratio)).toLong()
+        if (r == 10_000L) return price
+        fun mul(v: String) = microToDecimal(mulExact(parseMicro(v), r) / 10_000)
+        return price.copy(
+            inputPrice = mul(price.inputPrice), outputPrice = mul(price.outputPrice),
+            cacheReadPrice = mul(price.cacheReadPrice), cacheWritePrice = mul(price.cacheWritePrice),
+            perRequestPrice = price.perRequestPrice?.let { mulExact(it, r) / 10_000 },
+        )
+    }
+
+    /**
+     * 收入：按实付单价（[scaledPrice]）逐项计价、逐项向上取整。
+     * 先乘倍率再取整：价目表上的单价 × tokens 就是账单上的数，客户可以逐笔对得上。
+     */
     fun charge(usage: Usage, price: ModelPrice, groupRatio: String): Long =
-        mulExact(rawAmount(usage, price), parseRatio(groupRatio).toLong()) / 10_000
+        rawAmount(usage, scaledPrice(price, groupRatio))
 
     /** 成本：官方价 × 渠道折扣。 */
     fun cost(usage: Usage, price: ModelPrice, costDiscount: String): Long =

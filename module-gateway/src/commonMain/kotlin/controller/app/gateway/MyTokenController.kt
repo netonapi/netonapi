@@ -92,7 +92,7 @@ class MyTokenController(private val tokenLogic: TokenLogic) {
     suspend fun list(identity: Identity): List<MyTokenVO> =
         tokenLogic.listByUser(identity.id.toLong()).map { MyTokenVO.from(it) }
 
-    /** 建 / 改 Key 时可选的分组：default + 「用户可选」的 + 运营单独开给他的。 */
+    /** 建 / 改 Key 时可选的分组：default + 「用户可选」的 + 他的会员组映射的。 */
     @Get("/groups")
     suspend fun groups(identity: Identity): List<MyGroupOptionVO> =
         logic.BillingGroupResolver.options(identity.id.toLong()).let { groups ->

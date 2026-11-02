@@ -29,18 +29,19 @@ object ReserveCalc {
      * @param inputUpperBytes 输入上界（字节）；null = 用 requestBody 的字节数
      * @param noOutput 没有输出侧 token 的端点（音频）：不要求输出上限，只按输入预留
      */
-    fun compute(requestBody: String, price: ModelPrice?, groupRatio: String, inputUpperBytes: Int? = null, noOutput: Boolean = false): Result {
-        if (price == null) return Result.NoPrice
+    fun compute(requestBody: String, raw: ModelPrice?, groupRatio: String, inputUpperBytes: Int? = null, noOutput: Boolean = false): Result {
+        if (raw == null) return Result.NoPrice
+        // 与扣费同一个实付单价（PricingCalc.charge）：预留是它的上界，口径不同就可能扣得比预留多
+        val price = PricingCalc.scaledPrice(raw, groupRatio)
 
         // 按次计价：直接是上界
         price.perRequestPrice?.let { per ->
-            val amount = mulRatio(per, groupRatio)
-            return Result.Ok(amount, estimated = false)
+            return Result.Ok(per, estimated = false)
         }
 
         if (noOutput) {
             val inputUpper = inputUpperBytes ?: utf8Length(requestBody)
-            return Result.Ok(mulRatio(PricingCalc.tokenCost(inputUpper, PricingCalc.parseMicro(price.inputPrice)), groupRatio), estimated = true)
+            return Result.Ok(PricingCalc.tokenCost(inputUpper, PricingCalc.parseMicro(price.inputPrice)), estimated = true)
         }
 
         val outputCap = outputCapOf(requestBody) ?: price.defaultMaxOutputTokens ?: return Result.NoOutputCap
@@ -49,9 +50,9 @@ object ReserveCalc {
         // 输入上界：无 tokenizer → 用 UTF-8 字节数（1 token 通常 ≥1 字节，故字节数是安全上界）
         val inputUpper = utf8Length(requestBody)
         // 保守：全部输入按最贵的 fresh input 价计（不假设有 cache 命中折扣）
-        val raw = PricingCalc.tokenCost(inputUpper, PricingCalc.parseMicro(price.inputPrice)) +
+        val cost = PricingCalc.tokenCost(inputUpper, PricingCalc.parseMicro(price.inputPrice)) +
             PricingCalc.tokenCost(outputCap, PricingCalc.parseMicro(price.outputPrice))
-        return Result.Ok(mulRatio(raw, groupRatio), estimated = true)
+        return Result.Ok(cost, estimated = true)
     }
 
     /** UTF-8 字节数：只算不拷（请求体可能几十 KB，每个请求都为了数个数而复制一份不值）。 */
@@ -68,14 +69,6 @@ object ReserveCalc {
             i++
         }
         return n
-    }
-
-    private fun mulRatio(amount: Long, ratio: String): Long {
-        if (amount == 0L) return 0
-        val r = PricingCalc.parseRatio(ratio).toLong()
-        val prod = amount * r
-        require(prod / amount == r) { "reserve overflow: $amount * $r" }
-        return prod / 10_000
     }
 
     /** 三协议的输出上限字段：OpenAI max_tokens / max_completion_tokens、Anthropic max_tokens、Gemini generationConfig.maxOutputTokens。 */

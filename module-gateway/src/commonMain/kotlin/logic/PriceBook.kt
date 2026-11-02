@@ -200,15 +200,8 @@ object PriceBook {
         else -> error("unknown pricing rule mode ${rule.mode}")
     }
 
-    /** 实付单价（展示用）：售价轨各项 × 倍率，十进制串。 */
-    fun effective(q: Quote): ModelPrice {
-        fun mul(v: String) = PricingCalc.microToDecimal(SalePricing.scaleMicro(PricingCalc.parseMicro(v), q.ratio))
-        return q.sale.copy(
-            inputPrice = mul(q.sale.inputPrice), outputPrice = mul(q.sale.outputPrice),
-            cacheReadPrice = mul(q.sale.cacheReadPrice), cacheWritePrice = mul(q.sale.cacheWritePrice),
-            perRequestPrice = q.sale.perRequestPrice?.let { SalePricing.scaleMicro(it, q.ratio) },
-        )
-    }
+    /** 实付单价：售价轨各项 × 倍率。与扣费（[PricingCalc.charge]）用同一个函数，展示的单价就是扣费的单价。 */
+    fun effective(q: Quote): ModelPrice = PricingCalc.scaledPrice(q.sale, q.ratio)
 
     /**
      * 相当于官方价的折扣（展示用，万分位）：输出价（没有输出价时用输入价；按次计价用按次价）的实付 / 官方。

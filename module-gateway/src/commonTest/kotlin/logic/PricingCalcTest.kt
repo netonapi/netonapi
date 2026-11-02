@@ -38,6 +38,18 @@ class PricingCalcTest {
         assertEquals(6000L, PricingCalc.charge(usage, price, groupRatio = "0.8"))
     }
 
+    /** 先乘倍率再逐项取整：账单 = Σ tokens × 价目表上的实付单价（向上取整），与展示一致。 */
+    @Test
+    fun chargeUsesDisplayedUnitPrice() {
+        val price = model.ModelPrice(model = "gpt-4o-mini", inputPrice = "0.15", outputPrice = "0.6")
+        // 实付单价 0.105 / 0.42：ceil(12×0.105)=2 + ceil(32×0.42)=14 = 16（旧口径先取整再乘倍率得 15）
+        val scaled = PricingCalc.scaledPrice(price, "0.7")
+        assertEquals("0.105", scaled.inputPrice)
+        assertEquals("0.42", scaled.outputPrice)
+        assertEquals(16L, PricingCalc.charge(Usage(promptTokens = 12, completionTokens = 32), price, "0.7"))
+        assertEquals(price, PricingCalc.scaledPrice(price, "1"))
+    }
+
     @Test
     fun costUsesChannelDiscount() {
         val price = model.ModelPrice(model = "gpt-test", inputPrice = "2.5", outputPrice = "10.0")
