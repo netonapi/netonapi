@@ -139,7 +139,7 @@
   与成本（上游模型官方价 × 渠道折扣），每个模型给出最差组合与 LOSS / THIN / OK / UNSERVED。
 - `GET /price/calibrate/preview`、`POST /price/calibrate/apply`（`PriceCalibrationLogic`）：价源格式 `gateway.pricing.source_format`，
   地址 `gateway.pricing.source_url`；先精确匹配模型名，再按去掉厂商前缀的名字匹配；价源没给的字段保留现值；应用时重新拉价源，不信前端回传。
-- 概览新增按分组收入/成本、渠道收入，以及统计期内 `cost > charged` 的请求数与亏损额。令牌可经 `PUT /token/update-group` 设专属分组（须是存在的分组）。
+- 概览新增按分组收入/成本、渠道收入，以及统计期内 `cost > charged` 的请求数与亏损额。令牌可经 `PUT /token/update-group` 由运营指定分组（须是存在的分组）。
 - harness：S88 体检与单模型加价率、S89 校准、S90 利润看板与令牌分组。
 - 2026-10-22：分档价格（`tiers`，`PricingTiers`，V019）按总输入 token 选档；默认价源 basellm（`BillingExprParser`）与 models.dev；
   定时任务只检查不改价（`gateway_price_sync_runs`，`/metrics` 的 `netonapi_price_pending_changes`）；渠道实际成本（V020：`cost_source`、

@@ -270,10 +270,10 @@ fun main(args: Array<String>) {
                 MemberProfileTable.oneWhere { model.MemberProfile::userId eq userId }?.groupId
         })
 
-        // ====== 会员名录（module-gateway 写用户级计费例外时校验 userId）======
+        // ====== 会员名录（module-gateway 给用户设约定价时校验 userId）======
         // 同一个分工：gateway 不认识 member，判据由装配层给。没有它，管理端把 10001 打成
-        // 100001 会得到 200，例外静静躺在 gateway_group_overrides 里，客户仍按 default 组计价 ——
-        // 谈判价没生效而**双方都不报错**（客户按标准价付了钱，运营以为给了折扣）。
+        // 100001 会得到 200，规则静静躺在 gateway_price_rules 里，客户仍按标准价计费 ——
+        // 协议价没生效而**双方都不报错**（客户按标准价付了钱，运营以为给了折扣）。
         //
         // 判据是 `status == NORMAL`，不是 `AccountTable.get(id) != null`：account 的自助注销
         // （AccountAuthLogic.deleteOwnAccount）只把 status 置 DELETED、**不动 deleted 列** ——

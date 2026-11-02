@@ -25,7 +25,7 @@
 - 模型与定价：上架 / 价格库、服务上游（[model-catalog-design.md](model-catalog-design.md)）。
 - 上游渠道：新建时可直接填 Key；「拉取模型」只记录上游支持的模型。
 - API 令牌：监管，不能建 Key（[api-key-spec.md](api-key-spec.md)）。
-- 计价分组 / 用户专属分组（[key-billing-group-design.md](key-billing-group-design.md)）。
+- 计价分组 / 运营指定 Key 分组（[key-billing-group-design.md](key-billing-group-design.md)）。
 - 用量日志 → 手动充值与撤回；支付订单 → 同步支付状态（[recharge-spec.md](recharge-spec.md)）。
 
 ## 4. 未纳入本期

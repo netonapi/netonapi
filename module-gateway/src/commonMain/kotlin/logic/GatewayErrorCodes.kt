@@ -103,21 +103,16 @@ object GatewayErrorCodes {
     const val GROUP_CODE_ALREADY_EXISTS = "GROUP_CODE_ALREADY_EXISTS"
     /** code 创建后不可改。 */
     const val GROUP_CODE_IMMUTABLE = "GROUP_CODE_IMMUTABLE"
-    /** 引用的计费组不存在或已删除（写例外时）。 */
+    /** 引用的计费组不存在或已删除。 */
     const val GROUP_CODE_UNKNOWN = "GROUP_CODE_UNKNOWN"
     /** 仍有令牌把该组用作分组覆盖。 */
     const val GROUP_IN_USE_BY_TOKEN = "GROUP_IN_USE_BY_TOKEN"
-    /** 仍有用户级例外指向该组。 */
-    const val GROUP_IN_USE_BY_OVERRIDE = "GROUP_IN_USE_BY_OVERRIDE"
     /** 仍有渠道的分组清单里列着该组。 */
     const val GROUP_IN_USE_BY_CHANNEL = "GROUP_IN_USE_BY_CHANNEL"
     /** 会员组已映射到另一个计费组。 */
     const val MEMBER_GROUP_ALREADY_MAPPED = "MEMBER_GROUP_ALREADY_MAPPED"
 
-    // ── 用户级计费例外 ──
-    const val GROUP_OVERRIDE_NOT_FOUND = "GROUP_OVERRIDE_NOT_FOUND"
-    /** 该用户已有一条例外，应改用更新。 */
-    const val GROUP_OVERRIDE_ALREADY_EXISTS = "GROUP_OVERRIDE_ALREADY_EXISTS"
+    // ── 用户 ID 校验（用户约定价）──
     const val USER_ID_INVALID = "USER_ID_INVALID"
     /** userId 不是可计费会员（id 写错，或会员已停用 / 注销）。 */
     const val MEMBER_NOT_CHARGEABLE = "MEMBER_NOT_CHARGEABLE"

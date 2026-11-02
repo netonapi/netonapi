@@ -71,6 +71,15 @@ data class PriceRulePreviewVO(
     val groups: List<String> = emptyList(),
 )
 
+/** 「用户定价」列表的一行：有约定价的用户。 */
+@Serializable
+data class PriceRuleUserVO(
+    val userId: Long,
+    /** 约定了几个模型（含「开放」） */
+    val models: Int,
+    val updatedAt: Long? = null,
+)
+
 const val STATUS_OK = "OK"
 const val STATUS_THIN = "THIN"
 const val STATUS_LOSS = "LOSS"
@@ -137,6 +146,17 @@ class PriceRuleController(private val pricingCheckLogic: PricingCheckLogic) {
         logic.PriceHistoryLogic.recordRaw("rule_delete", removed.model, PriceRuleLogic.snapshot(removed), null, identity.id.toLongOrNull())
         invalidate(type, subjectId.trim())
     }
+
+    /** 有约定价的用户（「用户定价」页的列表），最近修改的在前。 */
+    @Get("/users")
+    @Permission("gateway:price:query")
+    suspend fun users(): List<PriceRuleUserVO> =
+        logic.PriceRuleLogic.listSubjects(PriceBook.SUBJECT_USER)
+            .mapNotNull { (subject, rules) ->
+                val uid = subject.toLongOrNull() ?: return@mapNotNull null
+                PriceRuleUserVO(uid, rules.size, rules.mapNotNull { it.updatedAt }.maxOrNull())
+            }
+            .sortedByDescending { it.updatedAt ?: 0 }
 
     /** 某个用户在他各计费分组下的价目表（含最差毛利）。 */
     @Get("/pricebook")

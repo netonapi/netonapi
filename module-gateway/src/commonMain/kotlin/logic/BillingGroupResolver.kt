@@ -3,10 +3,8 @@ package logic
 import kotlinx.coroutines.CancellationException
 import model.GatewayGroup
 import model.GatewayToken
-import model.GroupOverride
 import neton.database.dsl.*
 import table.GatewayGroupTable
-import table.GroupOverrideTable
 
 /**
  * 会员分组 → 计费组的 SPI。
@@ -72,7 +70,8 @@ sealed interface GroupResolution {
  *  - 用户自己选的，每次调用都复核**此刻**仍对这个用户开放（[options]）：运营收回专属分组、
  *    关掉「用户可选」后立即 403，而不是继续按当初选到的价格计费。
  *
- * 用户级例外（gateway_group_overrides）与会员组映射不再直接决定计价，只决定「这个用户还能选哪些分组」。
+ * 会员组映射不再直接决定计价，只决定「这个用户还能选哪些分组」。给单个用户的特价用定价规则（用户 × 模型），
+ * 专线 / 特价分组由运营直接指定到 Key 上。
  * 每一处引用都必须对应一行**活着**的 gateway_groups：悬空即拒绝（500），不回落到 default。
  */
 object BillingGroupResolver {
@@ -111,8 +110,7 @@ object BillingGroupResolver {
     }
 
     /**
-     * 这个用户建 / 改 Key 时可选的分组：default + 运营设为「用户可选」的 + 运营单独给他开的（用户例外）
-     * + 他的会员组映射的（开了会员组计费时）。会员系统解析失败时抛出，调用方按 5xx 处理。
+     * 这个用户建 / 改 Key 时可选的分组：default + 运营设为「用户可选」的 + 他的会员组映射的（开了会员组计费时）。会员系统解析失败时抛出，调用方按 5xx 处理。
      */
     suspend fun options(userId: Long): List<GatewayGroup> {
         val granted = when (val g = grantedCodes(userId)) {
@@ -129,10 +127,9 @@ object BillingGroupResolver {
         data class Failed(val message: String) : Granted
     }
 
-    /** 单独开给这个用户的分组：用户例外 + 会员组映射。 */
+    /** 单独开给这个用户的分组：他的会员组映射的。 */
     private suspend fun grantedCodes(userId: Long): Granted {
         val codes = mutableSetOf<String>()
-        GroupOverrideTable.oneWhere { GroupOverride::userId eq userId }?.let { codes += it.groupCode }
         val port = memberPort
         if (port != null) {
             val memberGroupId = try {

@@ -148,7 +148,6 @@ system:user:delete
 system:user:update-password  # 业务动作，复合词用连字符
 pay:wallet-recharge-package:query
 platform:charge-record:delete
-gateway:group-override:query
 ```
 
 ### 3.3 禁止形式

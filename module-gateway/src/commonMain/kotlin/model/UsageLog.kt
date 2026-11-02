@@ -25,9 +25,8 @@ data class UsageLog(
      * 计费归因（V007）：[charged] 是按哪个组的倍率算出来的、那个组是哪一层给的
      * （[logic.GroupSource] 的名字：TOKEN_OVERRIDE（运营指定）/ TOKEN_SELECTED（用户自选）/ DEFAULT；历史行可能还有 USER_OVERRIDE / MEMBER_GROUP）。
      *
-     * 没有这两列时「收了多少」查得出而「为什么是这个价」查不出：倍率相同的四层含义完全不同
-     * （令牌口子 / 大客户谈判价 / 会员套餐 / 标准价），而 gateway_group_overrides 是硬删，
-     * 撤销之后连「这位客户曾经谈过什么价」都无从对证。
+     * 没有这两列时「收了多少」查得出而「为什么是这个价」查不出：倍率相同的几层含义完全不同
+     * （运营指定 / 用户自选 / 标准价），而 Key 的分组可以随时改，改完之后无从对证当时按哪个组计的价。
      *
      * null = 这一行写在归因落库之前，语义与取舍见 [Settlement.groupCode]。
      */

@@ -13,6 +13,10 @@ object PriceRuleLogic {
             orderBy(PriceRule::model.asc())
         }.list()
 
+    /** 某类主体的全部规则，按主体分组（规则是几十到几百行量级）。 */
+    suspend fun listSubjects(subjectType: String): Map<String, List<PriceRule>> =
+        PriceRuleTable.query { where { PriceRule::subjectType eq subjectType } }.list().groupBy { it.subjectId }
+
     suspend fun find(subjectType: String, subjectId: String, model: String): PriceRule? =
         PriceRuleTable.oneWhere {
             and(PriceRule::subjectType eq subjectType, PriceRule::subjectId eq subjectId, PriceRule::model eq model)
