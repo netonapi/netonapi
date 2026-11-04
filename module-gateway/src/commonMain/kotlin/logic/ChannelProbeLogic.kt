@@ -78,16 +78,26 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
         return channels.size
     }
 
+    /**
+     * 没指定模型时测哪个：第一个普通对话模型。推理模型（gpt-5 / o 系列 / -thinking 等）在极小的输出额度下答不完，
+     * 上游会回 400（「max_tokens or model output limit was reached」），把健康的渠道误报成失败；向量、图像、语音、
+     * 重排模型根本不走 chat。都没有时退回第一个。
+     */
+    fun pickProbeModel(models: List<String>): String? {
+        val skip = Regex("""^(gpt-5|o\d|deepseek-r)|thinking|reason|embed|rerank|tts|image|audio|whisper|dall-e|sora|video""", RegexOption.IGNORE_CASE)
+        return models.firstOrNull { !skip.containsMatchIn(it) } ?: models.firstOrNull()
+    }
+
     suspend fun probe(channel: Channel, requestedModel: String?): ChannelProbeResult {
         val model = requestedModel?.trim()?.takeIf { it.isNotEmpty() }
-            ?: channel.models.split(',').map { it.trim() }.firstOrNull { it.isNotEmpty() }
+            ?: pickProbeModel(channel.models.split(',').map { it.trim() }.filter { it.isNotEmpty() })
             ?: rejectField("model", GatewayErrorCodes.CHANNEL_MODELS_EMPTY)
         val upstream = RelayEngine.adapterForChannel(channel.type)
             ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, GatewayErrorCodes.CHANNEL_TYPE_UNKNOWN)
         val key = channelLogic.pickKey(channel.id)
             ?: throw neton.core.http.HttpException(neton.core.http.NetonErrorCode.INVALID_PARAMS, GatewayErrorCodes.CHANNEL_NO_AVAILABLE_KEY)
 
-        val hub = """{"model":${kotlinx.serialization.json.JsonPrimitive(model)},"messages":[{"role":"user","content":"ping"}],"max_tokens":1}"""
+        val hub = """{"model":${kotlinx.serialization.json.JsonPrimitive(model)},"messages":[{"role":"user","content":"ping"}],"max_tokens":16}"""
         val mapped = RequestRewriter.rewrite(hub, channel, injectStreamOptions = false)
         val body = if (upstream.id == "openai") mapped.body else ProtocolCodecs.requestFromHub(upstream.id)(mapped.body)
         val path = RelayEngine.upstreamPathFor(upstream, channel, "/v1/chat/completions", mapped.upstreamModel, stream = false)

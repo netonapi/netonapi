@@ -124,11 +124,19 @@ object PricingCalc {
         price.perRequestPrice?.let { return it }
         val cacheRead = if (usage.promptIncludesCache) usage.cacheReadTokens.coerceAtMost(usage.promptTokens) else usage.cacheReadTokens
         val freshInput = if (usage.promptIncludesCache) usage.promptTokens - cacheRead else usage.promptTokens
-        return tokenCost(freshInput, parseMicro(price.inputPrice)) +
-            tokenCost(cacheRead, parseMicro(price.cacheReadPrice)) +
-            tokenCost(usage.cacheWriteTokens, parseMicro(price.cacheWritePrice)) +
+        val input = parseMicro(price.inputPrice)
+        return tokenCost(freshInput, input) +
+            tokenCost(cacheRead, cacheOrInput(price.cacheReadPrice, input)) +
+            tokenCost(usage.cacheWriteTokens, cacheOrInput(price.cacheWritePrice, input)) +
             tokenCost(usage.completionTokens, parseMicro(price.outputPrice))
     }
+
+    /**
+     * 缓存价为 0 = 价源没给（不是「缓存免费」）：按输入价计。否则上游真按缓存价收我们的钱，我们却把缓存命中白送给用户。
+     * 真不支持缓存的模型缓存 token 本来就是 0，不受影响。
+     */
+    private fun cacheOrInput(cachePrice: String, inputMicro: Long): Long =
+        parseMicro(cachePrice).takeIf { it > 0 } ?: inputMicro
 
     /**
      * 实付单价：售价各项 × 倍率（分组倍率 / 官方价折扣），截断到 μUSD/1M 精度。

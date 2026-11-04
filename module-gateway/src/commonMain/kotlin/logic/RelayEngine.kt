@@ -299,6 +299,15 @@ class RelayEngine(
                     is HttpClientError.Network, is HttpClientError.Timeout -> true
                     else -> false
                 }
+                if (err is HttpClientError.Http && isUpstreamModelMissing(err.statusCode, err.body)) {
+                    // 上游（多为 new-api 类中转站）说「你这把 Key 用不了这个模型」：是这条渠道服务不了它，不是用户的请求错了，
+                    // 也不是 Key 坏了（它对别的模型照样能用，不计 Key 失败、免得被自动停用）。换下一条渠道；全部失败回通用 503，
+                    // 不把上游的报错原文（请求号、上游分组）透给用户。
+                    recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, status = "error", errorCode = "upstream_model_not_found", ttfbMs = null)
+                    lastError = "channel ${channel.id} upstream has no ${rewritten.upstreamModel}"
+                    log.warn("relay upstream model missing channel=${channel.id} model=${rewritten.upstreamModel} body=${(err.body ?: "").replace("\n", " ").take(300)}")
+                    return@repeat
+                }
                 if (err is HttpClientError.Http && err.statusCode in UPSTREAM_ACCOUNT_ERRORS) {
                     // 401 / 402 / 403 = 我们在上游的账号有问题（Key 失效、上游分组没有这个模型、上游余额不足），与用户的请求无关：
                     // 计 Key 失败、记日志、换下一条渠道；全部失败回通用的 503，**不把上游的报错原文**（上游分组名、请求号）透给用户
@@ -387,7 +396,10 @@ class RelayEngine(
             (verificationLogic?.isVerified(channel.id, ChannelVerificationLogic.CAPABILITY_GEMINI_SIGNATURE_BYPASS, mapped.upstreamModel) ?: false)
         val policy = ConversionPolicy.of(channel, signatureBypass = bypassOn)
         val diagnostics = mutableListOf<neton.ai.protocol.diag.Diagnostic>()
+        // Gemini 入站的「流式」在路径上（:streamGenerateContent），请求体里没有 stream 字段，转成 hub(OpenAI) 后也就没有：
+        // 不补上的话 OpenAI / Anthropic 上游会回非流式 JSON，而我们按 SSE 解析，客户端拿到一个空的流。
         val hubBody = ProtocolCodecs.convertRequest(mapped.body, inboundProtocol, "openai", policy, diagnostics)
+            .let { if (mapped.stream) RequestRewriter.ensureStream(it) else it }
         // 上游是 Gemini：thought signature 的跨请求回传与缺失处理（neton-docs spec/ai.md §4.5，gateway 文档 §4.6）
         val vault = if (upstream.id == "gemini") ThoughtSignatureVault(
             ThoughtSignatureVault.Binding(tokenId, userId, channel.type, mapped.upstreamModel, channel.id),
@@ -549,12 +561,15 @@ class RelayEngine(
 
         if (!rewritten.stream) {
             val res = client.request(request)
-            if (res.statusCode == 429 || res.statusCode >= 500) {
+            // 与流式同一套分类，交给外层：429 / 5xx 重试换渠道；401/402/403（我们在上游的账号问题）计 Key 失败后换渠道；
+            // 404 model_not_found（这条渠道服务不了这个模型）不计 Key 失败、换渠道。以前非流式在这里把 401/403 直接回给了用户。
+            if (res.statusCode == 429 || res.statusCode >= 500 || res.statusCode in UPSTREAM_ACCOUNT_ERRORS ||
+                isUpstreamModelMissing(res.statusCode, res.body)
+            ) {
                 throw HttpClientException(HttpClientError.Http(res.statusCode, "HTTP ${res.statusCode}", res.body))
             }
             if (res.statusCode !in 200..299) {
-                // 401/403 = 凭证级失败，计 Key 失败（与流式/外层分类统一）；其它 4xx 是客户端问题
-                if (res.statusCode == 401 || res.statusCode == 403) channelLogic.recordKeyFailure(keyId, "upstream_${res.statusCode}")
+                // 其它 4xx 是请求本身的问题（参数不对等），原样回给用户，不计 Key 失败
                 recordLog(token, channel, rewritten, Usage(), group, groupSource, startMs, "error", "upstream_${res.statusCode}", null)
                 releaseObserved()
                 respondRaw(ctx, res.statusCode, transform.errorBodyFor(res.body, res.statusCode))  // 同协议原样、跨协议改写（擦除 headers）
@@ -1026,6 +1041,10 @@ class RelayEngine(
 
     /** 上游账号层面的错误（不是用户请求的问题）：换渠道重试，不透传原文。 */
     val UPSTREAM_ACCOUNT_ERRORS = setOf(401, 402, 403)
+
+    /** 上游 404 且错误体点名 `model_not_found`：这条渠道（这把 Key）服务不了这个模型，换渠道而不是把 404 回给用户。 */
+    fun isUpstreamModelMissing(status: Int, body: String?): Boolean =
+        status == 404 && body != null && body.contains("model_not_found")
 
     fun upstreamPathFor(upstream: ProtocolAdapter, channel: Channel, inboundPath: String, upstreamModel: String, stream: Boolean): String =
         when {

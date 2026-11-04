@@ -38,6 +38,33 @@ class PricingCalcTest {
         assertEquals(6000L, PricingCalc.charge(usage, price, groupRatio = "0.8"))
     }
 
+    /** 缓存价为 0（价源没给）按输入价计，不白送缓存命中；缓存价有值时照用。 */
+    @Test
+    fun zeroCachePriceBillsAtInputPrice() {
+        val noCache = model.ModelPrice(model = "m", inputPrice = "2", outputPrice = "8")
+        // 1000 输入里 400 命中缓存：600×2 + 400×2（缓存价缺失按输入价）= 2000
+        assertEquals(2000L, PricingCalc.charge(Usage(promptTokens = 1000, cacheReadTokens = 400), noCache, "1"))
+        val withCache = noCache.copy(cacheReadPrice = "0.5")
+        // 600×2 + 400×0.5 = 1400
+        assertEquals(1400L, PricingCalc.charge(Usage(promptTokens = 1000, cacheReadTokens = 400), withCache, "1"))
+    }
+
+    /** 中转站报的 prompt 不含缓存（缓存读比 prompt 还多）、DeepSeek 命中 / 未命中字段：都按上游报的较大口径计。 */
+    @Test
+    fun usageNormalizesInconsistentUpstreams() {
+        fun u(json: String) = UsageExtractor.fromJson(json)!!
+        val excl = u("""{"usage":{"prompt_tokens":80,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":128}}}""")
+        assertEquals(false, excl.promptIncludesCache)
+        // 80 新输入 × 1 + 128 缓存 × 1（缓存价缺失按输入价）+ 10 × 2 = 228
+        assertEquals(228L, PricingCalc.charge(excl, model.ModelPrice(model = "m", inputPrice = "1", outputPrice = "2"), "1"))
+        val ds = u("""{"usage":{"prompt_tokens":27,"completion_tokens":16,"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":86}}""")
+        assertEquals(86, ds.promptTokens)
+        assertEquals(true, ds.promptIncludesCache)
+        val normal = u("""{"usage":{"prompt_tokens":1000,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":400}}}""")
+        assertEquals(true, normal.promptIncludesCache)
+        assertEquals(400, normal.cacheReadTokens)
+    }
+
     /** 先乘倍率再逐项取整：账单 = Σ tokens × 价目表上的实付单价（向上取整），与展示一致。 */
     @Test
     fun chargeUsesDisplayedUnitPrice() {

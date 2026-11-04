@@ -11,6 +11,13 @@ data class Rewritten(val body: String, val requestModel: String, val upstreamMod
  */
 object RequestRewriter {
 
+    /** OpenAI 格式 body 置 `stream: true`（已是 true 时原样返回）。 */
+    fun ensureStream(openaiBody: String): String {
+        val obj = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(openaiBody).jsonObject }.getOrNull() ?: return openaiBody
+        if (obj["stream"]?.jsonPrimitive?.booleanOrNull == true) return openaiBody
+        return buildJsonObject { obj.forEach { (k, v) -> put(k, v) }; put("stream", JsonPrimitive(true)) }.toString()
+    }
+
     /** 给已是 OpenAI 格式的 body 注入 stream_options.include_usage（若无）。 */
     fun injectIncludeUsage(openaiBody: String): String {
         val obj = json.parseToJsonElement(openaiBody).jsonObject
