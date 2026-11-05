@@ -7,7 +7,7 @@ protocol families — OpenAI, Anthropic, Gemini — relayed in any direction, wi
 billing, quota enforcement and channel failover. It is built with Kotlin/Native on the
 [Neton](https://github.com/netonframework/neton) framework and the [Neton Application](https://github.com/neton-application/neton-application) scaffold, and compiles to a single static executable: no
 JVM at runtime, no sidecar SQL files. See the [capability comparison](#capability-comparison)
-with [`new-api`](https://github.com/QuantumNous/new-api).
+with the two most widely used open-source relays, [`new-api`](https://github.com/QuantumNous/new-api) and [`one-api`](https://github.com/songquanpeng/one-api).
 
 This repository is the **backend distribution**. It assembles the framework and the seven
 canonical modules into one binary and owns the gateway-specific configuration. Product
@@ -30,25 +30,33 @@ repository, which also carries the end-to-end test harness.
 
 ## Capability comparison
 
-| Capability | NetonAPI | [new-api](https://github.com/QuantumNous/new-api) |
-|---|---|---|
-| Implementation & deployment | Single static Kotlin/Native executable, no JVM at runtime | Go single binary / Docker |
-| Database | PostgreSQL (Redis optional) | SQLite / MySQL / PostgreSQL (Redis optional) |
-| Inbound protocols | Native OpenAI, Anthropic and Gemini formats, converted in any direction (tool calls, images, thinking and cache usage preserved across protocols) | OpenAI format first, with Claude and Gemini formats supported |
-| Upstream types | OpenAI-compatible, Azure OpenAI, Anthropic, Gemini, AWS Bedrock, Vertex AI | Dozens of channel types, including task-style upstreams such as Midjourney and Suno |
-| Channel scheduling | Priority + weight, failover, automatic key disabling and cool-down, latency and connectivity tests | Priority + weight, retries, automatic disabling |
-| Sale price | Anchored on the official price: platform price × group ratio; per-model agreed prices for groups or users (a discount off the official price, or a fixed price); tiered pricing | Model ratio × completion ratio × group ratio, or a fixed per-call price |
-| Channel cost & margin | Real cost per channel (official-price discount / pulled from the upstream price list / entered per model); prices below cost are rejected; pricing check and margin reports | No channel cost accounting |
-| Official prices | Synced from a price source on a schedule; abnormal changes held for review; price history kept | Ratios maintained by hand, upstream ratio sync available |
-| Ledger | Two-phase reserve → settle, recoverable after a crash, anomalies go to a manual review queue | Quota pre-deducted, adjusted after the request |
-| Billing group | Decided by the API key (chosen by the user from allowed groups; operators can assign or revoke) | User group, with per-token group selection |
-| API keys | Shown once at creation; no plaintext stored | Viewable and copyable from the list at any time |
-| Top-ups | Manual top-up by operators, redemption codes, online checkout (Alipay, aggregator gateways, pluggable); payment channel secrets are write-only | Redemption codes, EPay, Stripe |
-| User sign-in | Username and password, email password reset | Username and password, plus GitHub, OIDC, Telegram, WeChat and other third-party sign-in, and 2FA |
-| Task-style APIs | Not supported (Midjourney, Suno, video generation) | Supported |
-| Operator permissions | Menu- and button-level permissions; preset gateway operator / finance / support / read-only roles | Admin / root |
+NetonAPI is not a fork of one-api / new-api. It was designed from the **operator's** side: prices are anchored to the official
+price, every channel carries its real cost, a price that would lose money cannot be saved, and every charge reconciles as
+"unit price × tokens". The table compares it with the two most widely used open-source relay projects.
 
-The new-api column is compiled from its public documentation; check the latest new-api release for details.
+| Capability | NetonAPI 1.0 | [new-api](https://github.com/QuantumNous/new-api) | [one-api](https://github.com/songquanpeng/one-api) |
+|---|---|---|---|
+| **Pricing** | Anchored to the official price: sale = official × markup; groups and individual users can get "N% of official" per model | Ratio system: model ratio × completion ratio × group ratio; fixed per-request price; tiered expression pricing | Ratio system: group ratio × model ratio × completion ratio |
+| **Per-user, per-model negotiated price** | Yes ("Negotiated pricing": find a user, discount model by model, in bulk) | Via user group ratio | Via user group ratio |
+| **Real channel cost** | Each channel records its cost (official × discount / upstream pricing API / per-model manual); abnormal jumps wait for approval | Not covered in public docs | Not covered in public docs |
+| **Margin protection** | A price below channel cost **cannot be saved**; price health check shows the worst margin per group × channel; profit dashboard | Not covered in public docs | Not covered in public docs |
+| **Official price upkeep** | Scheduled sync from a price source; changes held for operator approval; full price history | Ratio settings, can sync upstream ratios | Built-in default ratios, edited by hand |
+| **Charge vs. displayed price** | Charge = tokens × the unit price the user sees (rounded per item); console, price list and bill agree; unknown cache price bills at input price | Pre-deduct, then settle the difference | Pre-deduct, then settle |
+| **Ledger** | Two-phase reserve → settle, crash-recoverable, anomalies go to a manual review queue; price snapshot frozen per request | Pre-deduct + post-settle | Pre-deduct + post-settle |
+| **Billing group** | Decided by the API key; operators can pin a key to a group (dedicated route / special price) | User group, selectable per token | User and channel groups |
+| **API key handling** | Shown once at creation, only a hash is stored; upstream keys encrypted at rest | Viewable and copyable in the list | Viewable and copyable in the list |
+| **Inbound protocols** | Native OpenAI (Chat, Responses), Anthropic and Gemini endpoints, **converted in any direction** (tools, images, thinking, cache usage preserved) | Conversion among OpenAI Chat, Responses, Anthropic and Gemini; Realtime WebSocket | Unified to the OpenAI format |
+| **Upstream types** | OpenAI-compatible, Azure OpenAI, Anthropic, Gemini, AWS Bedrock, Vertex AI | Dozens, domestic and international | 30+ providers |
+| **Channel failover** | Priority + weight; automatic failover; an upstream "model not found" moves to the next channel instead of failing the user; key auto-disable and cooldown; scheduled probes | Priority + weight, retries, channel affinity, multiple keys | Load balancing, retries, auto-disable by success rate |
+| **Task APIs** (Midjourney, video…) | Not yet | Yes (JavaScript plugins) | No |
+| **Operator permissions** | Menu- and button-level permissions; preset gateway ops / finance / support / read-only roles | Fine-grained permissions | Admin / root |
+| **User sign-in** | Username and password, SMS code (needs an SMS provider), email password reset | OAuth / OIDC, passkeys, 2FA | Email, GitHub, Feishu, WeChat |
+| **Top-up** | Manual top-up by admins, redemption codes, online payment (Alipay, aggregators, pluggable); payment secrets write-only | Redemption codes, EPay, Stripe, subscriptions | Redemption codes, top-up link |
+| **Build and deploy** | Kotlin/Native **single native executable**, no JVM at runtime; PostgreSQL (Redis optional) | Go binary / Docker; SQLite / MySQL / PostgreSQL | Go binary / Docker; SQLite / MySQL |
+| **Status** | 1.0.0 | Releasing continuously (v1.0.0-rc series) | Latest release v0.6.10 (2025-02), none since |
+
+The new-api and one-api columns are compiled from their public READMEs and documentation (2026-11). "Not covered in public docs" means
+we found no description, not that the feature certainly does not exist; check their latest releases for details.
 
 ## Repository layout
 
