@@ -34,6 +34,22 @@ data class PublicModelVO(
  * [@AllowAnonymous]：未登录也能浏览，这是拉新的主要入口。只暴露模型名与价格，
  * 不含渠道、Key、成本折扣等运营内部信息。
  */
+/**
+ * 这个模型能被哪些端点调：渠道声明的能力是整条渠道的（一条渠道同时承载对话与向量模型时两个都有），
+ * 直接取并集会把 Claude、GPT 也标成「向量」。按模型名判断它是哪一类，再与渠道能力取交集。
+ */
+internal fun modelCapabilities(model: String, channelCaps: Set<String>): List<String> {
+    val m = model.lowercase()
+    val kind = when {
+        "embedding" in m || m.startsWith("embed") -> "embeddings"
+        "rerank" in m -> "rerank"
+        "image" in m || "dall-e" in m -> "images"
+        "tts" in m || "whisper" in m || "transcribe" in m -> "audio"
+        else -> "chat"
+    }
+    return if (kind in channelCaps) listOf(kind) else channelCaps.filter { it == "chat" }.ifEmpty { channelCaps.sorted() }
+}
+
 @Controller("/gateway/model")
 @AllowAnonymous
 class ModelCatalogController(private val channelLogic: ChannelLogic) {
@@ -66,7 +82,7 @@ class ModelCatalogController(private val channelLogic: ChannelLogic) {
                     cacheReadPrice = sale.cacheReadPrice,
                     perRequestPrice = sale.perRequestPrice,
                     defaultMaxOutputTokens = it.defaultMaxOutputTokens,
-                    capabilities = capsByModel[it.model]?.sorted() ?: emptyList(),
+                    capabilities = modelCapabilities(it.model, capsByModel[it.model].orEmpty()),
                     displayName = it.displayName,
                     tiers = logic.PricingTiers.parse(sale.tiers),
                     official = logic.PriceItemsVO.of(it),

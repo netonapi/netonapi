@@ -28,6 +28,28 @@ Source repositories: [**netonapi/netonapi**](https://github.com/netonapi/netonap
 [`DEPLOY.md`](https://github.com/zoujiaqing/nanogate/blob/main/DEPLOY.md) in the `nanogate`
 repository, which also carries the end-to-end test harness.
 
+## Screenshots
+
+Taken from the local demo environment (`harness/demo/up.sh`: fictional channels and users, randomized but realistic usage).
+
+**For users**
+
+| Home | Console |
+|---|---|
+| ![Home](docs/screenshots/web-home.png) | ![Console overview](docs/screenshots/console-overview.png) |
+| **Models and prices**: your price, its share of the official price, negotiated-price tags | **Usage**: daily spend, totals by model and by key |
+| ![Models and prices](docs/screenshots/console-models.png) | ![Usage](docs/screenshots/console-usage.png) |
+
+**For operators**
+
+| Gateway overview: revenue, cost, margin | Model pricing: worst margin of each model on every channel |
+|---|---|
+| ![Gateway overview](docs/screenshots/admin-overview.png) | ![Model pricing](docs/screenshots/admin-pricing.png) |
+
+**Negotiated pricing**: give a key account "N% of the official price" per model, with their price and margin shown live; a discount that loses money cannot be saved.
+
+![Negotiated pricing](docs/screenshots/admin-negotiated-detail.png)
+
 ## Capability comparison
 
 NetonAPI is not a fork of one-api / new-api. It was designed from the **operator's** side: prices are anchored to the official

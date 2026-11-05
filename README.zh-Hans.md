@@ -25,6 +25,28 @@ NetonAPI 是一个自托管的 LLM API 网关：自己签发一套 Key，背后�
 部署、密钥、反向代理与 SSRF 说明见 `nanogate` 仓的
 [`DEPLOY.md`](https://github.com/zoujiaqing/nanogate/blob/main/DEPLOY.md)，端到端测试 harness 也在那里。
 
+## 截图
+
+以下截图来自本地演示环境（`harness/demo/up.sh`：虚构的渠道与用户、随机但贴近真实的用量）。
+
+**用户侧**
+
+| 首页 | 控制台 |
+|---|---|
+| ![首页](docs/screenshots/web-home.png) | ![控制台概览](docs/screenshots/console-overview.png) |
+| **模型与价格**：你的价格、相当于官方价几折、协议价标记 | **用量与额度**：每日消费、按模型 / 按 Key 汇总 |
+| ![模型与价格](docs/screenshots/console-models.png) | ![用量与额度](docs/screenshots/console-usage.png) |
+
+**运营侧**
+
+| 网关概览：收入、成本、毛利 | 模型定价：每个模型在每条渠道上的最差毛利 |
+|---|---|
+| ![网关概览](docs/screenshots/admin-overview.png) | ![模型定价](docs/screenshots/admin-pricing.png) |
+
+**协议定价**：给大客户按模型打「官方价 N 折」，实时显示他的价格与毛利，亏本的折扣保存不了。
+
+![协议定价](docs/screenshots/admin-negotiated-detail.png)
+
 ## 能力对照
 
 NetonAPI 不是在 one-api / new-api 上改出来的分支，而是从**运营平台**的角度重新设计：定价以官方价为锚、每条渠道核算真实成本、

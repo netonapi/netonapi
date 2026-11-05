@@ -62,6 +62,8 @@ data class MyTokenVO(
     val group: String = logic.BillingGroupResolver.DEFAULT_CODE,
     /** 分组是运营指定的：用户改不了。 */
     val groupAssigned: Boolean = false,
+    /** 分组的显示名（运营指定的分组不在用户的可选列表里，前端查不到名字） */
+    val groupName: String? = null,
 ) {
     companion object {
         fun from(t: GatewayToken) = MyTokenVO(
@@ -90,7 +92,9 @@ class MyTokenController(private val tokenLogic: TokenLogic) {
 
     @Get("/list")
     suspend fun list(identity: Identity): List<MyTokenVO> =
-        tokenLogic.listByUser(identity.id.toLong()).map { MyTokenVO.from(it) }
+        table.GatewayGroupTable.findAll().associate { it.code to it.name }.let { names ->
+            tokenLogic.listByUser(identity.id.toLong()).map { MyTokenVO.from(it).let { vo -> vo.copy(groupName = names[vo.group]) } }
+        }
 
     /** 建 / 改 Key 时可选的分组：default + 「用户可选」的 + 他的会员组映射的。 */
     @Get("/groups")
