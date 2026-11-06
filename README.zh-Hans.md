@@ -104,7 +104,7 @@ projects/
 
 ### 构建前提
 
-构建需要上面每个仓的读权限。`neton-application-module-infra` 目前是私有仓，在它公开之前，只凭公开源码无法构建。Docker 构建还要求外层目录名是 `Neton/` 与 `NewGate/`，因为 `COPY` 源是字面路径。
+上面列出的仓库都是公开的，只凭公开源码即可构建。Docker 构建要求外层目录名是 `Neton/` 与 `NewGate/`，因为 `COPY` 源是字面路径。
 
 ## 构建
 

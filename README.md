@@ -110,9 +110,8 @@ stays independently buildable. Only `neton`, `neton-ai`, `geolite4k` and
 
 ### Build prerequisites
 
-Building needs read access to every repository listed above. `neton-application-module-infra`
-is currently private, so a build from public sources alone is not possible until it is
-published. The Docker build also expects the outer
+Every repository listed above is public, so the build needs nothing beyond public sources.
+The Docker build expects the outer
 directory names `Neton/` and `NewGate/`, because its `COPY` sources are literal paths.
 
 ## Build
