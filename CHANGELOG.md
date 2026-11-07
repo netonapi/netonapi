@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 — 2026-11-06
+## 1.0.0 — 2026-11-07
 
 First stable release. Release notes: [docs/releases/1.0.0.md](docs/releases/1.0.0.md).
 
@@ -16,3 +16,5 @@ First stable release. Release notes: [docs/releases/1.0.0.md](docs/releases/1.0.
   scheduled probes, 10-minute request ceiling for long answers.
 - Billing groups decided by the API key; API keys shown once and stored hashed; upstream keys encrypted at rest.
 - Top-up by admins, redemption codes and pluggable online payment; menu- and button-level permissions with preset roles.
+- Builds against published artifacts: Neton 1.1.0, neton-ai 0.1.0 and geolite4k 0.1.2 from Maven Central; only the
+  application contract and modules are source checkouts.
