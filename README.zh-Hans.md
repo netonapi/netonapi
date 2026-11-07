@@ -83,10 +83,7 @@ new-api、one-api 两列依据各自公开的 README 与文档整理（2026-11�
 ```
 projects/
 ├── Neton/
-│   ├── neton/                              # 框架（includeBuild）
-│   ├── neton-ai/                           # LLM 协议编解码（includeBuild）
-│   ├── geolite4k/                          # GeoIP（includeBuild）
-│   ├── neton-application-contract/         # 模块间契约（includeBuild）
+│   ├── neton-application-contract/         # 模块间契约
 │   ├── neton-application-module-system/
 │   ├── neton-application-module-infra/
 │   ├── neton-application-module-account/
@@ -98,9 +95,10 @@ projects/
         └── module-gateway/                 # NetonAPI 的网关模块（就在本仓，不在 Neton/ 下）
 ```
 
-框架与模块是以**源码子项目**方式引入的（`include(...)` + `projectDir`），不是 `includeBuild`——
-每个模块仓保留自己的 `settings.gradle.kts`，仍可独立构建。只有 `neton`、`neton-ai`、`geolite4k` 与
-`neton-application-contract` 是 composite build。
+契约与模块是以**源码子项目**方式引入的（`include(...)` + `projectDir`），每个仓保留自己的
+`settings.gradle.kts`，仍可独立构建。Neton 框架、`neton-ai` 与 `geolite4k` 从 Maven Central 下载，
+版本见 `gradle.properties`（`netonVersion`、`netonAiVersion`、`geolite4kVersion`）。要联调尚未发布的框架改动，
+把 `neton`、`neton-ai`、`geolite4k` 检出到 `Neton/` 下并加 `-Pnetonapi.frameworkSource=true`，改用源码 composite build。
 
 ### 构建前提
 

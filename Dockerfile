@@ -9,14 +9,10 @@
 FROM eclipse-temurin:17-jdk AS build
 WORKDIR /src
 
-# 镜像内必须复刻宿主布局：settings.gradle.kts 用 `../../Neton/<repo>` 引框架与 canonical
+# 镜像内必须复刻宿主布局：settings.gradle.kts 用 `../../Neton/<repo>` 引套件契约与 canonical
 # 模块，所以应用要落在两层深处（/src/NewGate/netonapi-backend），依赖落在同层的 /src/Neton/ 下。
-# 下面十个仓一个都不能少（gateway 模块在本仓 module-gateway/，随本仓一起 COPY）——少任何一个，Gradle 在 configuration 阶段就因找不到
-# included build / projectDir 而失败（module-system、module-infra、geolite4k、neton-ai、
-# neton-application-contract 都曾被漏掉）。以 settings.gradle.kts 为准。
-COPY Neton/neton                             /src/Neton/neton
-COPY Neton/neton-ai                          /src/Neton/neton-ai
-COPY Neton/geolite4k                         /src/Neton/geolite4k
+# 框架、neton-ai 与 geolite4k 从 Maven Central 下载（版本见 gradle.properties），不需要源码。
+# 下面七个仓一个都不能少（gateway 模块在本仓 module-gateway/，随本仓一起 COPY）——以 settings.gradle.kts 为准。
 COPY Neton/neton-application-contract        /src/Neton/neton-application-contract
 COPY Neton/neton-application-module-system   /src/Neton/neton-application-module-system
 COPY Neton/neton-application-module-infra    /src/Neton/neton-application-module-infra

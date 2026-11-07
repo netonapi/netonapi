@@ -8,13 +8,17 @@ pluginManagement {
 
 rootProject.name = "netonapi-backend"
 
-// 框架依赖（composite build）—— canonical 仓位于 ../../Neton/，所有下游 fork 共用这个布局约定
-includeBuild("../../Neton/neton")
-// neton-ai 已从框架拆成独立仓库（netonframework/neton-ai）：网关的协议互转依赖它
-includeBuild("../../Neton/neton-ai")
-includeBuild("../../Neton/geolite4k")
-// 套件基础契约（infra / account 等模块依赖 com.netonstream.app:application-contract）
-includeBuild("../../Neton/neton-application-contract")
+// 框架（com.netonstream:neton-*）、neton-ai 与 geolite4k 默认用 Maven Central 上的发布版，版本见 gradle.properties。
+// 联调尚未发布的框架改动时加 -Pnetonapi.frameworkSource=true，改用 ../../Neton/ 下的源码（composite build）。
+if (providers.gradleProperty("netonapi.frameworkSource").orNull == "true") {
+    includeBuild("../../Neton/neton")
+    includeBuild("../../Neton/neton-ai")
+    includeBuild("../../Neton/geolite4k")
+}
+
+// 套件基础契约（infra / account 等模块依赖 com.netonstream.app:application-contract），与模块一样按源码子项目装配
+include(":application-contract")
+project(":application-contract").projectDir = file("../../Neton/neton-application-contract")
 
 // Canonical sibling repositories are assembled as source subprojects here.
 // Each repository keeps its own settings.gradle.kts and remains independently buildable.

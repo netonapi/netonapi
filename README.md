@@ -88,10 +88,7 @@ so it must sit exactly two levels below the directory that holds `Neton/`:
 ```
 projects/
 ├── Neton/
-│   ├── neton/                              # framework (includeBuild)
-│   ├── neton-ai/                           # LLM protocol codecs (includeBuild)
-│   ├── geolite4k/                          # GeoIP (includeBuild)
-│   ├── neton-application-contract/         # module contracts (includeBuild)
+│   ├── neton-application-contract/         # module contracts
 │   ├── neton-application-module-system/
 │   ├── neton-application-module-infra/
 │   ├── neton-application-module-account/
@@ -103,10 +100,12 @@ projects/
         └── module-gateway/                 # the NetonAPI gateway module (lives here, not in Neton/)
 ```
 
-The framework and the modules are pulled in as **source subprojects** (`include(...)` +
-`projectDir`), not as `includeBuild` — each of them keeps its own `settings.gradle.kts` and
-stays independently buildable. Only `neton`, `neton-ai`, `geolite4k` and
-`neton-application-contract` are composite builds.
+The contract and the modules are pulled in as **source subprojects** (`include(...)` +
+`projectDir`) — each of them keeps its own `settings.gradle.kts` and stays independently buildable.
+The Neton framework, `neton-ai` and `geolite4k` come from Maven Central at the versions in
+`gradle.properties` (`netonVersion`, `netonAiVersion`, `geolite4kVersion`). To build against
+unreleased framework changes, check out `neton`, `neton-ai` and `geolite4k` under `Neton/` and pass
+`-Pnetonapi.frameworkSource=true`, which swaps them in as composite builds.
 
 ### Build prerequisites
 

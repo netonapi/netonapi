@@ -21,7 +21,20 @@ subprojects {
     version = "1.0.0"
 
     configurations.configureEach {
+        // 框架坐标在各模块里都不写版本，统一在这里按 gradle.properties 指定
+        resolutionStrategy.eachDependency {
+            if (requested.group == "com.netonstream" && requested.version.isNullOrEmpty()) {
+                useVersion(
+                    when (requested.name) {
+                        "neton-ai" -> property("netonAiVersion") as String
+                        "geolite4k" -> property("geolite4kVersion") as String
+                        else -> property("netonVersion") as String
+                    }
+                )
+            }
+        }
         resolutionStrategy.dependencySubstitution {
+            substitute(module("com.netonstream.app:application-contract")).using(project(":application-contract"))
             substitute(module("com.netonstream.app:module-system")).using(project(":module-system"))
             substitute(module("com.netonstream.app:module-infra")).using(project(":module-infra"))
             substitute(module("com.netonstream.app:module-account")).using(project(":module-account"))

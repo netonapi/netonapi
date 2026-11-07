@@ -127,7 +127,8 @@ tasks.matching { it.name.matches(Regex("kspKotlin(MacosArm64|LinuxX64|LinuxArm64
     dependsOn(kspHostTask)
 }
 
-tasks.matching { it.name.startsWith("linkDebugExecutable") }.configureEach {
+// 只有用 -Pnetonapi.frameworkSource=true 引框架源码时才需要先产出 posixEnv 静态库；发布版的 klib 已自带
+if (gradle.includedBuilds.any { it.name == "neton" }) tasks.matching { it.name.startsWith("linkDebugExecutable") }.configureEach {
     val targetName = when {
         name.contains("MacosArm64") -> "MacosArm64"
         name.contains("LinuxX64") -> "LinuxX64"
