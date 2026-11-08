@@ -120,9 +120,10 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         val groups = GatewayGroupTable.findAll().associateBy { it.code }
         val channels = channelLogic.listEnabled()
         val costs = table.ChannelModelCostTable.findAll().associateBy { it.channelId to it.model }
+        val discounts = ChannelModelDiscounts.all()
         @OptIn(kotlin.time.ExperimentalTime::class)
         val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
-        val rows = prices.sortedBy { it.model }.map { row(it, byModel, groups, channels, policy, costs, now) }
+        val rows = prices.sortedBy { it.model }.map { row(it, byModel, groups, channels, policy, costs, discounts, now) }
         // 统计只看上架的模型：价格库里的行不对外，亏不亏本无所谓
         val offered = rows.filter { it.listed == 1 }
         return PricingCheckResult(
@@ -143,6 +144,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         channels: List<Channel>,
         policy: PricingPolicy.Policy,
         costs: Map<Pair<Long, String>, model.ChannelModelCost>,
+        discounts: Map<Pair<Long, String>, String>,
         now: Long,
     ): PricingCheckRow {
         val sale = runCatching { SalePricing.resolve(price, policy.markup) }.getOrNull()
@@ -155,7 +157,7 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         val routes = mutableListOf<ChannelRouteVO>()
         for (ch in channels) {
             val upstream = upstreamModel(ch, price.model) ?: continue
-            val basis = ChannelCostLogic.costForLoaded(ch, price.model, upstream, price, costs, byModel) ?: continue
+            val basis = ChannelCostLogic.costForLoaded(ch, price.model, upstream, price, costs, byModel, discounts[ch.id to upstream]) ?: continue
             routes += ChannelRouteVO(
                 channelId = ch.id, name = ch.name, priority = ch.priority, weight = ch.weight, status = ch.status,
                 cooldownUntil = ch.cooldownUntil, lastProbeOk = ch.lastProbeOk,
@@ -213,10 +215,11 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
         val byModel = prices.associateBy { it.model }
         val groups = GatewayGroupTable.findAll().associateBy { it.code }
         val costs = table.ChannelModelCostTable.findAll().associateBy { it.channelId to it.model }
+        val discounts = ChannelModelDiscounts.all()
         val out = mutableListOf<PricingCombo>()
         for (ch in channelLogic.listEnabled()) {
             val upstream = upstreamModel(ch, quote.model) ?: continue
-            val basis = ChannelCostLogic.costForLoaded(ch, quote.model, upstream, quote.official, costs, byModel) ?: continue
+            val basis = ChannelCostLogic.costForLoaded(ch, quote.model, upstream, quote.official, costs, byModel, discounts[ch.id to upstream]) ?: continue
             for (code in ch.groups.split(',').map { it.trim() }.filter { it in groupCodes }) {
                 val g = groups[code] ?: continue
                 out += tiered(quote.sale, basis.price, g.copy(ratio = quote.ratio), ch, basis.discount, policy.minMargin).copy(costSource = basis.source)
@@ -265,13 +268,8 @@ class PricingCheckLogic(private val channelLogic: ChannelLogic) {
     }
 
     /** 渠道是否承载这个模型；承载时返回实际打给上游的模型名。与 RelayRouter / RequestRewriter 的口径一致。 */
-    private fun upstreamModel(ch: Channel, model: String): String? {
-        val mapping = ch.modelMapping?.takeIf { it.isNotBlank() }
-            ?.let { runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull() }
-        val mapped = mapping?.get(model)?.jsonPrimitive?.contentOrNull
-        if (mapped != null) return mapped
-        return if (ch.models.split(',').map { it.trim() }.contains(model)) model else null
-    }
+    private fun upstreamModel(ch: Channel, model: String): String? =
+        ModelRoutes.upstreamModel(ch, model).takeIf { model in ModelRoutes.csv(ch.models) }
 
     private fun modelMarkupOf(price: ModelPrice): String? =
         price.saleOverride?.let { runCatching { json.parseToJsonElement(it).jsonObject["markup"]?.jsonPrimitive?.contentOrNull }.getOrNull() }

@@ -20,7 +20,7 @@
 2. **上游只是线路。** 渠道新增 `supported_models`：「拉取模型」只写它（这个上游**能**服务什么），
    不再并进 `models`（这个上游**正在**为我们服务什么）。
 3. **模型 → 服务上游。** 在模型上勾选服务它的上游（候选是支持它的上游，也允许手填），每条可填上游侧的模型名。
-   保存时写回各渠道的 `models` 与 `model_mapping`——路由仍按渠道优先级、权重与故障切换走，不另起一套。
+   启用前须配置实际的上游模型倍率（参见定价规格 §12）。保存时写回各渠道的 `models` 与 `model_mapping`——路由仍按渠道优先级、权重与故障切换走，不另起一套。
 4. **对外可见 = 上架 且 至少一个启用的上游在服务它。** 进一步按用户：上架模型还可设开放范围（所有用户 / 仅限有定价规则的用户与分组），
    每个用户能用的模型与价格以服务端解析出的用户价目表为准，见 [gateway-pricing-spec.md §4.3](gateway-pricing-spec.md)。
 
@@ -33,7 +33,7 @@
 ## 接口
 
 - `GET /admin/gateway/channel/model-routes?model=` → 每个渠道：是否支持、是否在服务、上游模型名、优先级、状态。
-- `PUT /admin/gateway/channel/model-routes` `{model, routes:[{channelId, upstreamModel?}]}` → 改写各渠道的服务清单与映射。
+- `PUT /admin/gateway/channel/model-routes` `{model, routes:[{channelId, upstreamModel?, costDiscount?}]}` → 改写各渠道的服务清单与映射。
 - `PUT /admin/gateway/price/listed?id=&listed=` → 上架 / 下架。
 - `POST /admin/gateway/channel/models/{id}` 拉到的列表写进 `supported_models`。
 

@@ -1,6 +1,12 @@
 package logic
 
+import controller.admin.channel.dto.ChannelModelVO
+import controller.admin.channel.dto.ConfigureChannelModelRequest
+import controller.admin.channel.dto.ModelRouteItem
 import model.Channel
+import neton.core.http.HttpException
+import neton.core.http.NetonErrorCode
+import neton.database.dbContext
 import model.ChannelKey
 import neton.database.dsl.*
 import neton.logging.Logger
@@ -15,11 +21,89 @@ class ChannelLogic(private val log: Logger) {
 
     suspend fun get(id: Long): Channel? = ChannelTable.get(id)
 
-    /** 改渠道（地址、代理、超时都可能变）：缓存的客户端随即退役，下一次请求按新配置建。 */
-    suspend fun update(channel: Channel) {
-        ChannelTable.update(channel)
-        RelayEngine.channelClients?.evict(channel.id)
+    suspend fun updateSettings(id: Long, transform: (Channel) -> Channel) {
+        dbContext().transaction {
+            val channel = transform(lock(id))
+            for (model in ModelRoutes.csv(channel.models)) {
+                if (ChannelModelDiscounts.find(id, ModelRoutes.upstreamModel(channel, model)) == null) {
+                    ChannelModelDiscounts.required()
+                }
+            }
+            ChannelTable.update(channel)
+        }
+        RelayEngine.channelClients?.evict(id)
         PriceBook.invalidate()
+    }
+
+    suspend fun updateSupportedModels(id: Long, models: List<String>) {
+        ChannelTable.query { where { Channel::id eq id } }.update {
+            set(Channel::supportedModels, models.joinToString(","))
+        }
+    }
+
+    suspend fun recordProbe(id: Long, result: ChannelProbeResult) {
+        ChannelTable.query { where { Channel::id eq id } }.update {
+            set(Channel::lastProbeAt, nowMillis())
+            set(Channel::lastProbeMs, result.latencyMs)
+            set(Channel::lastProbeOk, if (result.ok) 1 else 0)
+            set(Channel::lastProbeError, result.error?.take(512))
+        }
+    }
+
+    suspend fun modelConfig(channel: Channel): List<ChannelModelVO> {
+        val enabled = ModelRoutes.csv(channel.models).map { ModelRoutes.upstreamModel(channel, it) }.toSet()
+        val discounts = ChannelModelDiscounts.forChannel(channel.id)
+        val models = ModelRoutes.csv(channel.supportedModels) + ModelRoutes.mappingOf(channel.modelMapping).values +
+            enabled + discounts.keys
+        return models.distinct().sorted().map { ChannelModelVO(it, discounts[it], it in enabled) }
+    }
+
+    suspend fun configureModel(request: ConfigureChannelModelRequest) {
+        val upstream = request.model.trim()
+        if (upstream.isEmpty() || ',' in upstream) rejectField("model", GatewayErrorCodes.MODEL_REQUIRED)
+        val discount = request.costDiscount?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { PricingCalc.requireRatio(it, "costDiscount") }
+        if (request.enabled && discount == null) ChannelModelDiscounts.required()
+        dbContext().transaction {
+            val channel = lock(request.channelId)
+            val models = ModelRoutes.csv(channel.models)
+            val mapping = ModelRoutes.mappingOf(channel.modelMapping)
+            val aliases = mapping.keys.filter { ModelRoutes.upstreamModel(channel, it) == upstream }
+            val requests = aliases.ifEmpty { listOf(upstream) }
+            val next = if (request.enabled) {
+                (models + requests).distinct()
+            } else {
+                models.filterNot { ModelRoutes.upstreamModel(channel, it) == upstream }
+            }
+            if (discount == null) ChannelModelDiscounts.clear(channel.id, upstream)
+            else ChannelModelDiscounts.save(channel.id, upstream, discount)
+            if (models != next) ChannelTable.update(channel.copy(models = next.joinToString(",")))
+        }
+        PriceBook.invalidate()
+    }
+
+    suspend fun saveModelRoutes(model: String, routes: List<ModelRouteItem>) {
+        dbContext().transaction {
+            val channels = list().sortedBy { it.id }.map { lock(it.id) }
+            val selected = routes.associateBy { it.channelId }
+            for (channel in channels) {
+                val route = selected[channel.id] ?: continue
+                val upstream = route.upstreamModel?.trim()?.takeIf { it.isNotEmpty() } ?: model
+                val discount = route.costDiscount?.trim()?.takeIf { it.isNotEmpty() }
+                if (discount != null) {
+                    ChannelModelDiscounts.save(channel.id, upstream, PricingCalc.requireRatio(discount, "costDiscount"))
+                } else if (ChannelModelDiscounts.find(channel.id, upstream) == null) {
+                    ChannelModelDiscounts.required()
+                }
+            }
+            ModelRoutes.apply(channels, model, selected.mapValues { it.value.upstreamModel }).forEach { ChannelTable.update(it) }
+        }
+        PriceBook.invalidate()
+    }
+
+    private suspend fun lock(id: Long): Channel {
+        dbContext().execute("SELECT id FROM gateway_channels WHERE id = :id FOR UPDATE", mapOf("id" to id))
+        return get(id) ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.CHANNEL_NOT_FOUND)
     }
 
     suspend fun delete(id: Long) {
@@ -36,8 +120,9 @@ class ChannelLogic(private val log: Logger) {
 
     /** 停用 / 挂起（status ≠ 1）的渠道不再有流量：客户端随即退役，不等空闲回收。 */
     suspend fun updateStatus(id: Long, status: Int) {
-        val current = get(id) ?: return
-        ChannelTable.update(current.copy(status = status))
+        ChannelTable.query { where { Channel::id eq id } }.update {
+            set(Channel::status, status)
+        }
         if (status != 1) RelayEngine.channelClients?.evict(id)
         PriceBook.invalidate()
     }

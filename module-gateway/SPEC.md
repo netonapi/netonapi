@@ -7,7 +7,8 @@
 
 | 表 | 语义 |
 |----|------|
-| `gateway_channels` | 上游渠道（type: openai_compatible/anthropic/gemini/azure_openai；priority 分层 + weight 加权；cost_discount 渠道成本折扣；capabilities 端点能力 chat/embeddings） |
+| `gateway_channels` | 上游渠道（type: openai_compatible/anthropic/gemini/azure_openai；priority 分层 + weight 加权；模型成本倍率单独存储；capabilities 端点能力 chat/embeddings） |
+| `gateway_channel_model_discounts` | 渠道 × 上游模型倍率。新拉取的模型为空且停用，启用时校验倍率 |
 | `gateway_channel_keys` | 渠道多 Key，逐 Key 禁用（status 0 手动 / 2 自动），LRU 轮转选择 |
 | `gateway_tokens` | 用户 sk- 令牌：key_hash=SHA-256、key_display 前7+后4、明文仅创建响应一次；预算/过期/模型白名单/IP 白名单/分组覆盖 |
 | `gateway_model_prices` | 模型定价：官方价（USD/1M，DECIMAL 字符串）+ sale_override 售价覆盖 + per_request_price 按次 |

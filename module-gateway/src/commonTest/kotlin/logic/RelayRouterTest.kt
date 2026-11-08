@@ -22,10 +22,10 @@ class RelayRouterTest {
             ch(2, models = "other-model"),                // 模型不符
             ch(3, groups = "vip"),                        // 组不符
             ch(4, status = 0),                            // 禁用
-            ch(5, models = "", mapping = """{"gpt-test":"upstream-x"}"""), // 映射键命中
+            ch(5, models = "", mapping = """{"gpt-test":"upstream-x"}"""), // 仅配置映射，未启用
         )
         val got = RelayRouter.candidates(chans, model = "gpt-test", group = "default", nowMs = 0).map { it.id }
-        assertEquals(listOf(1L, 5L), got)
+        assertEquals(listOf(1L), got)
     }
 
     @Test

@@ -31,6 +31,7 @@ class ChannelController(
         requireSafeUrls(request.baseUrl, request.proxyUrl)
         request.upstreamPricingUrl?.takeIf { it.isNotBlank() }?.let { requireSafeUrls(it, null) }
         request.keys.forEach { requireSafeKey(it) }
+        if (logic.ModelRoutes.csv(request.models).isNotEmpty()) logic.ChannelModelDiscounts.required()
         val id = channelLogic.create(
             Channel(
                 name = request.name, type = request.type, baseUrl = request.baseUrl,
@@ -44,7 +45,7 @@ class ChannelController(
                 status = if (request.status == 0) 0 else 1,
             ).let {
                 logic.ChannelCostLogic.resolveCostConfig(
-                    logic.ChannelCostLogic.CostInput(request.costSource, request.costDiscount, request.upstreamPricingFormat,
+                    logic.ChannelCostLogic.CostInput(request.costSource, request.upstreamPricingFormat,
                         request.upstreamPricingUrl, request.upstreamGroupRatio, request.upstreamCreditRate),
                     it, current = null,
                 )
@@ -59,25 +60,25 @@ class ChannelController(
     suspend fun update(@Body request: UpdateChannelRequest) {
         requireSafeUrls(request.baseUrl, request.proxyUrl)
         request.upstreamPricingUrl?.takeIf { it.isNotBlank() }?.let { requireSafeUrls(it, null) }
-        val current = channelLogic.get(request.id)
-            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.CHANNEL_NOT_FOUND)
-        channelLogic.update(current.copy(
-            name = request.name, type = request.type, baseUrl = request.baseUrl,
-            groups = request.groups, models = request.models,
-            modelMapping = request.modelMapping, paramOverride = request.paramOverride,
-            priority = request.priority, weight = request.weight,
-            capabilities = logic.RelayRouter.requireCapabilities(request.capabilities),
-            proxyUrl = logic.effectiveProxyUrl(request.proxyUrl), apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() }, providerConfig = request.providerConfig?.trim()?.takeIf { it.isNotEmpty() },
-            lossPolicy = logic.ConversionPolicy.requirePolicy(request.lossPolicy), reasoningSuffix = if (request.reasoningSuffix == 1) 1 else 0,
-            remark = request.remark,
-        ).let {
+        channelLogic.updateSettings(request.id) { current ->
             logic.ChannelCostLogic.resolveCostConfig(
-                logic.ChannelCostLogic.CostInput(request.costSource, request.costDiscount, request.upstreamPricingFormat,
+                logic.ChannelCostLogic.CostInput(request.costSource, request.upstreamPricingFormat,
                     request.upstreamPricingUrl, request.upstreamGroupRatio, request.upstreamCreditRate),
-                it, current = current,
+                current.copy(
+                    name = request.name, type = request.type, baseUrl = request.baseUrl,
+                    groups = request.groups, models = request.models ?: current.models,
+                    modelMapping = if (request.models == null) current.modelMapping else request.modelMapping,
+                    paramOverride = request.paramOverride,
+                    priority = request.priority, weight = request.weight,
+                    capabilities = logic.RelayRouter.requireCapabilities(request.capabilities),
+                    proxyUrl = logic.effectiveProxyUrl(request.proxyUrl), apiVersion = request.apiVersion?.trim()?.takeIf { it.isNotEmpty() },
+                    providerConfig = request.providerConfig?.trim()?.takeIf { it.isNotEmpty() },
+                    lossPolicy = logic.ConversionPolicy.requirePolicy(request.lossPolicy),
+                    reasoningSuffix = if (request.reasoningSuffix == 1) 1 else 0,
+                    remark = request.remark, status = request.status ?: current.status,
+                ), current,
             )
-        })
-        request.status?.let { if (it != current.status) channelLogic.updateStatus(request.id, it) }
+        }
     }
 
     @Put("/update-status")
@@ -109,20 +110,46 @@ class ChannelController(
         val channel = channelLogic.get(id)
             ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.CHANNEL_NOT_FOUND)
         val result = probeLogic.listModels(channel)
-        if (result.ok) channelLogic.get(id)?.let { channelLogic.update(it.copy(supportedModels = result.models.joinToString(","))) }
+        if (result.ok) channelLogic.updateSupportedModels(id, result.models)
         return result
     }
+
+    @Put("/cost-settings")
+    @Permission("gateway:channel:update")
+    suspend fun costSettings(@Body request: ChannelCostSettingsRequest) {
+        request.upstreamPricingUrl?.takeIf { it.isNotBlank() }?.let { requireSafeUrls(it, null) }
+        channelLogic.updateSettings(request.channelId) { current ->
+            logic.ChannelCostLogic.resolveCostConfig(
+                logic.ChannelCostLogic.CostInput(request.costSource, request.upstreamPricingFormat,
+                    request.upstreamPricingUrl, request.upstreamGroupRatio, request.upstreamCreditRate), current, current,
+            )
+        }
+    }
+
+    @Get("/model-config/{id}")
+    @Permission("gateway:channel:query")
+    suspend fun modelConfig(@PathVariable id: Long): List<ChannelModelVO> {
+        val channel = channelLogic.get(id)
+            ?: throw HttpException(NetonErrorCode.RESOURCE_NOT_FOUND, GatewayErrorCodes.CHANNEL_NOT_FOUND)
+        return channelLogic.modelConfig(channel)
+    }
+
+    @Put("/model-config")
+    @Permission("gateway:channel:update")
+    suspend fun configureModel(@Body request: ConfigureChannelModelRequest) = channelLogic.configureModel(request)
 
     /** 某个模型的服务上游：每个渠道是否支持、是否正在服务、上游侧模型名。 */
     @Get("/model-routes")
     @Permission("gateway:channel:query")
     suspend fun modelRoutes(@Query model: String): List<ModelRouteVO> {
         val m = model.trim()
+        val discounts = logic.ChannelModelDiscounts.all()
         return channelLogic.list().map { ch ->
             val r = logic.ModelRoutes.routeOf(ch, m)
             ModelRouteVO(
                 channelId = ch.id, name = ch.name, type = ch.type, status = ch.status, priority = ch.priority,
                 supported = r.supported, serving = r.serving, upstreamModel = r.upstreamModel,
+                costDiscount = discounts[ch.id to logic.ModelRoutes.upstreamModel(ch, m)],
             )
         }.sortedWith(compareByDescending<ModelRouteVO> { it.serving }.thenByDescending { it.supported }.thenByDescending { it.priority })
     }
@@ -135,11 +162,8 @@ class ChannelController(
     @Permission("gateway:channel:update")
     suspend fun saveModelRoutes(@Body request: SaveModelRoutesRequest) {
         val m = request.model.trim()
-        if (m.isEmpty()) rejectField("model", GatewayErrorCodes.MODEL_REQUIRED)
-        val all = channelLogic.list()
-        val known = all.map { it.id }.toSet()
-        val selected = request.routes.filter { it.channelId in known }.associate { it.channelId to it.upstreamModel }
-        logic.ModelRoutes.apply(all, m, selected).forEach { channelLogic.update(it) }
+        if (m.isEmpty() || ',' in m) rejectField("model", GatewayErrorCodes.MODEL_REQUIRED)
+        channelLogic.saveModelRoutes(m, request.routes)
     }
 
     @Delete("/delete/{id}")

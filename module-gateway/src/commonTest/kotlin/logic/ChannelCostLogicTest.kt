@@ -8,7 +8,7 @@ import kotlin.test.assertEquals
 
 class ChannelCostLogicTest {
 
-    private val ch = Channel(id = 7, name = "c", type = "openai_compatible", baseUrl = "http://x", models = "m-a,m-b", costDiscount = "2.0",
+    private val ch = Channel(id = 7, name = "c", type = "openai_compatible", baseUrl = "http://x", models = "m-a,m-b",
         modelMapping = """{"m-a":"up","m-b":"up"}""")
     private val prices = mapOf(
         "m-a" to ModelPrice(model = "m-a", inputPrice = "10", outputPrice = "10"),
@@ -18,7 +18,7 @@ class ChannelCostLogicTest {
 
     @Test
     fun channelRowWinsAndIgnoresDiscount() {
-        val b = ChannelCostLogic.costForLoaded(ch, "m-a", "up", prices["m-a"], mapOf((7L to "m-a") to row("m-a", "0.3")), prices)!!
+        val b = ChannelCostLogic.costForLoaded(ch, "m-a", "up", prices["m-a"], mapOf((7L to "m-a") to row("m-a", "0.3")), prices, "2.0")!!
         assertEquals("0.3", b.price.inputPrice)
         assertEquals("1", b.discount)
         assertEquals("channel", b.source)
@@ -26,7 +26,7 @@ class ChannelCostLogicTest {
 
     @Test
     fun fallsBackToMappedOfficialTimesDiscount() {
-        val b = ChannelCostLogic.costForLoaded(ch, "m-a", "up", prices["m-a"], emptyMap(), prices)!!
+        val b = ChannelCostLogic.costForLoaded(ch, "m-a", "up", prices["m-a"], emptyMap(), prices, "2.0")!!
         assertEquals("1", b.price.inputPrice)
         assertEquals("2.0", b.discount)
         assertEquals("official", b.source)
@@ -34,27 +34,31 @@ class ChannelCostLogicTest {
 
     @Test
     fun mappedTargetWithoutPriceUsesRequestPrice() {
-        val b = ChannelCostLogic.costForLoaded(ch, "m-a", "deployment-1", prices["m-a"], emptyMap(), prices)!!
+        val b = ChannelCostLogic.costForLoaded(ch, "m-a", "deployment-1", prices["m-a"], emptyMap(), prices, "2.0")!!
         assertEquals("10", b.price.inputPrice)
     }
 
     @Test
     fun manyRequestModelsToOneUpstream() {
         val costs = mapOf((7L to "m-a") to row("m-a", "0.3"), (7L to "m-b") to row("m-b", "0.5"))
-        assertEquals("0.3", ChannelCostLogic.costForLoaded(ch, "m-a", "up", prices["m-a"], costs, prices)!!.price.inputPrice)
-        assertEquals("0.5", ChannelCostLogic.costForLoaded(ch, "m-b", "up", null, costs, prices)!!.price.inputPrice)
+        assertEquals("0.3", ChannelCostLogic.costForLoaded(ch, "m-a", "up", prices["m-a"], costs, prices, "2.0")!!.price.inputPrice)
+        assertEquals("0.5", ChannelCostLogic.costForLoaded(ch, "m-b", "up", null, costs, prices, "2.0")!!.price.inputPrice)
         // 都没有成本行时都回到映射目标的官方价
-        assertEquals("1", ChannelCostLogic.costForLoaded(ch, "m-b", "up", null, emptyMap(), prices)!!.price.inputPrice)
+        assertEquals("1", ChannelCostLogic.costForLoaded(ch, "m-b", "up", null, emptyMap(), prices, "2.0")!!.price.inputPrice)
     }
 
     @Test
     fun upstreamRowsIgnoredAfterSwitchingBackToOfficial() {
         val official = ch.copy(costSource = "official")
         val upstreamRow = row("m-a", "0.3").copy(source = "upstream")
-        val b = ChannelCostLogic.costForLoaded(official, "m-a", "up", prices["m-a"], mapOf((7L to "m-a") to upstreamRow), prices)!!
+        val b = ChannelCostLogic.costForLoaded(official, "m-a", "up", prices["m-a"], mapOf((7L to "m-a") to upstreamRow), prices, "2.0")!!
         assertEquals("official", b.source, "切回官方价后，旧的上游成本行不能继续生效")
         // 手填的行始终生效
-        val manual = ChannelCostLogic.costForLoaded(official, "m-a", "up", prices["m-a"], mapOf((7L to "m-a") to row("m-a", "0.3")), prices)!!
+        val manual = ChannelCostLogic.costForLoaded(official, "m-a", "up", prices["m-a"], mapOf((7L to "m-a") to row("m-a", "0.3")), prices, "2.0")!!
         assertEquals("channel", manual.source)
+    }
+    @Test fun missingMultiplierHasNoCostBasisEvenWithAnExactCost() {
+        val costs = mapOf((7L to "m-a") to row("m-a", "0.3"))
+        kotlin.test.assertNull(ChannelCostLogic.costForLoaded(ch, "m-a", "up", prices["m-a"], costs, prices, null))
     }
 }

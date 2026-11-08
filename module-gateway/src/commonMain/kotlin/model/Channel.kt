@@ -51,8 +51,6 @@ data class Channel(
     val lastProbeError: String? = null,
     /** 429 冷却截止（epoch ms）：此刻之前该渠道不参与候选，避免立即重试被限流的上游 */
     val cooldownUntil: Long = 0,
-    /** 成本折扣（如 "0.6" = 官方价 6 折），DECIMAL 字符串，毛利核算用（spec 决策 B2） */
-    val costDiscount: String = "1.0",
     /** 成本来源（V020）：official = 官方价 × 折扣；upstream = 上游价目接口；manual = 按模型手填（渠道成本表）。 */
     val costSource: String = "official",
     /** 上游价目格式：newapi（new-api / one-api 类）/ openrouter；costSource = upstream 时必填。 */

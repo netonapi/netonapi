@@ -35,10 +35,7 @@ object RequestRewriter {
         val requestModel = obj["model"]?.jsonPrimitive?.contentOrNull ?: ""
         val stream = obj["stream"]?.jsonPrimitive?.booleanOrNull ?: false
 
-        val mapping: JsonObject? = channel.modelMapping
-            ?.takeIf { it.isNotBlank() }
-            ?.let { runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull() }
-        val upstreamModel = mapping?.get(requestModel)?.jsonPrimitive?.contentOrNull ?: requestModel
+        val upstreamModel = ModelRoutes.upstreamModel(channel, requestModel)
 
         val override: JsonObject? = channel.paramOverride
             ?.takeIf { it.isNotBlank() }

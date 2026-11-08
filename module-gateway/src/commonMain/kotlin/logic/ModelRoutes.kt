@@ -17,6 +17,9 @@ object ModelRoutes {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    fun upstreamModel(channel: Channel, requestModel: String): String =
+        mappingOf(channel.modelMapping)[requestModel]?.trim()?.takeIf { it.isNotEmpty() } ?: requestModel
+
     /** 一个渠道相对某个模型的状态。 */
     data class Route(val serving: Boolean, val supported: Boolean, val upstreamModel: String?)
 
@@ -47,9 +50,9 @@ object ModelRoutes {
         if (changed) ch.copy(models = newModels.joinToString(","), modelMapping = newMapping) else null
     }
 
-    private fun csv(s: String): List<String> = s.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+    fun csv(s: String): List<String> = s.split(',').map { it.trim() }.filter { it.isNotEmpty() }
 
-    private fun mappingOf(raw: String?): Map<String, String> = raw?.takeIf { it.isNotBlank() }?.let {
+    fun mappingOf(raw: String?): Map<String, String> = raw?.takeIf { it.isNotBlank() }?.let {
         runCatching { json.parseToJsonElement(it).jsonObject.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { c -> k to c } }.toMap() }.getOrNull()
     }.orEmpty()
 }

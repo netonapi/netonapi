@@ -57,13 +57,7 @@ class ChannelProbeLogic(private val log: Logger, private val channelLogic: Chann
         val r = runCatching { probe(channel, requestedModel) }.getOrElse { e ->
             ChannelProbeResult(ok = false, status = null, latencyMs = 0, model = requestedModel ?: "", upstreamModel = "", upstreamPath = "", error = (e.message ?: e::class.simpleName ?: "error").take(500))
         }
-        channelLogic.get(channel.id)?.let { fresh ->
-            channelLogic.update(fresh.copy(
-                lastProbeAt = kotlin.time.Clock.System.now().toEpochMilliseconds(),
-                lastProbeMs = r.latencyMs, lastProbeOk = if (r.ok) 1 else 0,
-                lastProbeError = r.error?.take(512),
-            ))
-        }
+        channelLogic.recordProbe(channel.id, r)
         return r
     }
 

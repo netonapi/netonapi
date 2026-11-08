@@ -19,10 +19,10 @@ data class CreateChannelRequest(
     val apiVersion: String? = null,
     /** 托管上游的厂商参数 JSON：Vertex {"project","location"}，Bedrock 可选 {"region"} */
     val providerConfig: String? = null,
-    /** 成本折扣（相对官方价），必填，见 ChannelCostLogic.resolveCostConfig。 */
-    val costDiscount: String? = null,
     /** official / upstream / manual；必填，见 Channel.costSource。 */
     val costSource: String? = null,
+    /** 兼容旧管理端的请求字段，成本以模型配置为准。 */
+    val costDiscount: String? = null,
     val upstreamPricingFormat: String? = null,
     val upstreamPricingUrl: String? = null,
     /** 成本来源为 upstream 时必填 */
@@ -45,7 +45,7 @@ data class UpdateChannelRequest(
     val type: String,
     val baseUrl: String,
     val groups: String,
-    val models: String,
+    val models: String? = null,
     /** 端点能力（CSV，chat/embeddings）：不声明的能力不会收到对应端点的请求 */
     val capabilities: String = "chat",
     val modelMapping: String? = null,
@@ -56,10 +56,10 @@ data class UpdateChannelRequest(
     val apiVersion: String? = null,
     /** 托管上游的厂商参数 JSON：Vertex {"project","location"}，Bedrock 可选 {"region"} */
     val providerConfig: String? = null,
-    /** 不传（null）= 保留原值；传空串 = 没填，按必填拒绝。 */
-    val costDiscount: String? = null,
     /** 成本设置：不传（null）= 保留原值，老前端更新渠道时不会把上游成本设置冲回默认。 */
     val costSource: String? = null,
+    /** 兼容旧管理端的请求字段，成本以模型配置为准。 */
+    val costDiscount: String? = null,
     val upstreamPricingFormat: String? = null,
     val upstreamPricingUrl: String? = null,
     val upstreamGroupRatio: String? = null,
@@ -94,10 +94,11 @@ data class ModelRouteVO(
     val serving: Boolean,
     /** 上游侧模型名；null = 与对外模型同名 */
     val upstreamModel: String? = null,
+    val costDiscount: String? = null,
 )
 
 @Serializable
-data class ModelRouteItem(val channelId: Long, val upstreamModel: String? = null)
+data class ModelRouteItem(val channelId: Long, val upstreamModel: String? = null, val costDiscount: String? = null)
 
 /** 设定一个模型的服务上游：列表里的渠道服务它，其余渠道不再服务它。 */
 @Serializable
@@ -105,3 +106,20 @@ data class SaveModelRoutesRequest(val model: String, val routes: List<ModelRoute
 
 @Serializable
 data class ProbeChannelRequest(val model: String? = null)
+
+
+@Serializable
+data class ChannelModelVO(val model: String, val costDiscount: String?, val enabled: Boolean)
+
+@Serializable
+data class ConfigureChannelModelRequest(val channelId: Long, val model: String, val costDiscount: String?, val enabled: Boolean)
+
+@Serializable
+data class ChannelCostSettingsRequest(
+    val channelId: Long,
+    val costSource: String,
+    val upstreamPricingFormat: String? = null,
+    val upstreamPricingUrl: String? = null,
+    val upstreamGroupRatio: String? = null,
+    val upstreamCreditRate: String? = null,
+)

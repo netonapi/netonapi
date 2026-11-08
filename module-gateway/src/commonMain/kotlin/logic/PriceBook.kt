@@ -100,9 +100,12 @@ object PriceBook {
         val groups = GatewayGroupTable.findAll().associateBy { it.code }
         val groupRules = PriceRuleTable.query { where { PriceRule::subjectType eq SUBJECT_GROUP } }.list()
             .groupBy { it.subjectId }.mapValues { (_, rs) -> rs.associateBy { it.model } }
+        val discounts = ChannelModelDiscounts.all()
         val routable = mutableMapOf<String, MutableSet<String>>()
         table.ChannelTable.findAll().filter { it.status != 0 }.forEach { ch ->
-            val served = servedModels(ch)
+            val served = ModelRoutes.csv(ch.models).filter {
+                (ch.id to ModelRoutes.upstreamModel(ch, it)) in discounts
+            }
             ch.groups.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { g ->
                 routable.getOrPut(g) { mutableSetOf() }.addAll(served)
             }
@@ -118,16 +121,6 @@ object PriceBook {
         val current = if (users.size >= MAX_CACHED_USERS) emptyMap() else users
         users = current + (userId to UserEntry(now(), rules))
         return rules
-    }
-
-    /** 渠道承载的模型：服务清单 + 模型映射的键（与 [RelayRouter] 的匹配口径一致）。 */
-    private fun servedModels(ch: Channel): Set<String> {
-        val out = ch.models.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
-        ch.modelMapping?.takeIf { it.isNotBlank() }?.let { raw ->
-            runCatching { kotlinx.serialization.json.Json.parseToJsonElement(raw) as kotlinx.serialization.json.JsonObject }
-                .getOrNull()?.keys?.let { out.addAll(it) }
-        }
-        return out
     }
 
     /**

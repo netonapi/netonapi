@@ -41,7 +41,7 @@ object RelayRouter {
     }
 
     /**
-     * status=1 ∩ 未在 429 冷却期 ∩ 模型命中（models 清单或 modelMapping 键）∩ 分组交集 ∩ 能力命中。
+     * status=1 ∩ 未在 429 冷却期 ∩ 模型命中（models 服务清单）∩ 分组交集 ∩ 能力命中。
      * nowMs 必传，避免漏传致冷却过滤失效。
      */
     fun candidates(
@@ -101,20 +101,15 @@ object RelayRouter {
     private fun capabilitySupported(ch: Channel, capability: String): Boolean =
         ch.capabilities.split(',').map { it.trim() }.contains(capability)
 
-    private fun modelSupported(ch: Channel, model: String): Boolean {
-        if (ch.models.split(',').map { it.trim() }.contains(model)) return true
-        // 映射键命中：{"请求名":"上游名"}——不做完整 JSON 解析，键名精确匹配即可
-        val mapping = ch.modelMapping ?: return false
-        return mapping.contains("\"$model\"")
-    }
+    private fun modelSupported(ch: Channel, model: String): Boolean = model in ModelRoutes.csv(ch.models)
 
     fun pick(candidates: List<Channel>, excludeIds: Set<Long>, random: Random): Channel? {
         val pool = candidates.filter { it.id !in excludeIds }
         if (pool.isEmpty()) return null
         val topPriority = pool.maxOf { it.priority }
         val layer = pool.filter { it.priority == topPriority }
-        val totalWeight = layer.sumOf { it.weight.coerceAtLeast(1) }
-        var roll = random.nextInt(totalWeight)
+        val totalWeight = layer.sumOf { it.weight.coerceAtLeast(1).toLong() }
+        var roll = random.nextLong(totalWeight)
         for (ch in layer) {
             roll -= ch.weight.coerceAtLeast(1)
             if (roll < 0) return ch

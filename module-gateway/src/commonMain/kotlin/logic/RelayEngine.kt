@@ -281,10 +281,13 @@ class RelayEngine(
 
             // T2：记录「已向上游发出」——崩溃后不可自动退款（可能已产生真实费用），由 worker TTL 转人工。
             // 渠道成本折扣此刻并入快照；重试换渠道则刷新为本次真正打的上游（否则成本记在没打过的那家头上）。
+            val basis = ChannelCostLogic.costFor(channel, transform.rewritten.requestModel, transform.rewritten.upstreamModel, officialPrice)
+            if (basis == null) {
+                lastError = "channel ${channel.id} has no configured cost for ${transform.rewritten.upstreamModel}"
+                return@repeat
+            }
             settlement?.let { st ->
-                // 成本：渠道成本表有这个模型就按它（实付价，折扣记 1），否则上游实际模型的官方价 × 渠道折扣
-                val basis = ChannelCostLogic.costFor(channel, transform.rewritten.requestModel, transform.rewritten.upstreamModel, officialPrice)
-                val snap = pricingSnapshot(salePrice, basis?.price, ratio, basis?.discount ?: channel.costDiscount, quote?.source)
+                val snap = pricingSnapshot(salePrice, basis.price, ratio, basis.discount, quote?.source)
                 settlementLogic.markUpstreamStarted(st.settlementId, channel.id, snap)
                 settlement = st.copy(pricingSnapshot = snap)
             }

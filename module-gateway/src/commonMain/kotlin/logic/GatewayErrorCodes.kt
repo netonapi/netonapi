@@ -74,7 +74,7 @@ object GatewayErrorCodes {
     /** 新建渠道必须选成本来源（不替管理员默认成「官方价 × 折扣」）。 */
     const val CHANNEL_COST_SOURCE_REQUIRED = "CHANNEL_COST_SOURCE_REQUIRED"
     /** 成本折扣必填：上游几乎不可能按官方价 1:1 计费，不替管理员默认成 1。 */
-    const val CHANNEL_COST_DISCOUNT_REQUIRED = "CHANNEL_COST_DISCOUNT_REQUIRED"
+    const val CHANNEL_MODEL_DISCOUNT_REQUIRED = "CHANNEL_MODEL_DISCOUNT_REQUIRED"
     /** 成本来源是上游价目接口时，上游分组倍率必填。 */
     const val CHANNEL_UPSTREAM_GROUP_RATIO_REQUIRED = "CHANNEL_UPSTREAM_GROUP_RATIO_REQUIRED"
     /** 成本来源是上游价目接口时，充值汇率必填。 */
