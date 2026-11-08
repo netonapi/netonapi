@@ -49,7 +49,7 @@ class QuotaController(private val quotaLogic: QuotaLogic) {
 
     @Get("/get-by-user/{userId}")
     @Permission("gateway:quota:query")
-    suspend fun getByUser(@PathVariable userId: Long): QuotaAccount = quotaLogic.account(userId)
+    suspend fun getByUser(@PathVariable userId: Long): QuotaAccount = QuotaAccount.from(quotaLogic.account(userId))
 
     @Post("/grant")
     @Permission("gateway:quota:grant")

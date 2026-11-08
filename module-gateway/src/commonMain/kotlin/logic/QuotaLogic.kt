@@ -1,27 +1,19 @@
 package logic
 
-import model.QuotaAccount
+import dto.PageResponse
+import model.ConsumptionAccount
 import model.QuotaTransaction
-import neton.database.dsl.*
-import neton.logging.Logger
-import table.QuotaAccountTable
-import table.QuotaTransactionTable
 
 @neton.core.annotations.Logic(logger = "logic.gateway-quota")
-class QuotaLogic(private val log: Logger) {
+class QuotaLogic(private val balances: ConsumptionBalanceLogic) {
 
-    suspend fun account(userId: Long): QuotaAccount {
-        QuotaAccountTable.oneWhere { QuotaAccount::userId eq userId }?.let { return it }
-        // 并发首建：两个并发首请求都 miss 会各自 INSERT，撞唯一索引 uk_gateway_quota_accounts_user 抛错、
-        // 在 bill() 事务内回滚导致已服务请求丢账。ON CONFLICT DO NOTHING 幂等建账（balance/version 走列默认 0），
-        // 再重读（本次或并发对方插入的都可见）。raw SQL 为 PostgreSQL 专用，MySQL 待适配（INSERT IGNORE / ON DUPLICATE KEY）。
-        neton.database.dbContext().execute(
-            "INSERT INTO gateway_quota_accounts (user_id) VALUES (:uid) ON CONFLICT (user_id) DO NOTHING",
-            mapOf("uid" to userId),
-        )
-        return QuotaAccountTable.oneWhere { QuotaAccount::userId eq userId }
-            ?: error("account create-or-read failed userId=$userId")
-    }
+    suspend fun account(userId: Long): ConsumptionAccount = balances.account(userId)
+
+    suspend fun reserveInTx(userId: Long, amount: Long): Boolean = balances.reserveInTx(userId, amount)
+
+    suspend fun lockInTx(userId: Long) = balances.lockInTx(userId)
+
+    suspend fun releaseInTx(userId: Long, amount: Long) = balances.releaseInTx(userId, amount)
 
     suspend fun grant(userId: Long, amount: Long, type: String = "grant", ref: String? = null): Long {
         // 这里原本是 require(amount > 0)。IllegalArgumentException 会被 BufferedHttpDispatcher
@@ -67,70 +59,19 @@ class QuotaLogic(private val log: Logger) {
         return applyDelta(userId, -amount, "consume", ref)
     }
 
-    /**
-     * 原子应用余额增量：余额自增 + 台账插入同一事务（全或无）。delta 可正可负，允许转负。
-     * 自增在 SQL 内计算（balance = balance + delta），行级锁串行化并发写，无 version 竞争、无重试。
-     */
     suspend fun applyDelta(userId: Long, delta: Long, type: String, ref: String?): Long =
-        neton.database.dbContext().transaction { debitInTx(userId, delta, type, ref) }
+        balances.applyDelta(userId, delta, type, ref)
 
-    /**
-     * 事务内原子扣减：balance = balance + delta 在 SQL 内自增（行级锁串行化并发扣减，无 version 竞争），
-     * 事务内回读得准确 balanceAfter，插台账。供 bill() 与 usage_log/token 同事务提交（账务全或无）。
-     */
-    suspend fun debitInTx(userId: Long, delta: Long, type: String, ref: String?): Long {
-        val acc = account(userId)
-        // 结算幂等：ref 非空时先插台账哨兵（ref 唯一约束）。重复 ref（重试/outbox 重放）插入 0 行 → 已结算，
-        // 跳过余额自增，保证同一 usage 只扣一次。
-        if (ref != null) {
-            val ins = neton.database.dbContext().execute(
-                "INSERT INTO gateway_quota_transactions (user_id, type, amount, balance_after, ref, created_at) " +
-                    "VALUES (:uid, :t, :amt, 0, :ref, :ts) ON CONFLICT (ref) WHERE ref IS NOT NULL DO NOTHING",
-                // created_at 必须在这里就填真值。哨兵行不是临时占位后就删掉的东西 —— 它就是最终的
-                // 台账行，后面的 UPDATE 只回填 balance_after。写成字面量 0 的话，**每一条带 ref 的
-                // 台账**（结算 settlement:*、充值 gateway:quota:*、兑换 redeem:*）时间戳都停在 epoch 0，
-                // 而 idx_gateway_quota_tx_user(user_id, created_at) 正是为按时间查流水建的：全表同值
-                // 等于索引白建，「这个客户上个月花了多少」在台账上无法回答。台账是钱的唯一审计来源，
-                // 走非 ref 路径的行时间反而是对的，两种行混在一张表里按时间排序会看不出真实先后。
-                mapOf("uid" to userId, "t" to type, "amt" to delta, "ref" to ref, "ts" to nowMillis()),
-            )
-            if (ins == 0L) {
-                log.warn("quota debit idempotent skip: ref=$ref already settled userId=$userId")
-                return acc.balance
-            }
-        }
-        checkedAdd(acc.balance, delta)  // 溢出保护：转账前校验 BIGINT 不溢出
-        val affected = neton.database.dbContext().execute(
-            "UPDATE gateway_quota_accounts SET balance = balance + :delta, version = version + 1 WHERE id = :id",
-            mapOf("delta" to delta, "id" to acc.id),
-        )
-        check(affected == 1L) { "debit affected $affected rows (expected 1) userId=$userId accountId=${acc.id}" }
-        val newBalance = account(userId).balance  // 事务内回读：本 tx 持行锁，读到本次自增结果
-        if (ref != null) {
-            neton.database.dbContext().execute(
-                "UPDATE gateway_quota_transactions SET balance_after = :b WHERE ref = :ref",
-                mapOf("b" to newBalance, "ref" to ref),
-            )
-        } else {
-            QuotaTransactionTable.insert(
-                QuotaTransaction(userId = userId, type = type, amount = delta, balanceAfter = newBalance, ref = null)
-            )
-        }
-        return newBalance
-    }
-
-    private fun nowMillis(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
-
-    /** BIGINT 溢出保护：同号相加结果变号即溢出。 */
-    private fun checkedAdd(a: Long, b: Long): Long {
-        val r = a + b
-        check((a xor r) and (b xor r) >= 0L) { "quota balance overflow: $a + $b" }
-        return r
-    }
-
+    suspend fun debitInTx(userId: Long, delta: Long, type: String, ref: String?): Long =
+        balances.applyDeltaInTx(userId, delta, type, ref)
 
     suspend fun transactions(userId: Long): List<QuotaTransaction> =
-        QuotaTransactionTable.query { where { QuotaTransaction::userId eq userId } }.list()
+        balances.transactions(userId).map(QuotaTransaction::from)
+
+    suspend fun transactionPage(userId: Long, page: Int, size: Int): PageResponse<QuotaTransaction> {
+        val result = balances.transactionPage(userId, page, size)
+        return PageResponse(result.list.map(QuotaTransaction::from), result.total, page, size, result.totalPages)
+    }
 
     companion object {
         /**

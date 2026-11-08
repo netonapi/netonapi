@@ -3,7 +3,7 @@
 > NetonAPI 的 LLM 中转站领域模块。产品规范（计价、模型目录、API Key、充值、转发错误等）以服务端仓
 > [netonapi/netonapi](https://github.com/netonapi/netonapi) 的 `docs/` 为准；本文记录模块内部的实现要点。
 
-## 资源清单（8 表）
+## 主要资源
 
 | 表 | 语义 |
 |----|------|
@@ -12,15 +12,13 @@
 | `gateway_tokens` | 用户 sk- 令牌：key_hash=SHA-256、key_display 前7+后4、明文仅创建响应一次；预算/过期/模型白名单/IP 白名单/分组覆盖 |
 | `gateway_model_prices` | 模型定价：官方价（USD/1M，DECIMAL 字符串）+ sale_override 售价覆盖 + per_request_price 按次 |
 | `gateway_groups` | 用户分组倍率 |
-| `gateway_quota_accounts` | 额度账户（μUSD BIGINT），version 乐观锁 |
-| `gateway_quota_transactions` | 台账（只增）：grant/consume/refund/redeem，amount 有符号 |
 | `gateway_usage_logs` | 逐请求日志：tokens 明细 + charged(收入)/cost(成本) 双记 |
 
 ## 纪律
 
 - 金额一律 μUSD（1e-6 USD）BIGINT；价格 DECIMAL 字符串（USD/1M tokens）
 - 渠道 Key / 令牌明文不入日志不出接口（ChannelKeyVO/TokenVO 只给掩码）
-- 台账不变量：任意成功路径 balance 变动 = transactions 求和；consume 走 version 条件更新（冲突重试 3 次）
+- 台账不变量：每次余额变动和对应的流水一起提交。消费结算与本次请求的用量日志同事务提交。
 - 权限码：`gateway:{channel,token,price,group,quota,log}:{list,get,create,update,delete,grant}`
 
 ## 路由组
@@ -33,7 +31,8 @@
 ## 模块边界
 
 - member：userId 的来源（会员体系）；本模块不管注册登录
-- payment：充值支付成功后调 `QuotaLogic.grant(userId, amount, ref=订单号)`
+- payment：持有 `pay_consumption_accounts` 和 `pay_consumption_transactions`，负责余额、预留和资金流水。网关保留请求日志、令牌预算、计量、定价和结算状态。网关充值订单将实付金额换算后，通过支付模块的余额服务入账。
+- 后台在「支付中心 → 用户余额」查询用户并处理手动入账、赠送、撤回及流水。
 - M1b（中转引擎）消费的接口：`TokenLogic.verify(plaintext)`、`ChannelLogic.pickKey(channelId)`、
   `QuotaLogic.consume(userId, amount, ref)`、`UsageLogTable.insert`
 
@@ -167,10 +166,10 @@
   不变量：**活跃 token**——Σlog.charged == Σ台账扣款 == 余额变化 == token.quotaUsed（harness S1 20 并发四者=150000）；
   **中途删除的 token**——`quota_used ... WHERE id AND deleted=0` 命中 0 行 → 账户级三项相等（log/余额/台账），quotaUsed 略过并 warn。
   settle 无条件扣减允许转负（后付费）。account() 首建幂等（INSERT ... ON CONFLICT (user_id) DO NOTHING + 重读），
-  并发首请求不再撞 uk_gateway_quota_accounts_user 抛错丢账（harness S7：20 并发首建 → 账户唯一、无 500 崩溃）。
+  并发首请求不再撞消费账户唯一索引 抛错丢账（harness S7：20 并发首建 → 账户唯一、无 500 崩溃）。
   两条自增 + 首建 raw SQL 均 PostgreSQL 专用，MySQL 侧需经真实 harness 验证命名参数/affected rows/事务回读/并发结果后方可宣布兼容。
-- **溢出保护（V003，已落地）**：debitInTx 转账前 checkedAdd（BIGINT 同号相加变号即抛）。待补：边界/并发测试、MySQL SQL mode 验证。
-- **ref 唯一约束（V003，部分成立）**：`gateway_quota_transactions.ref` 部分唯一索引（WHERE ref IS NOT NULL）+ debitInTx
+- **溢出保护**：数据库的 BIGINT 运算溢出时回滚整笔记账。手动操作的余额溢出返回金额错误。
+- **ref 唯一约束（V003，部分成立）**：`pay_consumption_transactions.ref` 部分唯一索引（WHERE ref IS NOT NULL）+ debitInTx
   `ON CONFLICT (ref) ... DO NOTHING`；建索引前 DO 块校验存量无重复 ref。**⚠️ 但这不构成请求级幂等**（见下"未闭环 P0"）。
 - **429 渠道 cooldown（V003，已落地，待改进）**：429 把渠道 `cooldown_until` 抬到 now+30s（GREATEST），冷却期内
   RelayRouter.candidates 排除该渠道（harness S10）。**待改进（Codex P1）**：应优先冷却具体 Key 而非整个多 Key 渠道；

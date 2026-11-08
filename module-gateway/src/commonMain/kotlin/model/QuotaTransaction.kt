@@ -1,7 +1,6 @@
 package model
 
 import kotlinx.serialization.Serializable
-import neton.database.annotations.*
 
 /**
  * 额度台账（审计，只增不改）。
@@ -27,9 +26,8 @@ import neton.database.annotations.*
  *
  */
 @Serializable
-@Table("gateway_quota_transactions")
 data class QuotaTransaction(
-    @Id val id: Long = 0,
+    val id: Long = 0,
     val userId: Long,
     val type: String,
     /**
@@ -54,5 +52,11 @@ data class QuotaTransaction(
      * 见 backlog REDEMPTION-CODE-HASH-AT-REST-P2。
      */
     val ref: String? = null,
-    @CreatedAt val createdAt: Long? = null,
-)
+    val createdAt: Long? = null,
+) {
+    companion object {
+        fun from(tx: ConsumptionTransaction) = QuotaTransaction(
+            tx.id, tx.userId, tx.type, tx.amount, tx.balanceAfter, tx.ref, tx.createdAt,
+        )
+    }
+}

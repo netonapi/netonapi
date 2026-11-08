@@ -1,7 +1,6 @@
 package logic
 
 import model.GatewayToken
-import model.QuotaAccount
 import model.Settlement
 import model.UsageLog
 import neton.database.dsl.*
@@ -88,14 +87,7 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
             }
 
             // ② 账户预留：可用余额（balance - reserved_balance）足够
-            val acc = quotaLogic.account(userId)
-            checkedAdd(acc.reservedBalance, reserveAmount)
-            val accAffected = db.execute(
-                "UPDATE gateway_quota_accounts SET reserved_balance = reserved_balance + :r, version = version + 1 " +
-                    "WHERE user_id = :uid AND balance - reserved_balance >= :r",
-                mapOf("r" to reserveAmount, "uid" to userId),
-            )
-            if (accAffected == 0L) {
+            if (!quotaLogic.reserveInTx(userId, reserveAmount)) {
                 // 余额不足：补偿撤销刚才的 token 预留（本事务持该行锁，减回精确等值），净效果为零后正常提交。
                 // 不用抛异常触发回滚——驱动可能吞掉/包装异常类型，导致归因丢失并回落成 500。
                 db.execute(
@@ -282,7 +274,7 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
             // 锁序 token → account → settlement
             val s0 = bySid(settlementId) ?: return@transaction TransitionResult.NotFound
             db.execute("SELECT id FROM gateway_tokens WHERE id = :id FOR UPDATE", mapOf("id" to s0.tokenId))
-            db.execute("SELECT id FROM gateway_quota_accounts WHERE user_id = :u FOR UPDATE", mapOf("u" to s0.userId))
+            quotaLogic.lockInTx(s0.userId)
             val s = SettlementTable.oneWhere { Settlement::settlementId eq settlementId }
                 ?: return@transaction TransitionResult.NotFound
 
@@ -299,11 +291,7 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
                     "UPDATE gateway_tokens SET quota_reserved = GREATEST(quota_reserved - :r, 0) WHERE id = :tid",
                     mapOf("r" to r, "tid" to s.tokenId),
                 )
-                db.execute(
-                    "UPDATE gateway_quota_accounts SET reserved_balance = GREATEST(reserved_balance - :r, 0) " +
-                        "WHERE user_id = :uid",
-                    mapOf("r" to r, "uid" to s.userId),
-                )
+                quotaLogic.releaseInTx(s.userId, r)
             }
 
             // ② usage_log（完整维度，与扣款同事务；worker 重放时维度取自 settlement 行）
@@ -368,7 +356,7 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
         return db.transaction {
             val s0 = bySid(settlementId) ?: return@transaction TransitionResult.NotFound
             db.execute("SELECT id FROM gateway_tokens WHERE id = :id FOR UPDATE", mapOf("id" to s0.tokenId))
-            db.execute("SELECT id FROM gateway_quota_accounts WHERE user_id = :u FOR UPDATE", mapOf("u" to s0.userId))
+            quotaLogic.lockInTx(s0.userId)
             val s = SettlementTable.oneWhere { Settlement::settlementId eq settlementId }
                 ?: return@transaction TransitionResult.NotFound
 
@@ -382,11 +370,7 @@ class SettlementLogic(private val log: Logger, private val quotaLogic: QuotaLogi
                     "UPDATE gateway_tokens SET quota_reserved = GREATEST(quota_reserved - :r, 0) WHERE id = :tid",
                     mapOf("r" to r, "tid" to s.tokenId),
                 )
-                db.execute(
-                    "UPDATE gateway_quota_accounts SET reserved_balance = GREATEST(reserved_balance - :r, 0) " +
-                        "WHERE user_id = :uid",
-                    mapOf("r" to r, "uid" to s.userId),
-                )
+                quotaLogic.releaseInTx(s.userId, r)
             }
             val n = db.execute(
                 "UPDATE gateway_settlements SET status = :rel WHERE settlement_id = :sid AND status = :pending",

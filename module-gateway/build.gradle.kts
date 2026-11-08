@@ -59,6 +59,7 @@ kotlin {
         commonMain {
             dependencies {
                 implementation("com.netonstream.app:module-system")
+                implementation("com.netonstream.app:module-payment")
                 implementation("com.netonstream:neton-core")
                 implementation("com.netonstream:neton-routing")
                 implementation("com.netonstream:neton-security")

@@ -8,7 +8,6 @@ import model.UsageLog
 import neton.core.annotations.*
 import neton.core.interfaces.Identity
 import neton.database.dsl.*
-import table.QuotaTransactionTable
 import table.UsageLogTable
 
 @Serializable
@@ -111,10 +110,6 @@ class MyUsageController(private val quotaLogic: QuotaLogic, private val statsLog
         val uid = identity.id.toLong()
         val size = pageSize.coerceIn(1, 100)
         val no = pageNo.coerceAtLeast(1)
-        val r = QuotaTransactionTable.query {
-            where { QuotaTransaction::userId eq uid }
-            orderBy(QuotaTransaction::id.desc())
-        }.page(no, size)
-        return PageResponse(r.items, r.total, no, size, r.totalPages)
+        return quotaLogic.transactionPage(uid, no, size)
     }
 }
